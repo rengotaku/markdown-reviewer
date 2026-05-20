@@ -26,7 +26,7 @@ func setupTestHandler(t *testing.T) *handler.Handler {
 	t.Helper()
 	repo := repository.NewUserRepository(testutil.NewTestDB(t))
 	svc := service.NewUserService(repo)
-	return handler.NewHandler(svc)
+	return handler.NewHandler(svc, nil)
 }
 
 func serve(h *handler.Handler, req *http.Request) *httptest.ResponseRecorder {
