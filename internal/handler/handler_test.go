@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -190,6 +191,34 @@ func TestHandler_DeleteUser_NotFound(t *testing.T) {
 
 	rec := serve(h, httptest.NewRequest(http.MethodDelete, "/api/v1/users/non-existing-id", nil))
 	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+func TestConfig_NoResolver(t *testing.T) {
+	t.Parallel()
+	h := setupTestHandler(t)
+
+	rec := serve(h, httptest.NewRequest(http.MethodGet, "/api/config", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp map[string]string
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	assert.Equal(t, "", resp["review_root_name"])
+}
+
+func TestConfig_WithResolver(t *testing.T) {
+	t.Parallel()
+	h, root := setupFilesHandler(t)
+
+	rec := serve(h, httptest.NewRequest(http.MethodGet, "/api/config", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp map[string]string
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	// Resolver.Root() is the symlink-resolved tmpdir; Base() is the leaf
+	// directory name (a random "TestConfig_WithResolver…/001" segment under
+	// t.TempDir()) — we just assert it lines up with filepath.Base(root).
+	assert.Equal(t, filepath.Base(root), resp["review_root_name"])
+	assert.NotEmpty(t, resp["review_root_name"])
 }
 
 func TestHandler_StaticFallback(t *testing.T) {
