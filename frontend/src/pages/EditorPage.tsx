@@ -2,9 +2,14 @@ import { useEffect, useState } from "react";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import IconButton from "@mui/material/IconButton";
+import Menu from "@mui/material/Menu";
+import MenuItem from "@mui/material/MenuItem";
+import ListItemIcon from "@mui/material/ListItemIcon";
+import ListItemText from "@mui/material/ListItemText";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import SaveIcon from "@mui/icons-material/Save";
+import SaveAsIcon from "@mui/icons-material/SaveAs";
 import MenuOpenIcon from "@mui/icons-material/MenuOpen";
 import MenuIcon from "@mui/icons-material/Menu";
 import AddCommentIcon from "@mui/icons-material/AddComment";
@@ -24,8 +29,13 @@ import { useConfirm } from "@/hooks/useConfirm";
 import { useToast } from "@/hooks/useToast";
 import { useUIStore } from "@/hooks/useUIStore";
 import { useEditorInstance } from "@/hooks/useEditorInstance";
-import { useCommentAuthor, persistCommentAuthor } from "@/hooks/useCommentAuthor";
+import { useCommentAuthor } from "@/hooks/useCommentAuthor";
+import { useConfig } from "@/hooks/useConfig";
+import { dirQueryKey } from "@/hooks/useDir";
+import { useQueryClient } from "@tanstack/react-query";
+import { listDir } from "@/api";
 import { generateCommentId } from "@/utils/commentId";
+import { nextVersionedPath } from "@/utils/versionedPath";
 
 function basename(path: string): string {
   const idx = path.lastIndexOf("/");
@@ -65,11 +75,17 @@ export function EditorPage() {
   const showToast = useToast((s) => s.show);
   const editor = useEditorInstance((s) => s.editor);
   const { author } = useCommentAuthor();
+  const { data: config } = useConfig();
+  const queryClient = useQueryClient();
+  const reviewRootName = config?.review_root_name ?? "Files";
 
   const [commentDialog, setCommentDialog] = useState<{
     open: boolean;
     snippet: string;
   }>({ open: false, snippet: "" });
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(
+    null
+  );
 
   // Re-render the toolbar Add-Comment button when selection / doc changes.
   const [, setSelectionTick] = useState(0);
@@ -81,6 +97,44 @@ export function EditorPage() {
     return () => {
       editor.off("selectionUpdate", tick);
       editor.off("transaction", tick);
+    };
+  }, [editor]);
+
+  // Right-click on a non-empty selection (outside an existing comment) opens
+  // our custom mini menu with "コメント追加". The editor `view` may not be
+  // mounted at the moment the editor object lands in the store, so we attach
+  // lazily and retry on the "create" event if needed.
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) return;
+
+    let detach: (() => void) | undefined;
+
+    const tryAttach = () => {
+      if (detach) return;
+      let dom: Element;
+      try {
+        dom = editor.view.dom;
+      } catch {
+        return; // view not ready yet
+      }
+      const handler = (e: Event) => {
+        const ev = e as MouseEvent;
+        const sel = editor.state.selection;
+        if (sel.empty || sel.from === sel.to) return;
+        if (editor.isActive("comment")) return;
+        ev.preventDefault();
+        setContextMenu({ x: ev.clientX, y: ev.clientY });
+      };
+      dom.addEventListener("contextmenu", handler);
+      detach = () => dom.removeEventListener("contextmenu", handler);
+    };
+
+    tryAttach();
+    editor.on("create", tryAttach);
+
+    return () => {
+      editor.off("create", tryAttach);
+      if (detach) detach();
     };
   }, [editor]);
 
@@ -137,6 +191,33 @@ export function EditorPage() {
     }
   };
 
+  const handleSaveAs = async () => {
+    if (!activeFile) return;
+    const slash = activeFile.path.lastIndexOf("/");
+    const dir = slash === -1 ? "" : activeFile.path.slice(0, slash);
+    try {
+      const siblings = await listDir(dir);
+      const siblingPaths = siblings.entries.map((e) => e.path);
+      const newPath = nextVersionedPath(activeFile.path, siblingPaths);
+      const res = await writeFile.mutateAsync({
+        path: newPath,
+        content: activeFile.markdown,
+      });
+      await queryClient.invalidateQueries({ queryKey: dirQueryKey(dir) });
+      openServerFile({
+        name: basename(res.path),
+        path: res.path,
+        markdown: res.content,
+      });
+      showToast(`「${basename(res.path)}」として保存しました`, "success");
+    } catch (err) {
+      showToast(
+        `別名保存に失敗しました: ${(err as Error).message ?? "unknown error"}`,
+        "error"
+      );
+    }
+  };
+
   const canAddComment = (() => {
     if (!editor) return false;
     const { from, to, empty } = editor.state.selection;
@@ -162,38 +243,27 @@ export function EditorPage() {
     });
   };
 
-  const handleCommentSubmit = ({
-    author: submittedAuthor,
-    body,
-  }: {
-    author: string;
-    body: string;
-  }) => {
+  const closeContextMenu = () => setContextMenu(null);
+
+  const handleContextAddComment = () => {
+    closeContextMenu();
+    handleAddCommentClick();
+  };
+
+  const handleCommentSubmit = ({ body }: { body: string }) => {
     if (!editor) {
       setCommentDialog({ open: false, snippet: "" });
       return;
     }
-    const { to } = editor.state.selection;
     const id = generateCommentId();
     const date = todayISO();
     const snippet = commentDialog.snippet;
 
-    persistCommentAuthor(submittedAuthor);
-
+    // Notion-style: mark only — don't insert the comment body into the document.
     editor
       .chain()
       .focus()
-      .setTextSelection({ from: to, to })
-      .insertContent({
-        type: "text",
-        text: body,
-        marks: [
-          {
-            type: "comment",
-            attrs: { id, author: submittedAuthor, date, target: snippet },
-          },
-        ],
-      })
+      .setComment({ id, author, date, target: snippet, body })
       .run();
 
     setCommentDialog({ open: false, snippet: "" });
@@ -232,9 +302,21 @@ export function EditorPage() {
               gap: 1,
             }}
           >
-            <Typography variant="subtitle2" sx={{ flexGrow: 1 }}>
-              Files
-            </Typography>
+            <Tooltip title={reviewRootName} placement="bottom-start">
+              <Typography
+                variant="subtitle2"
+                sx={{
+                  flexGrow: 1,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                  minWidth: 0,
+                }}
+                data-testid="sidebar-review-root"
+              >
+                {reviewRootName}
+              </Typography>
+            </Tooltip>
             <Tooltip title="サイドバーを閉じる">
               <IconButton size="small" onClick={toggleSidebar} aria-label="close sidebar">
                 <MenuOpenIcon fontSize="small" />
@@ -316,6 +398,20 @@ export function EditorPage() {
           >
             {isSaving ? "保存中..." : "保存"}
           </Button>
+          <Tooltip title="同じディレクトリに .vN.md 形式でバージョニング保存">
+            <span>
+              <Button
+                variant="outlined"
+                size="small"
+                startIcon={<SaveAsIcon />}
+                disabled={!canSave || isSaving}
+                onClick={handleSaveAs}
+                data-testid="editor-save-as"
+              >
+                別名保存
+              </Button>
+            </span>
+          </Tooltip>
         </Box>
 
         <Box sx={{ flex: 1, minHeight: 0 }}>
@@ -340,10 +436,28 @@ export function EditorPage() {
         </Box>
       )}
 
+      <Menu
+        open={!!contextMenu}
+        onClose={closeContextMenu}
+        anchorReference="anchorPosition"
+        anchorPosition={
+          contextMenu ? { top: contextMenu.y, left: contextMenu.x } : undefined
+        }
+        slotProps={{
+          root: { "data-testid": "editor-context-menu" } as Record<string, unknown>,
+        }}
+      >
+        <MenuItem onClick={handleContextAddComment} data-testid="ctx-add-comment">
+          <ListItemIcon>
+            <AddCommentIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText>コメント追加</ListItemText>
+        </MenuItem>
+      </Menu>
+
       <AddCommentDialog
         open={commentDialog.open}
         targetSnippet={commentDialog.snippet}
-        defaultAuthor={author}
         onClose={() => setCommentDialog({ open: false, snippet: "" })}
         onSubmit={handleCommentSubmit}
       />

@@ -7,6 +7,7 @@ export interface CommentAttributes {
   author: string;
   date: string;
   target: string;
+  body: string;
 }
 
 declare module "@tiptap/core" {
@@ -31,6 +32,7 @@ export const CommentMark = Mark.create({
       author: { default: null },
       date: { default: null },
       target: { default: null },
+      body: { default: null },
     };
   },
 
@@ -45,6 +47,7 @@ export const CommentMark = Mark.create({
             author: el.getAttribute("data-comment-author"),
             date: el.getAttribute("data-comment-date"),
             target: el.getAttribute("data-comment-target"),
+            body: el.getAttribute("data-comment-body"),
           };
         },
       },
@@ -60,10 +63,10 @@ export const CommentMark = Mark.create({
           "data-comment-author": HTMLAttributes.author ?? "",
           "data-comment-date": HTMLAttributes.date ?? "",
           "data-comment-target": HTMLAttributes.target ?? "",
+          "data-comment-body": HTMLAttributes.body ?? "",
           class: "comment-mark",
         },
-        // Drop bare attribute keys (id/author/date/target) — only the data-* form
-        // is rendered.
+        // Drop bare attribute keys — only the data-* form is rendered.
         {}
       ),
       0,
@@ -80,6 +83,7 @@ export const CommentMark = Mark.create({
               author: mark.attrs.author ?? "",
               date: mark.attrs.date ?? "",
               target: mark.attrs.target ?? "",
+              body: mark.attrs.body ?? "",
             });
             return `<!-- @comment ${attrs} -->`;
           },

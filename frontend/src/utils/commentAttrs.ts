@@ -48,18 +48,20 @@ export function parseCommentAttrs(input: string): Record<string, string> {
   return result;
 }
 
-/** Build the attribute string portion `id="..." author="..." date="..." target="..."`. */
+/** Build the attribute string portion `id="..." author="..." date="..." target="..." body="..."`. */
 export function buildCommentAttrs(attrs: {
   id: string;
   author: string;
   date: string;
   target: string;
+  body: string;
 }): string {
   return [
     `id="${escapeCommentAttr(attrs.id)}"`,
     `author="${escapeCommentAttr(attrs.author)}"`,
     `date="${escapeCommentAttr(attrs.date)}"`,
     `target="${escapeCommentAttr(attrs.target)}"`,
+    `body="${escapeCommentAttr(attrs.body)}"`,
   ].join(" ");
 }
 

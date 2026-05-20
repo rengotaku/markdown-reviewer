@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"path/filepath"
 
 	"github.com/gin-gonic/gin"
 
@@ -41,6 +42,8 @@ func (h *Handler) Routes(staticHandler http.Handler) http.Handler {
 	// parent issue (#1) specified the API surface.
 	api := r.Group("/api")
 	{
+		api.GET("/config", h.Config)
+		api.GET("/dirs", h.ListDir)
 		api.GET("/files", h.ListFiles)
 		api.GET("/files/*path", h.ReadFile)
 		api.PUT("/files/*path", h.WriteFile)
@@ -53,6 +56,19 @@ func (h *Handler) Routes(staticHandler http.Handler) http.Handler {
 
 func (h *Handler) Health(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
+}
+
+// Config exposes the basename of REVIEW_ROOT so the UI can display the
+// reviewed workspace's name in the sidebar header. Full path is intentionally
+// not exposed.
+func (h *Handler) Config(c *gin.Context) {
+	if h.resolver == nil {
+		c.JSON(http.StatusOK, gin.H{"review_root_name": ""})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"review_root_name": filepath.Base(h.resolver.Root()),
+	})
 }
 
 func corsMiddleware() gin.HandlerFunc {
