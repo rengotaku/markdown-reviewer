@@ -5,15 +5,20 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"markdown-reviewer/internal/files"
 	"markdown-reviewer/internal/service"
 )
 
 type Handler struct {
 	userService *service.UserService
+	resolver    *files.Resolver
 }
 
-func NewHandler(userService *service.UserService) *Handler {
-	return &Handler{userService: userService}
+// NewHandler builds a Handler. resolver may be nil when the files API is
+// not configured (e.g. user-CRUD-only tests); the files endpoints respond
+// with 500 in that case.
+func NewHandler(userService *service.UserService, resolver *files.Resolver) *Handler {
+	return &Handler{userService: userService, resolver: resolver}
 }
 
 func (h *Handler) Routes(staticHandler http.Handler) http.Handler {
@@ -22,14 +27,23 @@ func (h *Handler) Routes(staticHandler http.Handler) http.Handler {
 
 	r.GET("/health", h.Health)
 
-	api := r.Group("/api/v1")
+	apiV1 := r.Group("/api/v1")
 	{
-		users := api.Group("/users")
+		users := apiV1.Group("/users")
 		users.GET("", h.ListUsers)
 		users.POST("", h.CreateUser)
 		users.GET("/:id", h.GetUser)
 		users.PUT("/:id", h.UpdateUser)
 		users.DELETE("/:id", h.DeleteUser)
+	}
+
+	// /api/files is intentionally outside /api/v1 because that's how the
+	// parent issue (#1) specified the API surface.
+	api := r.Group("/api")
+	{
+		api.GET("/files", h.ListFiles)
+		api.GET("/files/*path", h.ReadFile)
+		api.PUT("/files/*path", h.WriteFile)
 	}
 
 	r.NoRoute(gin.WrapH(staticHandler))

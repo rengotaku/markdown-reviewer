@@ -21,6 +21,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
+	"markdown-reviewer/internal/files"
 	"markdown-reviewer/internal/handler"
 	"markdown-reviewer/internal/model"
 	"markdown-reviewer/internal/repository"
@@ -29,9 +30,13 @@ import (
 )
 
 type Config struct {
-	Port            string        `env:"PORT,default=8080"`
-	DatabaseDSN     string        `env:"DATABASE_DSN,default=app.db"`
-	JWTSecret       string        `env:"JWT_SECRET,default=change-me-in-production"`
+	Port        string `env:"PORT,default=8080"`
+	DatabaseDSN string `env:"DATABASE_DSN,default=app.db"`
+	JWTSecret   string `env:"JWT_SECRET,default=change-me-in-production"`
+	// ReviewRoot is the directory under which the /api/files endpoints
+	// browse, read, and write .md files. Leave empty to disable the files
+	// API (handlers respond with 500); required for normal operation.
+	ReviewRoot      string        `env:"REVIEW_ROOT"`
 	ShutdownTimeout time.Duration `env:"SHUTDOWN_TIMEOUT,default=10s"`
 	JWTTTL          time.Duration `env:"JWT_TTL,default=24h"`
 }
@@ -60,7 +65,7 @@ func Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("connect database: %w", err)
 	}
-	if err := db.AutoMigrate(&model.User{}); err != nil {
+	if err = db.AutoMigrate(&model.User{}); err != nil {
 		return fmt.Errorf("migrate database: %w", err)
 	}
 
@@ -70,7 +75,19 @@ func Run(ctx context.Context) error {
 
 	repo := repository.NewUserRepository(db)
 	svc := service.NewUserService(repo)
-	h := handler.NewHandler(svc)
+
+	var resolver *files.Resolver
+	if cfg.ReviewRoot != "" {
+		resolver, err = files.NewResolver(cfg.ReviewRoot)
+		if err != nil {
+			return fmt.Errorf("init files resolver: %w", err)
+		}
+		slog.Info("files API enabled", "review_root", resolver.Root())
+	} else {
+		slog.Warn("REVIEW_ROOT not set; /api/files endpoints will return 500")
+	}
+
+	h := handler.NewHandler(svc, resolver)
 
 	srv := &http.Server{
 		Addr:         ":" + cfg.Port,
