@@ -32,12 +32,14 @@ describe("commentAttrs escape/unescape", () => {
 
 describe("parseCommentAttrs / buildCommentAttrs", () => {
   it("parses a typical attribute string", () => {
-    const s = 'id="c1" author="kishira" date="2026-05-20" target="この段落"';
+    const s =
+      'id="c1" author="kishira" date="2026-05-20" target="この段落" body="直して"';
     expect(parseCommentAttrs(s)).toEqual({
       id: "c1",
       author: "kishira",
       date: "2026-05-20",
       target: "この段落",
+      body: "直して",
     });
   });
 
@@ -53,6 +55,7 @@ describe("parseCommentAttrs / buildCommentAttrs", () => {
       author: "kishira",
       date: "2026-05-20",
       target: 'tricky -- "value"',
+      body: 'multi\nline -- with "quotes"',
     };
     const built = buildCommentAttrs(attrs);
     expect(parseCommentAttrs(built)).toEqual(attrs);

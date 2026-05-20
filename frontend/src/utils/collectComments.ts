@@ -15,8 +15,8 @@ export interface CollectedComment {
  * Contiguous text nodes sharing the same comment id are merged.
  */
 export function collectComments(editor: Editor | null): CollectedComment[] {
-  if (!editor) return [];
-  const markType = editor.schema.marks.comment;
+  if (!editor || editor.isDestroyed) return [];
+  const markType = editor.schema?.marks?.comment;
   if (!markType) return [];
 
   const result: CollectedComment[] = [];
@@ -42,7 +42,8 @@ export function collectComments(editor: Editor | null): CollectedComment[] {
     const id = (mark.attrs.id as string | null) ?? "";
     const text = node.text ?? "";
     if (current && current.id === id && current.to === pos) {
-      current = { ...current, body: current.body + text, to: pos + node.nodeSize };
+      // Same comment span continues: extend target with the additional wrapped text.
+      current = { ...current, target: current.target + text, to: pos + node.nodeSize };
       return;
     }
     if (current) {
@@ -52,8 +53,8 @@ export function collectComments(editor: Editor | null): CollectedComment[] {
       id,
       author: (mark.attrs.author as string | null) ?? "",
       date: (mark.attrs.date as string | null) ?? "",
-      target: (mark.attrs.target as string | null) ?? "",
-      body: text,
+      target: text,
+      body: (mark.attrs.body as string | null) ?? "",
       from: pos,
       to: pos + node.nodeSize,
     };

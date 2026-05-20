@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -31,6 +32,18 @@ type FileEntry struct {
 // FileListResponse is the response body for GET /api/files.
 type FileListResponse struct {
 	Files []FileEntry `json:"files"`
+}
+
+// DirEntry is one entry in the /api/dirs listing.
+type DirEntry struct {
+	Name string `json:"name"`
+	Path string `json:"path"`
+	Type string `json:"type"` // "dir" or "file"
+}
+
+// DirListResponse is the response body for GET /api/dirs.
+type DirListResponse struct {
+	Entries []DirEntry `json:"entries"`
 }
 
 // FileReadResponse is the response body for GET /api/files/*path.
@@ -82,6 +95,101 @@ func (h *Handler) ListFiles(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, FileListResponse{Files: entries})
+}
+
+// noiseDirs is the set of directory names skipped in lazy listings. These are
+// "obviously not source content" folders that would otherwise clutter the
+// sidebar. Dotfiles are also skipped regardless.
+var noiseDirs = map[string]struct{}{
+	"node_modules": {},
+	"vendor":       {},
+	"tmp":          {},
+	"bin":          {},
+	"dist":         {},
+	"build":        {},
+	"target":       {},
+}
+
+// ListDir returns the immediate children (dirs + .md files) of
+// REVIEW_ROOT/<path>. Used by the sidebar's lazy file tree. `path` is the
+// query param; empty/missing means the root.
+func (h *Handler) ListDir(c *gin.Context) {
+	if h.resolver == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "files API not configured"})
+		return
+	}
+	rel := strings.TrimPrefix(c.Query("path"), "/")
+	rel = strings.TrimSuffix(rel, "/")
+
+	full := h.resolver.Root()
+	if rel != "" && rel != "." {
+		resolved, err := h.resolver.Resolve(rel)
+		if err != nil {
+			switch {
+			case errors.Is(err, files.ErrPathTraversal), errors.Is(err, files.ErrInvalidPath):
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			case errors.Is(err, os.ErrNotExist):
+				c.JSON(http.StatusNotFound, gin.H{"error": "directory not found"})
+			default:
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
+			}
+			return
+		}
+		full = resolved
+		rel = filepath.ToSlash(rel)
+	} else {
+		rel = ""
+	}
+
+	info, err := os.Stat(full)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "directory not found"})
+		return
+	}
+	if !info.IsDir() {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "path is not a directory"})
+		return
+	}
+
+	items, err := os.ReadDir(full)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read directory"})
+		return
+	}
+
+	entries := []DirEntry{}
+	for _, item := range items {
+		name := item.Name()
+		if strings.HasPrefix(name, ".") {
+			continue
+		}
+		if item.IsDir() {
+			if _, skip := noiseDirs[name]; skip {
+				continue
+			}
+		}
+
+		childRel := name
+		if rel != "" {
+			childRel = rel + "/" + name
+		}
+
+		switch {
+		case item.IsDir():
+			entries = append(entries, DirEntry{Name: name, Path: childRel, Type: "dir"})
+		case strings.EqualFold(filepath.Ext(name), markdownExt):
+			entries = append(entries, DirEntry{Name: name, Path: childRel, Type: "file"})
+		}
+	}
+
+	sort.SliceStable(entries, func(i, j int) bool {
+		if entries[i].Type != entries[j].Type {
+			return entries[i].Type == "dir"
+		}
+		return entries[i].Name < entries[j].Name
+	})
+
+	c.JSON(http.StatusOK, DirListResponse{Entries: entries})
 }
 
 // ReadFile returns the content of REVIEW_ROOT/<path>.

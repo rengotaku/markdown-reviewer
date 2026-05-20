@@ -252,3 +252,215 @@ func TestFiles_Write_ParentDoesNotExist(t *testing.T) {
 	rec := serve(h, req)
 	assert.Equal(t, http.StatusNotFound, rec.Code)
 }
+
+// --- ListDir tests --------------------------------------------------------
+
+// listDir is a small helper that hits GET /api/dirs?path=<rel> and decodes
+// the response. It keeps the table-driven tests below tidy.
+func listDir(t *testing.T, h *handler.Handler, rel string) (*httptest.ResponseRecorder, handler.DirListResponse) {
+	t.Helper()
+	url := "/api/dirs"
+	if rel != "" {
+		url += "?path=" + rel
+	}
+	rec := serve(h, httptest.NewRequest(http.MethodGet, url, nil))
+	var resp handler.DirListResponse
+	if rec.Code == http.StatusOK {
+		require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	}
+	return rec, resp
+}
+
+func TestListDir_NotConfigured(t *testing.T) {
+	t.Parallel()
+	repo := repository.NewUserRepository(testutil.NewTestDB(t))
+	svc := service.NewUserService(repo)
+	h := handler.NewHandler(svc, nil)
+
+	rec := serve(h, httptest.NewRequest(http.MethodGet, "/api/dirs", nil))
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+}
+
+func TestListDir_RootEmpty(t *testing.T) {
+	t.Parallel()
+	h, _ := setupFilesHandler(t)
+
+	rec, resp := listDir(t, h, "")
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Empty(t, resp.Entries)
+}
+
+func TestListDir_RootListsDirsAndMarkdownOnly(t *testing.T) {
+	t.Parallel()
+	h, root := setupFilesHandler(t)
+
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "alpha"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "beta"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "readme.md"), []byte("r"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "zeta.md"), []byte("z"), 0o644))
+	// Non-markdown file: must be filtered out.
+	require.NoError(t, os.WriteFile(filepath.Join(root, "notes.txt"), []byte("n"), 0o644))
+
+	rec, resp := listDir(t, h, "")
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	// dirs before files, each group sorted ascending by name.
+	require.Len(t, resp.Entries, 4)
+	assert.Equal(t, handler.DirEntry{Name: "alpha", Path: "alpha", Type: "dir"}, resp.Entries[0])
+	assert.Equal(t, handler.DirEntry{Name: "beta", Path: "beta", Type: "dir"}, resp.Entries[1])
+	assert.Equal(t, handler.DirEntry{Name: "readme.md", Path: "readme.md", Type: "file"}, resp.Entries[2])
+	assert.Equal(t, handler.DirEntry{Name: "zeta.md", Path: "zeta.md", Type: "file"}, resp.Entries[3])
+}
+
+func TestListDir_SkipsDotfilesAndNoiseDirs(t *testing.T) {
+	t.Parallel()
+	h, root := setupFilesHandler(t)
+
+	// dotfiles + dotdirs — must be filtered.
+	require.NoError(t, os.MkdirAll(filepath.Join(root, ".git"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".env"), []byte("x"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".hidden.md"), []byte("x"), 0o644))
+
+	// every name in noiseDirs — must be filtered.
+	for _, name := range []string{"node_modules", "vendor", "tmp", "bin", "dist", "build", "target"} {
+		require.NoError(t, os.MkdirAll(filepath.Join(root, name), 0o755))
+	}
+
+	// One legitimate entry per kind to confirm the survivor set.
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "docs"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "intro.md"), []byte("i"), 0o644))
+
+	rec, resp := listDir(t, h, "")
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	require.Len(t, resp.Entries, 2)
+	assert.Equal(t, handler.DirEntry{Name: "docs", Path: "docs", Type: "dir"}, resp.Entries[0])
+	assert.Equal(t, handler.DirEntry{Name: "intro.md", Path: "intro.md", Type: "file"}, resp.Entries[1])
+}
+
+func TestListDir_SubdirectoryPath(t *testing.T) {
+	t.Parallel()
+	h, root := setupFilesHandler(t)
+
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "docs", "nested"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "docs", "a.md"), []byte("a"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "docs", "b.md"), []byte("b"), 0o644))
+	// Sibling outside the queried subtree must not leak in.
+	require.NoError(t, os.WriteFile(filepath.Join(root, "outside.md"), []byte("o"), 0o644))
+
+	rec, resp := listDir(t, h, "docs")
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	require.Len(t, resp.Entries, 3)
+	assert.Equal(t, handler.DirEntry{Name: "nested", Path: "docs/nested", Type: "dir"}, resp.Entries[0])
+	assert.Equal(t, handler.DirEntry{Name: "a.md", Path: "docs/a.md", Type: "file"}, resp.Entries[1])
+	assert.Equal(t, handler.DirEntry{Name: "b.md", Path: "docs/b.md", Type: "file"}, resp.Entries[2])
+}
+
+func TestListDir_PathStripsSlashesAndDotEqualsRoot(t *testing.T) {
+	t.Parallel()
+	h, root := setupFilesHandler(t)
+
+	require.NoError(t, os.WriteFile(filepath.Join(root, "a.md"), []byte("a"), 0o644))
+
+	// Each of these should be treated as "root" by ListDir:
+	//   - "."     → the rel == "." short-circuit
+	//   - "/"     → leading & trailing slash both stripped → empty
+	for _, p := range []string{".", "/"} {
+		rec, resp := listDir(t, h, p)
+		require.Equalf(t, http.StatusOK, rec.Code, "path=%q expected 200, got %d (%s)", p, rec.Code, rec.Body.String())
+		require.Lenf(t, resp.Entries, 1, "path=%q", p)
+		assert.Equal(t, handler.DirEntry{Name: "a.md", Path: "a.md", Type: "file"}, resp.Entries[0])
+	}
+}
+
+func TestListDir_SubdirectoryPathWithSlashes(t *testing.T) {
+	t.Parallel()
+	h, root := setupFilesHandler(t)
+
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "docs"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "docs", "a.md"), []byte("a"), 0o644))
+
+	// Leading + trailing slashes are stripped before resolving.
+	rec, resp := listDir(t, h, "/docs/")
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Len(t, resp.Entries, 1)
+	assert.Equal(t, handler.DirEntry{Name: "a.md", Path: "docs/a.md", Type: "file"}, resp.Entries[0])
+}
+
+func TestListDir_NotFound(t *testing.T) {
+	t.Parallel()
+	h, _ := setupFilesHandler(t)
+
+	rec, _ := listDir(t, h, "nope")
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+func TestListDir_PathTraversal(t *testing.T) {
+	t.Parallel()
+	h, root := setupFilesHandler(t)
+	parent := filepath.Dir(root)
+	sentinel := filepath.Join(parent, "secrets")
+	require.NoError(t, os.MkdirAll(sentinel, 0o755))
+	t.Cleanup(func() { _ = os.RemoveAll(sentinel) })
+
+	for _, p := range []string{"../secrets", "sub/../../secrets"} {
+		rec, _ := listDir(t, h, p)
+		require.Equalf(t, http.StatusBadRequest, rec.Code, "input %q expected 400, got %d (%s)", p, rec.Code, rec.Body.String())
+	}
+}
+
+func TestListDir_NotADirectory(t *testing.T) {
+	t.Parallel()
+	h, root := setupFilesHandler(t)
+	require.NoError(t, os.WriteFile(filepath.Join(root, "file.md"), []byte("f"), 0o644))
+
+	rec, _ := listDir(t, h, "file.md")
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Contains(t, rec.Body.String(), "path is not a directory")
+}
+
+// Resolve() returns os.ErrNotExist when a non-existing target's parent is
+// also missing — covers the ErrNotExist branch of the Resolve-err switch.
+func TestListDir_ResolveNotExistParent(t *testing.T) {
+	t.Parallel()
+	h, _ := setupFilesHandler(t)
+
+	rec, _ := listDir(t, h, "does/not/exist")
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+// Resolve() returns a wrapped non-traversal/non-NotExist error when
+// EvalSymlinks fails for an unexpected reason — here, walking *through*
+// a regular file ("foo.md/bar.md") yields ENOTDIR which hits the default
+// 500 branch.
+func TestListDir_ResolveInternalError(t *testing.T) {
+	t.Parallel()
+	h, root := setupFilesHandler(t)
+	require.NoError(t, os.WriteFile(filepath.Join(root, "foo.md"), []byte("f"), 0o644))
+
+	rec, _ := listDir(t, h, "foo.md/bar")
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+}
+
+// Covers the os.ReadDir failure branch: Stat() reports the path as a dir
+// (which it is) but ReadDir fails because we lack read permission.
+//
+// Skipped on Windows (POSIX perms don't apply) and for root (uid 0 bypasses
+// the read check entirely on most Unixes).
+func TestListDir_ReadDirError(t *testing.T) {
+	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses permission checks; cannot induce EACCES")
+	}
+	h, root := setupFilesHandler(t)
+
+	unreadable := filepath.Join(root, "noread")
+	require.NoError(t, os.MkdirAll(unreadable, 0o755))
+	// Strip read permission but keep execute so Stat() still succeeds.
+	require.NoError(t, os.Chmod(unreadable, 0o111))
+	t.Cleanup(func() { _ = os.Chmod(unreadable, 0o755) })
+
+	rec, _ := listDir(t, h, "noread")
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+}
