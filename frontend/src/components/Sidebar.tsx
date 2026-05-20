@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import CircularProgress from "@mui/material/CircularProgress";
@@ -11,8 +11,8 @@ import ChevronRight from "@mui/icons-material/ChevronRight";
 import ExpandMore from "@mui/icons-material/ExpandMore";
 import FolderOpen from "@mui/icons-material/FolderOpen";
 import InsertDriveFile from "@mui/icons-material/InsertDriveFile";
-import { useFiles } from "@/hooks/useFiles";
-import { buildFileTree, type FileTreeNode } from "@/utils/buildFileTree";
+import { useDir } from "@/hooks/useDir";
+import type { DirEntryApi } from "@/api";
 
 interface SidebarProps {
   activePath?: string;
@@ -22,9 +22,7 @@ interface SidebarProps {
 const INDENT_PX = 12;
 
 export function Sidebar({ activePath, onSelect }: SidebarProps) {
-  const { data, isLoading, isError, error } = useFiles();
-
-  const tree = useMemo(() => buildFileTree(data?.files ?? []), [data]);
+  const { data, isLoading, isError, error } = useDir("");
 
   if (isLoading) {
     return (
@@ -44,7 +42,8 @@ export function Sidebar({ activePath, onSelect }: SidebarProps) {
     );
   }
 
-  if (tree.length === 0) {
+  const entries = data?.entries ?? [];
+  if (entries.length === 0) {
     return (
       <Box className="p-4">
         <Typography variant="body2" color="text.secondary">
@@ -62,10 +61,10 @@ export function Sidebar({ activePath, onSelect }: SidebarProps) {
       sx={{ overflow: "auto", height: "100%" }}
     >
       <List dense disablePadding>
-        {tree.map((node) => (
+        {entries.map((entry) => (
           <TreeItem
-            key={node.path}
-            node={node}
+            key={entry.path}
+            entry={entry}
             depth={0}
             activePath={activePath}
             onSelect={onSelect}
@@ -77,23 +76,23 @@ export function Sidebar({ activePath, onSelect }: SidebarProps) {
 }
 
 interface TreeItemProps {
-  node: FileTreeNode;
+  entry: DirEntryApi;
   depth: number;
   activePath?: string;
   onSelect: (path: string) => void;
 }
 
-function TreeItem({ node, depth, activePath, onSelect }: TreeItemProps): ReactNode {
-  const [expanded, setExpanded] = useState(true);
+function TreeItem({ entry, depth, activePath, onSelect }: TreeItemProps): ReactNode {
+  const [expanded, setExpanded] = useState(false);
   const indent = depth * INDENT_PX + 8;
 
-  if (node.type === "dir") {
+  if (entry.type === "dir") {
     return (
       <>
         <ListItemButton
           onClick={() => setExpanded((v) => !v)}
           sx={{ pl: `${indent}px` }}
-          data-testid={`sidebar-dir-${node.path}`}
+          data-testid={`sidebar-dir-${entry.path}`}
         >
           <ListItemIcon sx={{ minWidth: 24 }}>
             {expanded ? <ExpandMore fontSize="small" /> : <ChevronRight fontSize="small" />}
@@ -102,39 +101,89 @@ function TreeItem({ node, depth, activePath, onSelect }: TreeItemProps): ReactNo
             <FolderOpen fontSize="small" />
           </ListItemIcon>
           <ListItemText
-            primary={node.name}
+            primary={entry.name}
             slotProps={{ primary: { variant: "body2" } }}
           />
         </ListItemButton>
-        {expanded &&
-          node.children?.map((child) => (
-            <TreeItem
-              key={child.path}
-              node={child}
-              depth={depth + 1}
-              activePath={activePath}
-              onSelect={onSelect}
-            />
-          ))}
+        {expanded && (
+          <DirChildren
+            path={entry.path}
+            depth={depth + 1}
+            activePath={activePath}
+            onSelect={onSelect}
+          />
+        )}
       </>
     );
   }
 
-  const selected = node.path === activePath;
+  const selected = entry.path === activePath;
   return (
     <ListItemButton
-      onClick={() => onSelect(node.path)}
+      onClick={() => onSelect(entry.path)}
       selected={selected}
       sx={{ pl: `${indent + 24}px` }}
-      data-testid={`sidebar-file-${node.path}`}
+      data-testid={`sidebar-file-${entry.path}`}
     >
       <ListItemIcon sx={{ minWidth: 24 }}>
         <InsertDriveFile fontSize="small" />
       </ListItemIcon>
       <ListItemText
-        primary={node.name}
+        primary={entry.name}
         slotProps={{ primary: { variant: "body2" } }}
       />
     </ListItemButton>
+  );
+}
+
+interface DirChildrenProps {
+  path: string;
+  depth: number;
+  activePath?: string;
+  onSelect: (path: string) => void;
+}
+
+function DirChildren({ path, depth, activePath, onSelect }: DirChildrenProps) {
+  const { data, isLoading, isError, error } = useDir(path);
+  const indent = depth * INDENT_PX + 8;
+
+  if (isLoading) {
+    return (
+      <Box sx={{ pl: `${indent + 24}px`, py: 0.5 }}>
+        <CircularProgress size={14} />
+      </Box>
+    );
+  }
+  if (isError) {
+    return (
+      <Box sx={{ pl: `${indent + 24}px`, py: 0.5 }}>
+        <Typography variant="caption" color="error">
+          読み込みエラー: {error?.message ?? "unknown"}
+        </Typography>
+      </Box>
+    );
+  }
+  const entries = data?.entries ?? [];
+  if (entries.length === 0) {
+    return (
+      <Box sx={{ pl: `${indent + 24}px`, py: 0.5 }}>
+        <Typography variant="caption" color="text.secondary">
+          (空)
+        </Typography>
+      </Box>
+    );
+  }
+  return (
+    <>
+      {entries.map((child) => (
+        <TreeItem
+          key={child.path}
+          entry={child}
+          depth={depth}
+          activePath={activePath}
+          onSelect={onSelect}
+        />
+      ))}
+    </>
   );
 }

@@ -11,10 +11,9 @@ import Box from "@mui/material/Box";
 interface Props {
   open: boolean;
   targetSnippet: string;
-  defaultAuthor: string;
   defaultBody?: string;
   onClose: () => void;
-  onSubmit: (input: { author: string; body: string }) => void;
+  onSubmit: (input: { body: string }) => void;
 }
 
 const SNIPPET_LIMIT = 80;
@@ -31,23 +30,21 @@ export function AddCommentDialog(props: Props) {
 
 function DialogBody({
   targetSnippet,
-  defaultAuthor,
   defaultBody,
   onClose,
   onSubmit,
 }: Props) {
   const [body, setBody] = useState(defaultBody ?? "");
-  const [author, setAuthor] = useState(defaultAuthor);
 
   const trimmed = body.trim();
-  const canSubmit = trimmed.length > 0 && author.trim().length > 0;
+  const canSubmit = trimmed.length > 0;
   const snippetPreview = targetSnippet.length
     ? truncate(targetSnippet, SNIPPET_LIMIT)
     : "(範囲が選択されていません)";
 
   const submit = () => {
     if (!canSubmit) return;
-    onSubmit({ author: author.trim(), body: trimmed });
+    onSubmit({ body: trimmed });
   };
 
   return (
@@ -73,15 +70,6 @@ function DialogBody({
             {snippetPreview}
           </Typography>
         </Box>
-        <TextField
-          label="作成者 (author)"
-          value={author}
-          onChange={(e) => setAuthor(e.target.value)}
-          size="small"
-          fullWidth
-          sx={{ mb: 2 }}
-          inputProps={{ "data-testid": "comment-author-input" }}
-        />
         <TextField
           label="コメント本文"
           value={body}
