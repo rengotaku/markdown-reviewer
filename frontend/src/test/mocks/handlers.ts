@@ -93,4 +93,27 @@ export const handlers = [
     }
     return new HttpResponse(null, { status: 204 });
   }),
+
+  http.get(`${API_BASE}/api/files`, () => {
+    return HttpResponse.json({
+      files: [
+        { path: "README.md", size: 12, modified: "2026-05-20T00:00:00Z" },
+        { path: "docs/intro.md", size: 34, modified: "2026-05-20T00:00:00Z" },
+        { path: "docs/api/spec.md", size: 56, modified: "2026-05-20T00:00:00Z" },
+      ],
+    });
+  }),
+
+  http.get(`${API_BASE}/api/files/*`, ({ request }) => {
+    const url = new URL(request.url);
+    const path = url.pathname.replace(/^\/api\/files\//, "");
+    return HttpResponse.json({ path, content: `# ${path}\n\nmock content` });
+  }),
+
+  http.put(`${API_BASE}/api/files/*`, async ({ request }) => {
+    const url = new URL(request.url);
+    const path = url.pathname.replace(/^\/api\/files\//, "");
+    const body = (await request.json()) as { content: string };
+    return HttpResponse.json({ path, content: body.content });
+  }),
 ];
