@@ -1,0 +1,12 @@
+bin/
+tmp/
+*.exe
+coverage.out
+app.db
+
+# Frontend build artifacts
+frontend/node_modules/
+frontend/dist/
+frontend/coverage/
+internal/static/dist/*
+!internal/static/dist/.gitkeep
