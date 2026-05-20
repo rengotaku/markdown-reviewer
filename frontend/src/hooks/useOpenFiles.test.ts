@@ -180,4 +180,56 @@ describe("useOpenFiles", () => {
     const names = useOpenFiles.getState().files.map((f) => f.name);
     expect(names).toEqual(["untitled.md", "untitled-2.md", "untitled-3.md"]);
   });
+
+  it("openServerFile adds and activates when path is new", () => {
+    useOpenFiles
+      .getState()
+      .openServerFile({ name: "intro.md", path: "docs/intro.md", markdown: "# Intro" });
+    const state = useOpenFiles.getState();
+    expect(state.files).toHaveLength(1);
+    expect(state.files[0]).toMatchObject({
+      name: "intro.md",
+      path: "docs/intro.md",
+      markdown: "# Intro",
+      isDirty: false,
+    });
+    expect(state.activeId).toBe(state.files[0].id);
+  });
+
+  it("openServerFile activates existing tab when path already open", () => {
+    useOpenFiles
+      .getState()
+      .openServerFile({ name: "a.md", path: "a.md", markdown: "# A" });
+    useOpenFiles
+      .getState()
+      .openServerFile({ name: "b.md", path: "b.md", markdown: "# B" });
+    const aId = useOpenFiles.getState().files.find((f) => f.path === "a.md")!.id;
+
+    useOpenFiles
+      .getState()
+      .openServerFile({ name: "a.md", path: "a.md", markdown: "ignored" });
+
+    const state = useOpenFiles.getState();
+    expect(state.files).toHaveLength(2);
+    expect(state.activeId).toBe(aId);
+    // markdown was not overwritten
+    expect(state.files.find((f) => f.path === "a.md")!.markdown).toBe("# A");
+  });
+
+  it("markActiveSaved clears the dirty flag on the active file", () => {
+    useOpenFiles.getState().addFiles([{ name: "a.md", markdown: "# A" }]);
+    useOpenFiles.getState().updateActiveMarkdown("# A edited");
+    expect(
+      useOpenFiles
+        .getState()
+        .files.find((f) => f.id === useOpenFiles.getState().activeId)!.isDirty
+    ).toBe(true);
+
+    useOpenFiles.getState().markActiveSaved();
+    expect(
+      useOpenFiles
+        .getState()
+        .files.find((f) => f.id === useOpenFiles.getState().activeId)!.isDirty
+    ).toBe(false);
+  });
 });
