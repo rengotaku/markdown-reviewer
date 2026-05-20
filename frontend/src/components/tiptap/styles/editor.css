@@ -220,3 +220,25 @@
   background-color: #1565c0 !important;
   border-color: #1565c0 !important;
 }
+
+/* Comment mark — inline body inserted by the reviewer (issue #6). */
+.ProseMirror .comment-mark {
+  background-color: #fff8c5;
+  border-bottom: 1px dashed #c9a700;
+  padding: 0 2px;
+  border-radius: 2px;
+  cursor: help;
+}
+
+.ProseMirror .comment-mark::before {
+  content: "💬";
+  font-size: 0.85em;
+  margin-right: 2px;
+  opacity: 0.8;
+}
+
+.ProseMirror .comment-mark.is-active {
+  background-color: #ffec99;
+  outline: 2px solid #f4b400;
+  outline-offset: 1px;
+}
