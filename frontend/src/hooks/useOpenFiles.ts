@@ -28,6 +28,8 @@ interface OpenFilesState {
   closeFile: (id: string) => void;
   closeAll: () => void;
   createUntitled: () => void;
+  openServerFile: (incoming: IncomingFile) => void;
+  markActiveSaved: () => void;
 }
 
 const UNTITLED_BASE = "untitled";
@@ -177,6 +179,38 @@ export const useOpenFiles = create<OpenFilesState>()(
           const existing = new Set(state.files.map((f) => f.name));
           const fresh = buildUntitledFile(existing);
           return { files: [...state.files, fresh], activeId: fresh.id };
+        }),
+
+      openServerFile: (incoming) =>
+        set((state) => {
+          const path = incoming.path ?? incoming.name;
+          const existing = state.files.find((f) => f.path === path);
+          if (existing) {
+            if (state.activeId === existing.id) return state;
+            return { activeId: existing.id };
+          }
+          const created: OpenFile = {
+            id: generateId(),
+            name: incoming.name,
+            path,
+            markdown: incoming.markdown,
+            isDirty: false,
+            reloadToken: 0,
+            initialHash: simpleHash(incoming.markdown),
+          };
+          return { files: [...state.files, created], activeId: created.id };
+        }),
+
+      markActiveSaved: () =>
+        set((state) => {
+          if (!state.activeId) return state;
+          return {
+            files: state.files.map((file) =>
+              file.id === state.activeId
+                ? { ...file, isDirty: false, initialHash: simpleHash(file.markdown) }
+                : file
+            ),
+          };
         }),
     }),
     {
