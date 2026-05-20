@@ -19,6 +19,9 @@ export function Layout() {
             <NavLink to="/" end className={navLinkClass}>
               Home
             </NavLink>
+            <NavLink to="/editor" className={navLinkClass}>
+              Editor
+            </NavLink>
           </nav>
         </div>
       </header>
