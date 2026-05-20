@@ -1,0 +1,34 @@
+version: "2"
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - misspell
+    - unconvert
+    - unparam
+  settings:
+    errcheck:
+      check-type-assertions: true
+    govet:
+      enable-all: true
+  exclusions:
+    paths:
+      - frontend/node_modules
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - markdown-reviewer
+
+run:
+  timeout: 5m
+  exclude-dirs:
+    - frontend/node_modules

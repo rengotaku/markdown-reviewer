@@ -1,0 +1,83 @@
+name: markdown-reviewer CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Use Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: frontend/.node-version
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install golangci-lint
+        run: curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b "$(go env GOPATH)/bin" v2.11.2
+
+      - name: Install dependencies (Go modules + npm ci)
+        run: make install
+
+      - name: Lint and test (Go + frontend)
+        run: make ci
+
+      - name: Build monolithic binary (frontend bundle embedded into Go)
+        run: make build
+
+      - name: Verify no dev-host leak in production bundle
+        run: |
+          if grep -R --include='*.js' --include='*.css' --include='*.html' \
+               'localhost:8080' internal/static/dist/ 2>/dev/null; then
+            echo "ERROR: 'localhost:8080' leaked into production bundle"
+            exit 1
+          fi
+
+      - name: Smoke test — binary serves SPA + API
+        run: |
+          set -euo pipefail
+          PORT=18091 ./bin/server >/tmp/server.log 2>&1 &
+          server_pid=$!
+          trap "kill $server_pid 2>/dev/null || true" EXIT
+
+          # Wait for server ready (up to ~10s)
+          for _ in $(seq 1 20); do
+            if curl -sSf -o /dev/null http://localhost:18091/api/v1/users; then
+              break
+            fi
+            sleep 0.5
+          done
+
+          fail=0
+          check() {
+            local path="$1" expected="$2" label="$3"
+            local got
+            got=$(curl -sS -o /dev/null -w '%{http_code}' "http://localhost:18091${path}")
+            if [ "$got" = "$expected" ]; then
+              echo "OK  $label  GET $path -> $got"
+            else
+              echo "FAIL $label  GET $path -> $got (expected $expected)"
+              fail=1
+            fi
+          }
+          check "/"             200 "SPA index"
+          check "/api/v1/users" 200 "API"
+          check "/users"        200 "SPA fallback"
+
+          if [ "$fail" -ne 0 ]; then
+            echo "--- server log ---"
+            cat /tmp/server.log || true
+            exit 1
+          fi
