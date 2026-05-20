@@ -230,15 +230,24 @@
   cursor: help;
 }
 
-.ProseMirror .comment-mark::before {
-  content: "💬";
-  font-size: 0.85em;
-  margin-right: 2px;
-  opacity: 0.8;
-}
-
 .ProseMirror .comment-mark.is-active {
   background-color: #ffec99;
   outline: 2px solid #f4b400;
   outline-offset: 1px;
+}
+
+@keyframes comment-flash {
+  0%, 100% {
+    background-color: #fff8c5;
+    outline: 2px solid transparent;
+  }
+  50% {
+    background-color: #ffd966;
+    outline: 2px solid #f4b400;
+    outline-offset: 2px;
+  }
+}
+
+.ProseMirror .comment-mark.is-flash {
+  animation: comment-flash 0.35s ease-in-out 4;
 }

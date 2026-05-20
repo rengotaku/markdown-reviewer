@@ -63,6 +63,24 @@ function useEditorComments(editor: Editor | null): CollectedComment[] {
 export function CommentSidePane({ editor, onDelete, activeId }: Props) {
   const comments = useEditorComments(editor);
 
+  const flashMark = (id: string) => {
+    if (!id) return;
+    const root = editor?.view?.dom;
+    if (!root) return;
+    const nodes = root.querySelectorAll<HTMLElement>(
+      `[data-comment-id="${CSS.escape(id)}"]`
+    );
+    nodes.forEach((el) => {
+      // Restart animation if already flashing.
+      el.classList.remove("is-flash");
+      void el.offsetWidth;
+      el.classList.add("is-flash");
+    });
+    window.setTimeout(() => {
+      nodes.forEach((el) => el.classList.remove("is-flash"));
+    }, 1600);
+  };
+
   const handleJump = (c: CollectedComment) => {
     if (!editor) return;
     editor
@@ -71,6 +89,7 @@ export function CommentSidePane({ editor, onDelete, activeId }: Props) {
       .setTextSelection({ from: c.from, to: c.to })
       .scrollIntoView()
       .run();
+    flashMark(c.id);
   };
 
   return (
@@ -137,7 +156,7 @@ export function CommentSidePane({ editor, onDelete, activeId }: Props) {
                 }}
               >
                 <Typography variant="caption" color="text.secondary" sx={{ flexGrow: 1 }}>
-                  {c.author || "anonymous"} · {c.date || "?"}
+                  {c.date || "?"}
                 </Typography>
                 <Tooltip title="コメントを削除">
                   <IconButton

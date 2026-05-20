@@ -8,7 +8,7 @@ tmp_dir = "tmp"
 # Build command
 cmd = "go build -tags dev -o ./bin/server ./cmd/server"
 # Binary to run
-entrypoint = "./bin/server"
+bin = "./bin/server"
 # Watch these extensions
 include_ext = ["go"]
 # Exclude directories: keep `internal/static/dist` out so frontend rebuilds

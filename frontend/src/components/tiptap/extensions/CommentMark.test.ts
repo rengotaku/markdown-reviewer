@@ -35,10 +35,16 @@ afterEach(() => {
 describe("CommentMark", () => {
   it("parses an HTML comment pair into a comment mark", () => {
     const md =
-      'Hello <!-- @comment id="c1" author="kishira" date="2026-05-20" target="hello" -->body text<!-- /@comment --> world.';
+      'Hello <!-- @comment id="c1" author="kishira" date="2026-05-20" target="hello" body="please fix" -->body text<!-- /@comment --> world.';
     editor = createEditor(md);
-    let found: { id: string; author: string; date: string; target: string; text: string } | null =
-      null;
+    let found: {
+      id: string;
+      author: string;
+      date: string;
+      target: string;
+      body: string;
+      text: string;
+    } | null = null;
     editor.state.doc.descendants((node) => {
       if (!node.isText) return;
       const mark = node.marks.find((m) => m.type.name === "comment");
@@ -48,6 +54,7 @@ describe("CommentMark", () => {
         author: mark.attrs.author,
         date: mark.attrs.date,
         target: mark.attrs.target,
+        body: mark.attrs.body,
         text: node.text ?? "",
       };
     });
@@ -57,40 +64,33 @@ describe("CommentMark", () => {
       author: "kishira",
       date: "2026-05-20",
       target: "hello",
+      body: "please fix",
       text: "body text",
     });
   });
 
-  it("serializes a comment mark back to HTML comment markers", () => {
+  it("serializes a comment mark back to HTML comment markers (Notion-style)", () => {
     editor = createEditor("plain paragraph");
     editor
       .chain()
-      .setTextSelection({ from: 1, to: 1 })
-      .insertContent({
-        type: "text",
-        text: "body",
-        marks: [
-          {
-            type: "comment",
-            attrs: {
-              id: "x1",
-              author: "k",
-              date: "2026-05-20",
-              target: "snippet",
-            },
-          },
-        ],
+      .setTextSelection({ from: 1, to: 6 })
+      .setComment({
+        id: "x1",
+        author: "k",
+        date: "2026-05-20",
+        target: "plain",
+        body: "review me",
       })
       .run();
     const md = getMarkdown(editor);
     expect(md).toContain(
-      '<!-- @comment id="x1" author="k" date="2026-05-20" target="snippet" -->body<!-- /@comment -->'
+      '<!-- @comment id="x1" author="k" date="2026-05-20" target="plain" body="review me" -->plain<!-- /@comment -->'
     );
   });
 
   it("round-trips read → write without producing a diff", () => {
     const original =
-      'Intro paragraph.\n\nLine with <!-- @comment id="abc" author="kishira" date="2026-05-20" target="word" -->note<!-- /@comment --> inline.';
+      'Intro paragraph.\n\nLine with <!-- @comment id="abc" author="kishira" date="2026-05-20" target="word" body="note body" -->note<!-- /@comment --> inline.';
     editor = createEditor(original);
     const out = getMarkdown(editor);
     expect(out.trim()).toBe(original.trim());
@@ -98,7 +98,7 @@ describe("CommentMark", () => {
 
   it("escapes special characters in target attribute on round-trip", () => {
     const original =
-      'Pre <!-- @comment id="c2" author="k" date="2026-05-20" target="say \\"hi\\"" -->note<!-- /@comment --> post.';
+      'Pre <!-- @comment id="c2" author="k" date="2026-05-20" target="say \\"hi\\"" body="" -->note<!-- /@comment --> post.';
     editor = createEditor(original);
     let target = "";
     editor.state.doc.descendants((node) => {
@@ -114,7 +114,7 @@ describe("CommentMark", () => {
 
   it("removes a comment by id without touching unrelated marks", () => {
     const md =
-      '<!-- @comment id="c1" author="k" date="2026-05-20" target="x" -->one<!-- /@comment --> and <!-- @comment id="c2" author="k" date="2026-05-20" target="y" -->two<!-- /@comment -->.';
+      '<!-- @comment id="c1" author="k" date="2026-05-20" target="x" body="" -->one<!-- /@comment --> and <!-- @comment id="c2" author="k" date="2026-05-20" target="y" body="" -->two<!-- /@comment -->.';
     editor = createEditor(md);
     editor.commands.unsetCommentById("c1");
     const out = getMarkdown(editor);
@@ -132,6 +132,7 @@ describe("CommentMark", () => {
         author: "k",
         date: "2026-05-20",
         target: "plain",
+        body: "",
       })
       .run();
     editor
@@ -142,6 +143,7 @@ describe("CommentMark", () => {
         author: "k",
         date: "2026-05-20",
         target: "plain",
+        body: "",
       })
       .run();
     let count = 0;
