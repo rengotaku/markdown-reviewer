@@ -12,16 +12,15 @@ function renderWithClient(ui: React.ReactElement) {
 }
 
 describe("Sidebar", () => {
-  it("renders nested directories from the flat API response", async () => {
+  it("renders only top-level entries (lazy-collapsed by default)", async () => {
     const onSelect = vi.fn();
     renderWithClient(<Sidebar onSelect={onSelect} />);
 
-    // Top-level dir + file are shown
     await waitFor(() => expect(screen.getByTestId("sidebar-dir-docs")).toBeInTheDocument());
     expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument();
 
-    // Nested file under docs/api is shown (default expanded)
-    expect(screen.getByTestId("sidebar-file-docs/api/spec.md")).toBeInTheDocument();
+    // Nested file under docs is NOT fetched until docs is expanded.
+    expect(screen.queryByTestId("sidebar-file-docs/intro.md")).not.toBeInTheDocument();
   });
 
   it("invokes onSelect with the full path when a file is clicked", async () => {
@@ -30,20 +29,27 @@ describe("Sidebar", () => {
     renderWithClient(<Sidebar onSelect={onSelect} />);
 
     await waitFor(() =>
-      expect(screen.getByTestId("sidebar-file-docs/intro.md")).toBeInTheDocument()
+      expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
     );
 
-    await user.click(screen.getByTestId("sidebar-file-docs/intro.md"));
-    expect(onSelect).toHaveBeenCalledWith("docs/intro.md");
+    await user.click(screen.getByTestId("sidebar-file-README.md"));
+    expect(onSelect).toHaveBeenCalledWith("README.md");
   });
 
-  it("collapses a directory when its header is clicked", async () => {
+  it("lazily loads child entries when a directory is expanded", async () => {
     const user = userEvent.setup();
     renderWithClient(<Sidebar onSelect={() => {}} />);
 
     await waitFor(() => expect(screen.getByTestId("sidebar-dir-docs")).toBeInTheDocument());
-    expect(screen.getByTestId("sidebar-file-docs/intro.md")).toBeInTheDocument();
 
+    // Expand `docs/` → children fetched and rendered.
+    await user.click(screen.getByTestId("sidebar-dir-docs"));
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-file-docs/intro.md")).toBeInTheDocument()
+    );
+    expect(screen.getByTestId("sidebar-dir-docs/api")).toBeInTheDocument();
+
+    // Collapse → children hidden.
     await user.click(screen.getByTestId("sidebar-dir-docs"));
     expect(screen.queryByTestId("sidebar-file-docs/intro.md")).not.toBeInTheDocument();
   });

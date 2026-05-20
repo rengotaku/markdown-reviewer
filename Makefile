@@ -1,6 +1,6 @@
 .PHONY: install build build-frontend run run-binary run-server run-frontend stop status \
 	lint lint-frontend lint-fix format format-check \
-	test test-frontend test-cov test-watch coverage \
+	test test-frontend test-frontend-coverage test-cov test-cov-check test-watch coverage \
 	migrate migrate-diff migrate-apply migrate-hash \
 	check ci clean help
 
@@ -9,6 +9,10 @@
 BINARY_NAME := server
 BIN_DIR := bin
 COVERAGE_FILE := coverage.out
+# Minimum total coverage % for Go. Measured against production packages
+# (internal/* + cmd/* are excluded for being either build-tagged or thin
+# wiring; node_modules vendored Go files are excluded as external).
+COVERAGE_THRESHOLD := 80
 PORT ?= 8080
 FRONTEND_PORT ?= 5174
 
@@ -85,10 +89,26 @@ test:
 test-frontend:
 	cd $(FRONTEND_DIR) && npm run test
 
-## test-cov: Run Go tests with coverage
+## test-cov: Run Go tests with coverage on production packages
+# Excludes:
+#  - node_modules/** (vendored external Go files, e.g. flatted)
+#  - internal/testutil (test-helper-only package)
+#  - cmd/* (main wiring; no business logic)
 test-cov:
-	go test -coverprofile=$(COVERAGE_FILE) ./...
-	go tool cover -func=$(COVERAGE_FILE)
+	@PKGS=$$(go list ./... | grep -v node_modules | grep -v testutil | grep -v '/cmd/' | tr '\n' ',' | sed 's/,$$//'); \
+	PKG_SPACES=$$(echo "$$PKGS" | tr ',' ' '); \
+	go test -coverpkg="$$PKGS" -coverprofile=$(COVERAGE_FILE) $$PKG_SPACES
+	go tool cover -func=$(COVERAGE_FILE) | tail -1
+
+## test-cov-check: test-cov + fail if total < COVERAGE_THRESHOLD
+test-cov-check: test-cov
+	@TOTAL=$$(go tool cover -func=$(COVERAGE_FILE) | awk '/^total:/ {sub(/%/, "", $$3); print $$3}'); \
+	if awk "BEGIN {exit !($$TOTAL < $(COVERAGE_THRESHOLD))}"; then \
+		echo "ERROR: Go coverage $$TOTAL% < threshold $(COVERAGE_THRESHOLD)%"; \
+		exit 1; \
+	else \
+		echo "OK: Go coverage $$TOTAL% >= threshold $(COVERAGE_THRESHOLD)%"; \
+	fi
 
 ## test-watch: Run frontend tests in watch mode
 test-watch:
@@ -101,8 +121,12 @@ coverage:
 ## check: Run all linters and tests (Go + frontend)
 check: lint test lint-frontend test-frontend
 
-## ci: Run lint + test (Go uses coverage; frontend uses normal test)
-ci: lint test-cov lint-frontend test-frontend
+## ci: Run lint + test with coverage gates (Go + frontend)
+ci: lint test-cov-check lint-frontend test-frontend-coverage
+
+## test-frontend-coverage: Frontend tests with the configured coverage gate
+test-frontend-coverage:
+	cd $(FRONTEND_DIR) && npm run test:coverage
 
 ## migrate: Apply migrations via GORM AutoMigrate (no atlas required)
 migrate:

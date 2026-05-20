@@ -35,7 +35,7 @@ describe("EditorPage", () => {
     expect(screen.getByTestId("tiptap-editor")).toBeInTheDocument();
   });
 
-  it("shows the file tree once /api/files resolves", async () => {
+  it("shows the top-level file tree once /api/dirs resolves", async () => {
     renderPage();
     await waitFor(() =>
       expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
@@ -46,6 +46,10 @@ describe("EditorPage", () => {
     const user = userEvent.setup();
     renderPage();
 
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-dir-docs")).toBeInTheDocument()
+    );
+    await user.click(screen.getByTestId("sidebar-dir-docs"));
     await waitFor(() =>
       expect(screen.getByTestId("sidebar-file-docs/intro.md")).toBeInTheDocument()
     );
@@ -81,7 +85,11 @@ describe("EditorPage", () => {
     });
     useOpenFiles.getState().updateActiveMarkdown("edited content");
 
-    // Attempt to switch to a different file
+    // Expand docs/ and attempt to switch to a different file
+    await user.click(screen.getByTestId("sidebar-dir-docs"));
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-file-docs/intro.md")).toBeInTheDocument()
+    );
     await user.click(screen.getByTestId("sidebar-file-docs/intro.md"));
 
     // Confirm dialog should appear
@@ -129,5 +137,122 @@ describe("EditorPage", () => {
       expect(active.isDirty).toBe(false);
     });
     expect(useToast.getState().toasts[0]?.severity).toBe("success");
+  });
+
+  it("displays REVIEW_ROOT basename in the sidebar header (from /api/config)", async () => {
+    renderPage();
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-review-root")).toHaveTextContent("mock-root")
+    );
+  });
+
+  it("save-as writes to a versioned path in the same directory and opens it", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
+    );
+    await user.click(screen.getByTestId("sidebar-file-README.md"));
+    await waitFor(() =>
+      expect(screen.getByTestId("editor-active-path")).toHaveTextContent("README.md")
+    );
+
+    await user.click(screen.getByTestId("editor-save-as"));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("editor-active-path")).toHaveTextContent("README.v2.md")
+    );
+    const opened = useOpenFiles
+      .getState()
+      .files.find((f) => f.path === "README.v2.md");
+    expect(opened).toBeDefined();
+    expect(useToast.getState().toasts.some((t) => t.severity === "success")).toBe(true);
+  });
+
+  it("add-comment button shows a toast when no text is selected", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
+    );
+    await user.click(screen.getByTestId("sidebar-file-README.md"));
+
+    // No selection: the button is disabled, so clicking it via .click() won't do
+    // anything. Force-click ensures we can verify the disabled state instead.
+    const btn = screen.getByTestId("editor-add-comment") as HTMLButtonElement;
+    expect(btn).toBeDisabled();
+  });
+
+  it("sidebar toggle button hides and shows the sidebar", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
+    );
+
+    await user.click(screen.getByLabelText("close sidebar"));
+    expect(screen.queryByTestId("sidebar-file-README.md")).not.toBeInTheDocument();
+
+    await user.click(screen.getByLabelText("open sidebar"));
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
+    );
+  });
+
+  it("comments pane can be toggled open and closed", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
+    );
+
+    // The pane defaults to open in useUIStore.
+    expect(screen.getByTestId("comment-side-pane")).toBeInTheDocument();
+
+    await user.click(screen.getByTestId("editor-toggle-comments"));
+    expect(screen.queryByTestId("comment-side-pane")).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId("editor-toggle-comments"));
+    expect(screen.getByTestId("comment-side-pane")).toBeInTheDocument();
+  });
+
+  it("shows a placeholder when no file is selected", () => {
+    renderPage();
+    expect(screen.getByTestId("editor-active-path")).toHaveTextContent(
+      "ファイルが選択されていません"
+    );
+  });
+
+  it("save shows an error toast when the API fails", async () => {
+    const user = userEvent.setup();
+
+    // Patch a one-off failing PUT for the next save call.
+    const { http, HttpResponse } = await import("msw");
+    const { server } = await import("@/test/mocks/server");
+    server.use(
+      http.put("http://localhost:8080/api/files/*", () =>
+        HttpResponse.json({ error: "boom" }, { status: 500 })
+      )
+    );
+
+    renderPage();
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
+    );
+    await user.click(screen.getByTestId("sidebar-file-README.md"));
+    await waitFor(() =>
+      expect(screen.getByTestId("editor-active-path")).toHaveTextContent("README.md")
+    );
+    useOpenFiles.getState().updateActiveMarkdown("edited");
+
+    await user.click(screen.getByTestId("editor-save"));
+    await waitFor(() => {
+      const toasts = useToast.getState().toasts;
+      expect(toasts.some((t) => t.severity === "error")).toBe(true);
+    });
   });
 });

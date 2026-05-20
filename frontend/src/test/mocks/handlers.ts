@@ -94,6 +94,37 @@ export const handlers = [
     return new HttpResponse(null, { status: 204 });
   }),
 
+  http.get(`${API_BASE}/api/config`, () => {
+    return HttpResponse.json({ review_root_name: "mock-root" });
+  }),
+
+  http.get(`${API_BASE}/api/dirs`, ({ request }) => {
+    const url = new URL(request.url);
+    const path = url.searchParams.get("path") ?? "";
+    if (path === "") {
+      return HttpResponse.json({
+        entries: [
+          { name: "docs", path: "docs", type: "dir" },
+          { name: "README.md", path: "README.md", type: "file" },
+        ],
+      });
+    }
+    if (path === "docs") {
+      return HttpResponse.json({
+        entries: [
+          { name: "api", path: "docs/api", type: "dir" },
+          { name: "intro.md", path: "docs/intro.md", type: "file" },
+        ],
+      });
+    }
+    if (path === "docs/api") {
+      return HttpResponse.json({
+        entries: [{ name: "spec.md", path: "docs/api/spec.md", type: "file" }],
+      });
+    }
+    return HttpResponse.json({ entries: [] });
+  }),
+
   http.get(`${API_BASE}/api/files`, () => {
     return HttpResponse.json({
       files: [

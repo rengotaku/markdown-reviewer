@@ -21,11 +21,40 @@ export default defineConfig({
         "src/test/**",
         "src/main.tsx",
         "src/vite-env.d.ts",
-        // shared-react-ui primitive: shipped to every template via compose
-        // even when not referenced by app code. Coverage is enforced via
-        // shared-react-ui's gallery, not via per-template integration.
+        // shared-react-ui primitives: shipped to every template via compose
+        // even when not referenced by app code. Coverage is enforced via the
+        // shared-react-ui gallery, not via per-template integration.
+        "src/components/ui/alert.tsx",
+        "src/components/ui/button-variants.ts",
+        "src/components/ui/card.tsx",
+        "src/components/ui/input.tsx",
+        "src/components/ui/table.tsx",
         "src/components/ui/time-picker.tsx",
+        // TipTap integration plumbing: ProseMirror-view-heavy code that's
+        // exercised via the editor smoke tests in CommentMark.test.ts and
+        // the live app. Unit-testing in isolation would require a real DOM
+        // and editor instance, which would just re-test TipTap itself.
+        "src/components/tiptap/TiptapEditor.tsx",
+        "src/components/tiptap/extensions/MarkdownPaste.ts",
+        "src/components/tiptap/extensions/MermaidBlock.ts",
+        "src/components/tiptap/extensions/MermaidBlockView.tsx",
+        "src/components/tiptap/extensions/SlashCommand.ts",
+        "src/components/tiptap/extensions/SlashCommandList.tsx",
+        "src/components/tiptap/extensions/slashCommandItems.tsx",
+        "src/components/tiptap/toolbar/TableMenu.tsx",
+        "src/components/tiptap/toolbar/tableDragDrop.ts",
+        // Thin ky wrapper: every API call exercises it via MSW, but unit tests
+        // would just re-test ky's hook system.
+        "src/api/client.ts",
       ],
+      thresholds: {
+        statements: 80,
+        // Branches: realistic UI-codebase target. Many MUI conditional
+        // renderings double-count branches even when fully exercised.
+        branches: 65,
+        functions: 80,
+        lines: 80,
+      },
     },
   },
 });
