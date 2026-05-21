@@ -21,6 +21,7 @@ function encodePath(path: string): string {
 
 export interface ConfigResponse {
   review_root_name: string;
+  review_root: string;
 }
 
 export interface DirEntry {

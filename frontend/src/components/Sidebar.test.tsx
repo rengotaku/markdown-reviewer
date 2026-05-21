@@ -89,7 +89,7 @@ describe("Sidebar", () => {
 
   it("filter does not affect children of expanded dirs", async () => {
     const user = userEvent.setup();
-    renderWithProviders(<Sidebar onSelect={() => {}} />, "/?root=doc");
+    renderWithProviders(<Sidebar onSelect={() => {}} />, "/?filter=doc");
 
     await waitFor(() =>
       expect(screen.getByTestId("sidebar-dir-docs")).toBeInTheDocument()
@@ -104,15 +104,15 @@ describe("Sidebar", () => {
     expect(screen.getByTestId("sidebar-dir-docs/api")).toBeInTheDocument();
   });
 
-  it("?root=foo prefills the filter input on mount", () => {
-    renderWithProviders(<Sidebar onSelect={() => {}} />, "/?root=docs");
+  it("?filter=foo prefills the filter input on mount", () => {
+    renderWithProviders(<Sidebar onSelect={() => {}} />, "/?filter=docs");
     const input = screen.getByTestId("sidebar-filter") as HTMLInputElement;
     expect(input.value).toBe("docs");
   });
 
   it("clear button resets the filter", async () => {
     const user = userEvent.setup();
-    renderWithProviders(<Sidebar onSelect={() => {}} />, "/?root=docs");
+    renderWithProviders(<Sidebar onSelect={() => {}} />, "/?filter=docs");
     expect(
       (screen.getByTestId("sidebar-filter") as HTMLInputElement).value
     ).toBe("docs");

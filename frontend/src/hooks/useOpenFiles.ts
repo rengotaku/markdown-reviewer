@@ -7,6 +7,8 @@ export interface OpenFile {
   name: string;
   path: string;
   markdown: string;
+  /** The last persisted ("clean") markdown — what `markdown` reverts to on discard. */
+  savedMarkdown: string;
   isDirty: boolean;
   reloadToken: number;
   initialHash: string;
@@ -30,6 +32,8 @@ interface OpenFilesState {
   createUntitled: () => void;
   openServerFile: (incoming: IncomingFile) => void;
   markActiveSaved: () => void;
+  /** Revert the active file's markdown back to its last-saved state. */
+  discardActiveChanges: () => void;
 }
 
 const UNTITLED_BASE = "untitled";
@@ -58,6 +62,7 @@ function buildUntitledFile(existing: Set<string>): OpenFile {
     name,
     path: name,
     markdown: "",
+    savedMarkdown: "",
     isDirty: false,
     reloadToken: 0,
     initialHash: simpleHash(""),
@@ -104,6 +109,7 @@ export const useOpenFiles = create<OpenFilesState>()(
             name: item.name,
             path: item.path ?? item.name,
             markdown: item.markdown,
+            savedMarkdown: item.markdown,
             isDirty: false,
             reloadToken: 0,
             initialHash: simpleHash(item.markdown),
@@ -122,6 +128,7 @@ export const useOpenFiles = create<OpenFilesState>()(
             return {
               ...file,
               markdown,
+              savedMarkdown: markdown,
               isDirty: false,
               reloadToken: file.reloadToken + 1,
             };
@@ -138,7 +145,7 @@ export const useOpenFiles = create<OpenFilesState>()(
           if (!state.activeId) return state;
           const files = state.files.map((file) =>
             file.id === state.activeId
-              ? { ...file, markdown, isDirty: file.isDirty || file.markdown !== markdown }
+              ? { ...file, markdown, isDirty: markdown !== file.savedMarkdown }
               : file
           );
           return { files };
@@ -194,6 +201,7 @@ export const useOpenFiles = create<OpenFilesState>()(
             name: incoming.name,
             path,
             markdown: incoming.markdown,
+            savedMarkdown: incoming.markdown,
             isDirty: false,
             reloadToken: 0,
             initialHash: simpleHash(incoming.markdown),
@@ -207,7 +215,29 @@ export const useOpenFiles = create<OpenFilesState>()(
           return {
             files: state.files.map((file) =>
               file.id === state.activeId
-                ? { ...file, isDirty: false, initialHash: simpleHash(file.markdown) }
+                ? {
+                    ...file,
+                    savedMarkdown: file.markdown,
+                    isDirty: false,
+                    initialHash: simpleHash(file.markdown),
+                  }
+                : file
+            ),
+          };
+        }),
+
+      discardActiveChanges: () =>
+        set((state) => {
+          if (!state.activeId) return state;
+          return {
+            files: state.files.map((file) =>
+              file.id === state.activeId
+                ? {
+                    ...file,
+                    markdown: file.savedMarkdown,
+                    isDirty: false,
+                    reloadToken: file.reloadToken + 1,
+                  }
                 : file
             ),
           };
@@ -231,6 +261,9 @@ export const useOpenFiles = create<OpenFilesState>()(
         state.files = state.files.map((f) => ({
           ...(f.path ? f : { ...f, path: f.name }),
           initialHash: f.initialHash ?? simpleHash(f.markdown),
+          // Older persisted entries don't have savedMarkdown. Treat the
+          // last-persisted markdown as the saved baseline.
+          savedMarkdown: f.savedMarkdown ?? f.markdown,
         }));
         if (!state.activeId || !state.files.some((f) => f.id === state.activeId)) {
           state.activeId = state.files[0].id;
