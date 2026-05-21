@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import CircularProgress from "@mui/material/CircularProgress";
@@ -221,23 +221,23 @@ function TreeItem({
   onSelect,
   onContextMenu,
 }: TreeItemProps): ReactNode {
-  // Auto-expand if this dir is an ancestor of the active file path so
-  // tab-switching reveals the active file in the tree.
+  // Auto-expand when this dir is an ancestor of the active file path so
+  // tab-switching reveals the active file in the tree. Implemented as
+  // derived state to avoid setState-in-effect lint warnings; the dir
+  // stays effectively open while it shelters the active path.
   const isAncestorOfActive =
     entry.type === "dir" &&
     !!activePath &&
     activePath.startsWith(`${entry.path}/`);
-  const [expanded, setExpanded] = useState(isAncestorOfActive);
-  useEffect(() => {
-    if (isAncestorOfActive) setExpanded(true);
-  }, [isAncestorOfActive]);
+  const [userExpanded, setUserExpanded] = useState(false);
+  const expanded = userExpanded || isAncestorOfActive;
   const indent = depth * INDENT_PX + 8;
 
   if (entry.type === "dir") {
     return (
       <>
         <ListItemButton
-          onClick={() => setExpanded((v) => !v)}
+          onClick={() => setUserExpanded((v) => !v)}
           onContextMenu={(e) => onContextMenu(e, entry)}
           sx={{ pl: `${indent}px` }}
           data-testid={`sidebar-dir-${entry.path}`}
