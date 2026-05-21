@@ -100,7 +100,11 @@ export function TiptapEditor() {
     const state = useOpenFiles.getState();
     const file = state.files.find((f) => f.id === state.activeId);
     if (file) {
-      editor.commands.setContent(file.markdown);
+      // emitUpdate: false → don't fire onUpdate for the programmatic load.
+      // TipTap's Markdown roundtrip can produce a slightly normalized string
+      // (e.g. trailing newline tweaks) which would otherwise set isDirty=true
+      // immediately after opening a freshly-loaded file. See issue #20.
+      editor.commands.setContent(file.markdown, { emitUpdate: false });
     }
   }, [editor, activeId, activeReloadToken]);
 
