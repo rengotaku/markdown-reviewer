@@ -5,11 +5,13 @@ import Typography from "@mui/material/Typography";
 import IconButton from "@mui/material/IconButton";
 import Tooltip from "@mui/material/Tooltip";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
+import CommentsDisabledIcon from "@mui/icons-material/CommentsDisabled";
 import { collectComments, type CollectedComment } from "@/utils/collectComments";
 
 interface Props {
   editor: Editor | null;
   onDelete: (id: string) => void;
+  onClose?: () => void;
   activeId?: string | null;
 }
 
@@ -60,7 +62,7 @@ function useEditorComments(editor: Editor | null): CollectedComment[] {
   return useSyncExternalStore(subscribe, getSnapshot, () => EMPTY_SNAPSHOT.comments);
 }
 
-export function CommentSidePane({ editor, onDelete, activeId }: Props) {
+export function CommentSidePane({ editor, onDelete, onClose, activeId }: Props) {
   const comments = useEditorComments(editor);
 
   const flashMark = (id: string) => {
@@ -70,9 +72,12 @@ export function CommentSidePane({ editor, onDelete, activeId }: Props) {
     const nodes = root.querySelectorAll<HTMLElement>(
       `[data-comment-id="${CSS.escape(id)}"]`
     );
+    if (nodes.length === 0) return;
+    // Scroll the first occurrence into view, flash all of them.
+    nodes[0].scrollIntoView({ behavior: "smooth", block: "center" });
     nodes.forEach((el) => {
-      // Restart animation if already flashing.
       el.classList.remove("is-flash");
+      // Force reflow so re-adding the class restarts the animation.
       void el.offsetWidth;
       el.classList.add("is-flash");
     });
@@ -81,14 +86,9 @@ export function CommentSidePane({ editor, onDelete, activeId }: Props) {
     }, 1600);
   };
 
+  // Click in the side pane: just flash (no text selection / no focus jump).
+  // For multi-block comments every <span data-comment-id="..."> blinks.
   const handleJump = (c: CollectedComment) => {
-    if (!editor) return;
-    editor
-      .chain()
-      .focus()
-      .setTextSelection({ from: c.from, to: c.to })
-      .scrollIntoView()
-      .run();
     flashMark(c.id);
   };
 
@@ -104,7 +104,11 @@ export function CommentSidePane({ editor, onDelete, activeId }: Props) {
     >
       <Box
         sx={{
-          p: 1.5,
+          pl: 2,
+          pr: 0.5,
+          py: 1,
+          minHeight: 48,
+          boxSizing: "border-box",
           borderBottom: "1px solid",
           borderColor: "divider",
           display: "flex",
@@ -115,6 +119,18 @@ export function CommentSidePane({ editor, onDelete, activeId }: Props) {
         <Typography variant="subtitle2" sx={{ flexGrow: 1 }}>
           Comments ({comments.length})
         </Typography>
+        {onClose && (
+          <Tooltip title="コメントペインを閉じる">
+            <IconButton
+              size="small"
+              onClick={onClose}
+              aria-label="close comment pane"
+              data-testid="comment-pane-close"
+            >
+              <CommentsDisabledIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        )}
       </Box>
       <Box sx={{ flex: 1, overflow: "auto" }}>
         {comments.length === 0 ? (
