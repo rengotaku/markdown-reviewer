@@ -58,16 +58,21 @@ func (h *Handler) Health(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
-// Config exposes the basename of REVIEW_ROOT so the UI can display the
-// reviewed workspace's name in the sidebar header. Full path is intentionally
-// not exposed.
+// Config exposes the basename of REVIEW_ROOT for the sidebar header label,
+// plus the absolute path so the UI can build a clipboard-friendly full path
+// for "copy path" actions.
 func (h *Handler) Config(c *gin.Context) {
 	if h.resolver == nil {
-		c.JSON(http.StatusOK, gin.H{"review_root_name": ""})
+		c.JSON(http.StatusOK, gin.H{
+			"review_root_name": "",
+			"review_root":      "",
+		})
 		return
 	}
+	root := h.resolver.Root()
 	c.JSON(http.StatusOK, gin.H{
-		"review_root_name": filepath.Base(h.resolver.Root()),
+		"review_root_name": filepath.Base(root),
+		"review_root":      root,
 	})
 }
 

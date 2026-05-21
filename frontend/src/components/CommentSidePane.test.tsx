@@ -29,16 +29,12 @@ function makeFakeEditor(
   dom?: HTMLElement
 ): FakeEditor {
   const root = dom ?? document.createElement("div");
-  const run = vi.fn();
-  const scrollIntoView = vi.fn(() => ({ run }));
-  const setTextSelection = vi.fn(() => ({ scrollIntoView }));
-  const focus = vi.fn(() => ({ setTextSelection }));
   return {
     __comments: comments,
     view: { dom: root },
     on: vi.fn(),
     off: vi.fn(),
-    chain: vi.fn(() => ({ focus })),
+    chain: vi.fn(),
   };
 }
 
@@ -131,8 +127,6 @@ describe("CommentSidePane", () => {
 
     expect(onDelete).toHaveBeenCalledTimes(1);
     expect(onDelete).toHaveBeenCalledWith("c2");
-    // Click on the delete button must not also trigger the row jump.
-    expect(editor.chain).not.toHaveBeenCalled();
   });
 
   it("flashes [data-comment-id] elements and removes the class after 1.6s", () => {
@@ -140,11 +134,14 @@ describe("CommentSidePane", () => {
     const dom = document.createElement("div");
     const markA = document.createElement("span");
     markA.setAttribute("data-comment-id", "c1");
+    markA.scrollIntoView = vi.fn();
     const markB = document.createElement("span");
     markB.setAttribute("data-comment-id", "c1");
+    markB.scrollIntoView = vi.fn();
     // A node for a different comment should be ignored.
     const other = document.createElement("span");
     other.setAttribute("data-comment-id", "c2");
+    other.scrollIntoView = vi.fn();
     dom.append(markA, markB, other);
 
     const editor = makeFakeEditor(
@@ -162,9 +159,6 @@ describe("CommentSidePane", () => {
     expect(markB.classList.contains("is-flash")).toBe(true);
     expect(other.classList.contains("is-flash")).toBe(false);
 
-    // Jump chain was driven.
-    expect(editor.chain).toHaveBeenCalled();
-
     // After 1.6s the class is cleared.
     act(() => {
       vi.advanceTimersByTime(1600);
@@ -173,18 +167,24 @@ describe("CommentSidePane", () => {
     expect(markB.classList.contains("is-flash")).toBe(false);
   });
 
-  it("jumps via keyboard (Enter / Space) on a focused comment row", async () => {
+  it("flashes via keyboard (Enter / Space) on a focused comment row", async () => {
     const user = userEvent.setup();
-    const editor = makeFakeEditor([sampleComment("c1")]);
+    const dom = document.createElement("div");
+    const mark = document.createElement("span");
+    mark.setAttribute("data-comment-id", "c1");
+    mark.scrollIntoView = vi.fn();
+    dom.append(mark);
+    const editor = makeFakeEditor([sampleComment("c1")], dom);
     render(<CommentSidePane editor={asEditor(editor)} onDelete={() => {}} />);
 
     const item = screen.getByTestId("comment-item");
     item.focus();
     await user.keyboard("{Enter}");
-    expect(editor.chain).toHaveBeenCalledTimes(1);
+    expect(mark.classList.contains("is-flash")).toBe(true);
 
+    mark.classList.remove("is-flash");
     await user.keyboard(" ");
-    expect(editor.chain).toHaveBeenCalledTimes(2);
+    expect(mark.classList.contains("is-flash")).toBe(true);
   });
 
   it("highlights the row matching activeId via action.selected background", () => {

@@ -42,6 +42,14 @@ export function TiptapEditor() {
   });
   const updateActiveMarkdown = useOpenFiles((s) => s.updateActiveMarkdown);
   const lastLoadedKeyRef = useRef<string | null>(null);
+  /**
+   * Timestamp (ms) until which onUpdate should be ignored. setContent's
+   * `emitUpdate: false` only suppresses the direct dispatch; extensions like
+   * autolink fire follow-up transactions via appendTransaction that re-emit
+   * onUpdate. Without this settle window, the post-load extension passes mark
+   * the freshly-opened file dirty even though the user didn't edit. Issue #20.
+   */
+  const settleUntilRef = useRef(0);
 
   const editor = useEditor({
     extensions: [
@@ -69,6 +77,9 @@ export function TiptapEditor() {
     editable: true,
     onUpdate: ({ editor: ed }) => {
       if (!useOpenFiles.getState().activeId) return;
+      // Drop updates fired by post-setContent extension transactions
+      // (e.g. autolink) so an untouched file isn't flagged dirty.
+      if (Date.now() < settleUntilRef.current) return;
       updateActiveMarkdown(getEditorMarkdown(ed));
     },
   });
@@ -105,6 +116,9 @@ export function TiptapEditor() {
       // (e.g. trailing newline tweaks) which would otherwise set isDirty=true
       // immediately after opening a freshly-loaded file. See issue #20.
       editor.commands.setContent(file.markdown, { emitUpdate: false });
+      // Open a settle window so post-setContent extension transactions
+      // (autolink, etc.) don't slip past the suppression above.
+      settleUntilRef.current = Date.now() + 250;
     }
   }, [editor, activeId, activeReloadToken]);
 

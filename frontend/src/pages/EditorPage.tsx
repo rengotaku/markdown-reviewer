@@ -4,6 +4,9 @@ import Button from "@mui/material/Button";
 import IconButton from "@mui/material/IconButton";
 import Menu from "@mui/material/Menu";
 import MenuItem from "@mui/material/MenuItem";
+import Tabs from "@mui/material/Tabs";
+import Tab from "@mui/material/Tab";
+import CloseIcon from "@mui/icons-material/Close";
 import ListItemIcon from "@mui/material/ListItemIcon";
 import ListItemText from "@mui/material/ListItemText";
 import Tooltip from "@mui/material/Tooltip";
@@ -14,7 +17,8 @@ import MenuOpenIcon from "@mui/icons-material/MenuOpen";
 import MenuIcon from "@mui/icons-material/Menu";
 import AddCommentIcon from "@mui/icons-material/AddComment";
 import CommentIcon from "@mui/icons-material/Comment";
-import CommentsDisabledIcon from "@mui/icons-material/CommentsDisabled";
+import FormatAlignCenterIcon from "@mui/icons-material/FormatAlignCenter";
+import UnfoldMoreIcon from "@mui/icons-material/UnfoldMore";
 import { TiptapEditor } from "@/components/tiptap/TiptapEditor";
 import {
   Sidebar,
@@ -29,6 +33,7 @@ import { useConfirm } from "@/hooks/useConfirm";
 import { useToast } from "@/hooks/useToast";
 import { useUIStore } from "@/hooks/useUIStore";
 import { useEditorInstance } from "@/hooks/useEditorInstance";
+import { useEditorPrefs } from "@/hooks/useEditorPrefs";
 import { useCommentAuthor } from "@/hooks/useCommentAuthor";
 import { useConfig } from "@/hooks/useConfig";
 import { dirQueryKey } from "@/hooks/useDir";
@@ -64,16 +69,21 @@ export function EditorPage() {
   const isCommentPaneOpen = useUIStore((s) => s.isCommentPaneOpen);
   const toggleCommentPane = useUIStore((s) => s.toggleCommentPane);
 
+  const files = useOpenFiles((s) => s.files);
   const activeFile = useOpenFiles((s) => s.files.find((f) => f.id === s.activeId));
   const openServerFile = useOpenFiles((s) => s.openServerFile);
   const markActiveSaved = useOpenFiles((s) => s.markActiveSaved);
+  const discardActiveChanges = useOpenFiles((s) => s.discardActiveChanges);
   const setActive = useOpenFiles((s) => s.setActive);
+  const closeFile = useOpenFiles((s) => s.closeFile);
 
   const readFile = useReadFile();
   const writeFile = useWriteFile();
   const confirm = useConfirm((s) => s.confirm);
   const showToast = useToast((s) => s.show);
   const editor = useEditorInstance((s) => s.editor);
+  const centered = useEditorPrefs((s) => s.centered);
+  const toggleCentered = useEditorPrefs((s) => s.toggleCentered);
   const { author } = useCommentAuthor();
   const { data: config } = useConfig();
   const queryClient = useQueryClient();
@@ -152,6 +162,10 @@ export function EditorPage() {
         confirmLabel: "破棄して開く",
       });
       if (!ok) return;
+      // Roll the active file back to its saved baseline so its in-memory
+      // edits aren't persisted to localStorage and don't reappear when the
+      // user navigates back to it.
+      discardActiveChanges();
     }
 
     if (target) {
@@ -279,6 +293,34 @@ export function EditorPage() {
 
   return (
     <Box sx={{ display: "flex", height: "100vh", overflow: "hidden" }}>
+      {!isSidebarOpen && (
+        <Box
+          component="aside"
+          sx={{
+            width: 40,
+            flexShrink: 0,
+            borderRight: "1px solid",
+            borderColor: "divider",
+            bgcolor: "background.paper",
+            display: "flex",
+            alignItems: "flex-start",
+            justifyContent: "flex-start",
+            pl: 0.5,
+            pt: 0.75,
+          }}
+        >
+          <Tooltip title="サイドバーを開く" placement="right">
+            <IconButton
+              size="small"
+              onClick={toggleSidebar}
+              aria-label="open sidebar"
+              data-testid="sidebar-rail-open"
+            >
+              <MenuIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        </Box>
+      )}
       {isSidebarOpen && (
         <Box
           component="aside"
@@ -294,7 +336,11 @@ export function EditorPage() {
         >
           <Box
             sx={{
-              p: 1.5,
+              pl: 0.5,
+              pr: 1.5,
+              py: 1,
+              minHeight: 48,
+              boxSizing: "border-box",
               borderBottom: "1px solid",
               borderColor: "divider",
               display: "flex",
@@ -302,6 +348,11 @@ export function EditorPage() {
               gap: 1,
             }}
           >
+            <Tooltip title="サイドバーを閉じる">
+              <IconButton size="small" onClick={toggleSidebar} aria-label="close sidebar">
+                <MenuOpenIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
             <Tooltip title={reviewRootName} placement="bottom-start">
               <Typography
                 variant="subtitle2"
@@ -317,11 +368,6 @@ export function EditorPage() {
                 {reviewRootName}
               </Typography>
             </Tooltip>
-            <Tooltip title="サイドバーを閉じる">
-              <IconButton size="small" onClick={toggleSidebar} aria-label="close sidebar">
-                <MenuOpenIcon fontSize="small" />
-              </IconButton>
-            </Tooltip>
           </Box>
           <Sidebar activePath={activeFile?.path} onSelect={handleSelect} />
         </Box>
@@ -336,17 +382,24 @@ export function EditorPage() {
             gap: 1,
             px: 2,
             py: 1,
+            minHeight: 48,
+            boxSizing: "border-box",
             borderBottom: "1px solid",
             borderColor: "divider",
           }}
         >
-          {!isSidebarOpen && (
-            <Tooltip title="サイドバーを開く">
-              <IconButton size="small" onClick={toggleSidebar} aria-label="open sidebar">
-                <MenuIcon fontSize="small" />
-              </IconButton>
-            </Tooltip>
-          )}
+          <Box
+            component="img"
+            src="/logo.png"
+            alt="markdown-reviewer"
+            sx={{
+              width: 24,
+              height: 24,
+              borderRadius: 0.5,
+              flexShrink: 0,
+            }}
+            data-testid="editor-header-logo"
+          />
           <Typography
             variant="body2"
             sx={{
@@ -374,17 +427,17 @@ export function EditorPage() {
               </Button>
             </span>
           </Tooltip>
-          <Tooltip title={isCommentPaneOpen ? "コメントペインを閉じる" : "コメントペインを開く"}>
+          <Tooltip title={centered ? "全幅表示に切替" : "中央寄せに切替"}>
             <IconButton
               size="small"
-              onClick={toggleCommentPane}
-              aria-label="toggle comments"
-              data-testid="editor-toggle-comments"
+              onClick={toggleCentered}
+              aria-label="toggle width"
+              data-testid="editor-toggle-width"
             >
-              {isCommentPaneOpen ? (
-                <CommentsDisabledIcon fontSize="small" />
+              {centered ? (
+                <UnfoldMoreIcon fontSize="small" sx={{ transform: "rotate(90deg)" }} />
               ) : (
-                <CommentIcon fontSize="small" />
+                <FormatAlignCenterIcon fontSize="small" />
               )}
             </IconButton>
           </Tooltip>
@@ -414,12 +467,88 @@ export function EditorPage() {
           </Tooltip>
         </Box>
 
+        {files.length > 1 && (
+          <Tabs
+            value={activeFile?.id ?? false}
+            onChange={(_, v) => setActive(v as string)}
+            variant="scrollable"
+            scrollButtons={false}
+            sx={{
+              minHeight: 36,
+              borderBottom: 1,
+              borderColor: "divider",
+              flexShrink: 0,
+              "& .MuiTab-root": {
+                minHeight: 36,
+                textTransform: "none",
+                py: 0.5,
+                px: 1,
+                minWidth: 0,
+                width: 180,
+                maxWidth: 180,
+                flex: "0 0 180px",
+              },
+            }}
+            data-testid="editor-tabs"
+          >
+            {files.map((f) => (
+              <Tab
+                key={f.id}
+                value={f.id}
+                data-testid={`editor-tab-${f.path}`}
+                label={
+                  <Box
+                    sx={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 0.5,
+                      width: "100%",
+                      minWidth: 0,
+                    }}
+                  >
+                    <Box
+                      component="span"
+                      sx={{
+                        flex: 1,
+                        minWidth: 0,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                        textAlign: "left",
+                      }}
+                    >
+                      {f.name}
+                      {f.isDirty ? " •" : ""}
+                    </Box>
+                    <CloseIcon
+                      fontSize="inherit"
+                      role="button"
+                      aria-label={`close ${f.name}`}
+                      data-testid={`editor-tab-close-${f.path}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        closeFile(f.id);
+                      }}
+                      sx={{
+                        flexShrink: 0,
+                        ml: 0.5,
+                        opacity: 0.55,
+                        "&:hover": { opacity: 1 },
+                      }}
+                    />
+                  </Box>
+                }
+              />
+            ))}
+          </Tabs>
+        )}
+
         <Box sx={{ flex: 1, minHeight: 0 }}>
           <TiptapEditor />
         </Box>
       </Box>
 
-      {isCommentPaneOpen && (
+      {isCommentPaneOpen ? (
         <Box
           component="aside"
           sx={{
@@ -432,7 +561,38 @@ export function EditorPage() {
             flexDirection: "column",
           }}
         >
-          <CommentSidePane editor={editor} onDelete={handleDeleteComment} />
+          <CommentSidePane
+            editor={editor}
+            onDelete={handleDeleteComment}
+            onClose={toggleCommentPane}
+          />
+        </Box>
+      ) : (
+        <Box
+          component="aside"
+          sx={{
+            width: 40,
+            flexShrink: 0,
+            borderLeft: "1px solid",
+            borderColor: "divider",
+            bgcolor: "background.paper",
+            display: "flex",
+            alignItems: "flex-start",
+            justifyContent: "flex-end",
+            pr: 0.5,
+            pt: 0.75,
+          }}
+        >
+          <Tooltip title="コメントペインを開く" placement="left">
+            <IconButton
+              size="small"
+              onClick={toggleCommentPane}
+              aria-label="open comment pane"
+              data-testid="editor-toggle-comments"
+            >
+              <CommentIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
         </Box>
       )}
 
