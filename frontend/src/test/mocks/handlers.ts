@@ -95,7 +95,10 @@ export const handlers = [
   }),
 
   http.get(`${API_BASE}/api/config`, () => {
-    return HttpResponse.json({ review_root_name: "mock-root" });
+    return HttpResponse.json({
+      review_root_name: "mock-root",
+      review_root: "/tmp/mock-root",
+    });
   }),
 
   http.get(`${API_BASE}/api/dirs`, ({ request }) => {

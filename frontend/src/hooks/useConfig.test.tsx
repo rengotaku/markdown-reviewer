@@ -24,6 +24,9 @@ describe("useConfig", () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
-    expect(result.current.data).toEqual({ review_root_name: "mock-root" });
+    expect(result.current.data).toEqual({
+      review_root_name: "mock-root",
+      review_root: "/tmp/mock-root",
+    });
   });
 });

@@ -205,7 +205,7 @@ describe("EditorPage", () => {
     );
   });
 
-  it("comments pane can be toggled open and closed", async () => {
+  it("comments pane can be toggled (close inside, open from editor header)", async () => {
     const user = userEvent.setup();
     renderPage();
 
@@ -213,12 +213,12 @@ describe("EditorPage", () => {
       expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
     );
 
-    // The pane defaults to open in useUIStore.
+    // Pane defaults to open; close button is rendered inside it.
     expect(screen.getByTestId("comment-side-pane")).toBeInTheDocument();
-
-    await user.click(screen.getByTestId("editor-toggle-comments"));
+    await user.click(screen.getByTestId("comment-pane-close"));
     expect(screen.queryByTestId("comment-side-pane")).not.toBeInTheDocument();
 
+    // Closed → "open" button appears in the editor header.
     await user.click(screen.getByTestId("editor-toggle-comments"));
     expect(screen.getByTestId("comment-side-pane")).toBeInTheDocument();
   });

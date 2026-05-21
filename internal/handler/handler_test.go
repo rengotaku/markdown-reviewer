@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -203,6 +204,7 @@ func TestConfig_NoResolver(t *testing.T) {
 	var resp map[string]string
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
 	assert.Equal(t, "", resp["review_root_name"])
+	assert.Equal(t, "", resp["review_root"])
 }
 
 func TestConfig_WithResolver(t *testing.T) {
@@ -219,6 +221,8 @@ func TestConfig_WithResolver(t *testing.T) {
 	// t.TempDir()) — we just assert it lines up with filepath.Base(root).
 	assert.Equal(t, filepath.Base(root), resp["review_root_name"])
 	assert.NotEmpty(t, resp["review_root_name"])
+	assert.Equal(t, root, resp["review_root"])
+	assert.True(t, strings.HasPrefix(resp["review_root"], "/"))
 }
 
 func TestHandler_StaticFallback(t *testing.T) {

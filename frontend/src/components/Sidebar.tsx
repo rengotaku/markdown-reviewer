@@ -8,6 +8,8 @@ import List from "@mui/material/List";
 import ListItemButton from "@mui/material/ListItemButton";
 import ListItemIcon from "@mui/material/ListItemIcon";
 import ListItemText from "@mui/material/ListItemText";
+import Menu from "@mui/material/Menu";
+import MenuItem from "@mui/material/MenuItem";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
 import ChevronRight from "@mui/icons-material/ChevronRight";
@@ -17,6 +19,8 @@ import FolderOpen from "@mui/icons-material/FolderOpen";
 import InsertDriveFile from "@mui/icons-material/InsertDriveFile";
 import { useSearchParams } from "react-router-dom";
 import { useDir } from "@/hooks/useDir";
+import { useConfig } from "@/hooks/useConfig";
+import { useToast } from "@/hooks/useToast";
 import type { DirEntryApi } from "@/api";
 
 interface SidebarProps {
@@ -25,18 +29,56 @@ interface SidebarProps {
 }
 
 const INDENT_PX = 12;
-const ROOT_PARAM = "root";
+const FILTER_PARAM = "filter";
+
+interface EntryContextMenuState {
+  x: number;
+  y: number;
+  entry: DirEntryApi;
+}
 
 export function Sidebar({ activePath, onSelect }: SidebarProps) {
   const [searchParams, setSearchParams] = useSearchParams();
-  const filter = searchParams.get(ROOT_PARAM) ?? "";
+  const filter = searchParams.get(FILTER_PARAM) ?? "";
+  const [contextMenu, setContextMenu] = useState<EntryContextMenuState | null>(
+    null
+  );
+  const showToast = useToast((s) => s.show);
+  const { data: config } = useConfig();
+  const reviewRoot = config?.review_root ?? "";
+
+  const buildFullPath = (path: string): string => {
+    if (!reviewRoot) return path;
+    const root = reviewRoot.replace(/\/+$/, "");
+    return `${root}/${path}`;
+  };
+
+  const openContextMenu = (e: React.MouseEvent, entry: DirEntryApi) => {
+    e.preventDefault();
+    setContextMenu({ x: e.clientX, y: e.clientY, entry });
+  };
+
+  const closeContextMenu = () => setContextMenu(null);
+
+  const copyToClipboard = async (text: string, label: string) => {
+    closeContextMenu();
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast(`${label}をコピーしました: ${text}`, "success");
+    } catch (err) {
+      showToast(
+        `クリップボードへのコピーに失敗しました: ${(err as Error).message ?? "unknown"}`,
+        "error"
+      );
+    }
+  };
 
   const updateFilter = (value: string) => {
     setSearchParams(
       (prev) => {
         const next = new URLSearchParams(prev);
-        if (value) next.set(ROOT_PARAM, value);
-        else next.delete(ROOT_PARAM);
+        if (value) next.set(FILTER_PARAM, value);
+        else next.delete(FILTER_PARAM);
         return next;
       },
       { replace: true }
@@ -119,6 +161,7 @@ export function Sidebar({ activePath, onSelect }: SidebarProps) {
                   depth={0}
                   activePath={activePath}
                   onSelect={onSelect}
+                  onContextMenu={openContextMenu}
                 />
               ))}
             </List>
@@ -132,6 +175,33 @@ export function Sidebar({ activePath, onSelect }: SidebarProps) {
           </>
         )}
       </Box>
+
+      <Menu
+        open={!!contextMenu}
+        onClose={closeContextMenu}
+        anchorReference="anchorPosition"
+        anchorPosition={
+          contextMenu ? { top: contextMenu.y, left: contextMenu.x } : undefined
+        }
+      >
+        <MenuItem
+          onClick={() =>
+            contextMenu && copyToClipboard(contextMenu.entry.name, "名前")
+          }
+          data-testid="sidebar-ctx-copy-name"
+        >
+          名前をクリップボードにコピー
+        </MenuItem>
+        <MenuItem
+          onClick={() =>
+            contextMenu &&
+            copyToClipboard(buildFullPath(contextMenu.entry.path), "フルパス")
+          }
+          data-testid="sidebar-ctx-copy-path"
+        >
+          フルパスをコピー
+        </MenuItem>
+      </Menu>
     </Box>
   );
 }
@@ -141,6 +211,7 @@ interface TreeItemProps {
   depth: number;
   activePath?: string;
   onSelect: (path: string) => void;
+  onContextMenu: (e: React.MouseEvent, entry: DirEntryApi) => void;
 }
 
 function TreeItem({
@@ -148,15 +219,26 @@ function TreeItem({
   depth,
   activePath,
   onSelect,
+  onContextMenu,
 }: TreeItemProps): ReactNode {
-  const [expanded, setExpanded] = useState(false);
+  // Auto-expand when this dir is an ancestor of the active file path so
+  // tab-switching reveals the active file in the tree. Implemented as
+  // derived state to avoid setState-in-effect lint warnings; the dir
+  // stays effectively open while it shelters the active path.
+  const isAncestorOfActive =
+    entry.type === "dir" &&
+    !!activePath &&
+    activePath.startsWith(`${entry.path}/`);
+  const [userExpanded, setUserExpanded] = useState(false);
+  const expanded = userExpanded || isAncestorOfActive;
   const indent = depth * INDENT_PX + 8;
 
   if (entry.type === "dir") {
     return (
       <>
         <ListItemButton
-          onClick={() => setExpanded((v) => !v)}
+          onClick={() => setUserExpanded((v) => !v)}
+          onContextMenu={(e) => onContextMenu(e, entry)}
           sx={{ pl: `${indent}px` }}
           data-testid={`sidebar-dir-${entry.path}`}
         >
@@ -181,6 +263,7 @@ function TreeItem({
             depth={depth + 1}
             activePath={activePath}
             onSelect={onSelect}
+            onContextMenu={onContextMenu}
           />
         )}
       </>
@@ -191,6 +274,7 @@ function TreeItem({
   return (
     <ListItemButton
       onClick={() => onSelect(entry.path)}
+      onContextMenu={(e) => onContextMenu(e, entry)}
       selected={selected}
       sx={{ pl: `${indent + 24}px` }}
       data-testid={`sidebar-file-${entry.path}`}
@@ -211,9 +295,16 @@ interface DirChildrenProps {
   depth: number;
   activePath?: string;
   onSelect: (path: string) => void;
+  onContextMenu: (e: React.MouseEvent, entry: DirEntryApi) => void;
 }
 
-function DirChildren({ path, depth, activePath, onSelect }: DirChildrenProps) {
+function DirChildren({
+  path,
+  depth,
+  activePath,
+  onSelect,
+  onContextMenu,
+}: DirChildrenProps) {
   const { data, isLoading, isError, error } = useDir(path);
   const indent = depth * INDENT_PX + 8;
 
@@ -252,6 +343,7 @@ function DirChildren({ path, depth, activePath, onSelect }: DirChildrenProps) {
           depth={depth}
           activePath={activePath}
           onSelect={onSelect}
+          onContextMenu={onContextMenu}
         />
       ))}
     </>
