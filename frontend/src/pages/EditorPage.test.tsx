@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MemoryRouter } from "react-router-dom";
 import { EditorPage } from "./EditorPage";
 import { useOpenFiles } from "@/hooks/useOpenFiles";
 import { useToast } from "@/hooks/useToast";
@@ -11,13 +12,15 @@ vi.mock("@/components/tiptap/TiptapEditor", () => ({
   TiptapEditor: () => <div data-testid="tiptap-editor" />,
 }));
 
-function renderPage() {
+function renderPage(initialPath = "/") {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   return render(
     <QueryClientProvider client={client}>
-      <EditorPage />
+      <MemoryRouter initialEntries={[initialPath]}>
+        <EditorPage />
+      </MemoryRouter>
     </QueryClientProvider>
   );
 }
