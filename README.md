@@ -80,6 +80,25 @@ make stop    # :8080 と :5174 のプロセスを停止
 make status  # 起動状況を表示
 ```
 
+### macOS で常駐 (launchd)
+
+ログイン時に自動起動させたい場合、`make build` 後に launchd エージェントとして登録する。
+
+```bash
+make build
+./scripts/install-launchd.sh
+```
+
+デフォルトは `PORT=15174`, `REVIEW_ROOT=$HOME/ot/works`。上書き例:
+
+```bash
+PORT=15174 REVIEW_ROOT=$HOME/notes ./scripts/install-launchd.sh
+```
+
+- ラベル: `com.user.markdown-reviewer`
+- ログ: `~/Library/Logs/markdown-reviewer/markdown-reviewer.{out,err}.log`
+- アンロード: `launchctl bootout gui/$UID/com.user.markdown-reviewer`
+
 ## コメントの付け方
 
 1. ブラウザで `http://localhost:5174`（dev）または `http://localhost:8080`（binary）を開く
