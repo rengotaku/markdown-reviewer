@@ -67,4 +67,19 @@ describe("collectComments", () => {
     const result = collectComments(editor);
     expect(result.map((c) => c.id)).toEqual(["c1", "c2"]);
   });
+
+  it("merges same-id marks split across block boundaries into one entry", () => {
+    // ProseMirror cannot keep a Mark across blocks; a multi-paragraph selection
+    // becomes one Mark per block sharing the same id. collectComments must
+    // group those into a single CollectedComment. (Issue #19)
+    editor = createEditor(
+      'Para A <!-- @comment id="multi" author="k" date="2026-05-20" target="first" body="x" -->first<!-- /@comment --> tail.\n\n<!-- @comment id="multi" author="k" date="2026-05-20" target="second" body="x" -->second<!-- /@comment --> Para B.'
+    );
+    const result = collectComments(editor);
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe("multi");
+    // target combines both wrapped text runs.
+    expect(result[0].target).toContain("first");
+    expect(result[0].target).toContain("second");
+  });
 });
