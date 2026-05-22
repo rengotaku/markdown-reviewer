@@ -21,6 +21,7 @@ import { useSearchParams } from "react-router-dom";
 import { useDir } from "@/hooks/useDir";
 import { useConfig } from "@/hooks/useConfig";
 import { useToast } from "@/hooks/useToast";
+import { useUIStore } from "@/hooks/useUIStore";
 import type { DirEntryApi } from "@/api";
 
 interface SidebarProps {
@@ -44,6 +45,7 @@ export function Sidebar({ activePath, onSelect }: SidebarProps) {
     null
   );
   const showToast = useToast((s) => s.show);
+  const selectedDirPath = useUIStore((s) => s.selectedDirPath);
   const { data: config } = useConfig();
   const reviewRoot = config?.review_root ?? "";
 
@@ -160,6 +162,7 @@ export function Sidebar({ activePath, onSelect }: SidebarProps) {
                   entry={entry}
                   depth={0}
                   activePath={activePath}
+                  selectedDirPath={selectedDirPath}
                   onSelect={onSelect}
                   onContextMenu={openContextMenu}
                 />
@@ -210,6 +213,7 @@ interface TreeItemProps {
   entry: DirEntryApi;
   depth: number;
   activePath?: string;
+  selectedDirPath?: string | null;
   onSelect: (path: string) => void;
   onContextMenu: (e: React.MouseEvent, entry: DirEntryApi) => void;
 }
@@ -218,19 +222,28 @@ function TreeItem({
   entry,
   depth,
   activePath,
+  selectedDirPath,
   onSelect,
   onContextMenu,
 }: TreeItemProps): ReactNode {
-  // Auto-expand when this dir is an ancestor of the active file path so
-  // tab-switching reveals the active file in the tree. Implemented as
-  // derived state to avoid setState-in-effect lint warnings; the dir
-  // stays effectively open while it shelters the active path.
+  // Auto-expand when this dir is an ancestor of the active file path or the
+  // selected dir path so tab-switching / toast-link clicks reveal the target
+  // in the tree. Derived state avoids setState-in-effect lint warnings.
   const isAncestorOfActive =
     entry.type === "dir" &&
     !!activePath &&
     activePath.startsWith(`${entry.path}/`);
+  const isAncestorOfSelectedDir =
+    entry.type === "dir" &&
+    !!selectedDirPath &&
+    selectedDirPath.startsWith(`${entry.path}/`);
+  // A directory that *is* the selected one should also auto-expand so the
+  // user sees its children after clicking the popup link.
+  const isSelectedSelf =
+    entry.type === "dir" && !!selectedDirPath && selectedDirPath === entry.path;
   const [userExpanded, setUserExpanded] = useState(false);
-  const expanded = userExpanded || isAncestorOfActive;
+  const expanded =
+    userExpanded || isAncestorOfActive || isAncestorOfSelectedDir || isSelectedSelf;
   const indent = depth * INDENT_PX + 8;
 
   if (entry.type === "dir") {
@@ -239,6 +252,7 @@ function TreeItem({
         <ListItemButton
           onClick={() => setUserExpanded((v) => !v)}
           onContextMenu={(e) => onContextMenu(e, entry)}
+          selected={isSelectedSelf}
           sx={{ pl: `${indent}px` }}
           data-testid={`sidebar-dir-${entry.path}`}
         >
@@ -262,6 +276,7 @@ function TreeItem({
             path={entry.path}
             depth={depth + 1}
             activePath={activePath}
+            selectedDirPath={selectedDirPath}
             onSelect={onSelect}
             onContextMenu={onContextMenu}
           />
@@ -294,6 +309,7 @@ interface DirChildrenProps {
   path: string;
   depth: number;
   activePath?: string;
+  selectedDirPath?: string | null;
   onSelect: (path: string) => void;
   onContextMenu: (e: React.MouseEvent, entry: DirEntryApi) => void;
 }
@@ -302,6 +318,7 @@ function DirChildren({
   path,
   depth,
   activePath,
+  selectedDirPath,
   onSelect,
   onContextMenu,
 }: DirChildrenProps) {
@@ -342,6 +359,7 @@ function DirChildren({
           entry={child}
           depth={depth}
           activePath={activePath}
+          selectedDirPath={selectedDirPath}
           onSelect={onSelect}
           onContextMenu={onContextMenu}
         />

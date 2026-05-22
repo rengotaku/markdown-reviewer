@@ -14,11 +14,15 @@ export interface FileReadResponse {
   path: string;
   content: string;
   modified: string;
+  /** RFC3339 birth time when the OS records one (darwin); "" otherwise. */
+  created: string;
 }
 
 export interface FileStatResponse {
   path: string;
   modified: string;
+  /** RFC3339 birth time when the OS records one (darwin); "" otherwise. */
+  created: string;
 }
 
 function encodePath(path: string): string {
