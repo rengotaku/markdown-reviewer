@@ -31,6 +31,7 @@ import {
 import { useOpenFiles } from "@/hooks/useOpenFiles";
 import { useReadFile, useWriteFile } from "@/hooks/useFileContent";
 import { useFileWatcher } from "@/hooks/useFileWatcher";
+import { useDirChangeWatcher } from "@/hooks/useDirChangeWatcher";
 import { useConfirm } from "@/hooks/useConfirm";
 import { useToast } from "@/hooks/useToast";
 import { useUIStore } from "@/hooks/useUIStore";
@@ -65,11 +66,27 @@ function buildTargetSnippet(raw: string): string {
   return `${cleaned.slice(0, TARGET_SNIPPET_LENGTH)}…`;
 }
 
+// Render an RFC3339 timestamp as local-time "YYYY/MM/DD HH:mm" for the
+// header. Empty input → empty string so the caller can elide the label.
+function formatLocalTimestamp(iso: string): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  return `${y}/${m}/${day} ${hh}:${mm}`;
+}
+
 export function EditorPage() {
   const isSidebarOpen = useUIStore((s) => s.isSidebarOpen);
   const toggleSidebar = useUIStore((s) => s.toggleSidebar);
   const isCommentPaneOpen = useUIStore((s) => s.isCommentPaneOpen);
   const toggleCommentPane = useUIStore((s) => s.toggleCommentPane);
+  const setSelectedDirPath = useUIStore((s) => s.setSelectedDirPath);
+  const setSidebarOpen = useUIStore((s) => s.setSidebarOpen);
 
   const files = useOpenFiles((s) => s.files);
   const activeFile = useOpenFiles((s) => s.files.find((f) => f.id === s.activeId));
@@ -96,6 +113,18 @@ export function EditorPage() {
   const handleRefreshTree = () => {
     void queryClient.invalidateQueries({ queryKey: ["dir"] });
   };
+
+  useDirChangeWatcher({
+    onOpenFile: (path) => {
+      void handleSelect(path);
+    },
+    onSelectDir: (path) => {
+      // Highlight + expand the directory in the tree and make sure the
+      // sidebar is visible so the user can actually see the result.
+      setSidebarOpen(true);
+      setSelectedDirPath(path);
+    },
+  });
 
   const [commentDialog, setCommentDialog] = useState<{
     open: boolean;
@@ -188,6 +217,7 @@ export function EditorPage() {
         path: res.path,
         markdown: res.content,
         modified: res.modified,
+        created: res.created,
       });
     } catch (err) {
       showToast(
@@ -204,7 +234,7 @@ export function EditorPage() {
         path: activeFile.path,
         content: activeFile.markdown,
       });
-      markActiveSaved(res.modified);
+      markActiveSaved(res.modified, res.created);
       showToast(`「${activeFile.name}」を保存しました`, "success");
     } catch (err) {
       showToast(
@@ -232,6 +262,7 @@ export function EditorPage() {
         path: res.path,
         markdown: res.content,
         modified: res.modified,
+        created: res.created,
       });
       showToast(`「${basename(res.path)}」として保存しました`, "success");
     } catch (err) {
@@ -363,16 +394,6 @@ export function EditorPage() {
                 <MenuOpenIcon fontSize="small" />
               </IconButton>
             </Tooltip>
-            <Tooltip title="ファイルツリーを再読み込み">
-              <IconButton
-                size="small"
-                onClick={handleRefreshTree}
-                aria-label="refresh file tree"
-                data-testid="sidebar-refresh"
-              >
-                <RefreshIcon fontSize="small" />
-              </IconButton>
-            </Tooltip>
             <Tooltip title={reviewRootName} placement="bottom-start">
               <Typography
                 variant="subtitle2"
@@ -387,6 +408,16 @@ export function EditorPage() {
               >
                 {reviewRootName}
               </Typography>
+            </Tooltip>
+            <Tooltip title="ファイルツリーを再読み込み">
+              <IconButton
+                size="small"
+                onClick={handleRefreshTree}
+                aria-label="refresh file tree"
+                data-testid="sidebar-refresh"
+              >
+                <RefreshIcon fontSize="small" />
+              </IconButton>
             </Tooltip>
           </Box>
           <Sidebar activePath={activeFile?.path} onSelect={handleSelect} />
@@ -420,19 +451,50 @@ export function EditorPage() {
             }}
             data-testid="editor-header-logo"
           />
-          <Typography
-            variant="body2"
+          <Box
             sx={{
               flexGrow: 1,
+              minWidth: 0,
+              display: "flex",
+              alignItems: "baseline",
+              gap: 1.5,
               overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
             }}
-            data-testid="editor-active-path"
           >
-            {activeFile ? activeFile.path : "ファイルが選択されていません"}
-            {activeFile?.isDirty && " •"}
-          </Typography>
+            <Typography
+              variant="body2"
+              sx={{
+                flexGrow: 1,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                minWidth: 0,
+              }}
+              data-testid="editor-active-path"
+            >
+              {activeFile ? activeFile.path : "ファイルが選択されていません"}
+              {activeFile?.isDirty && " •"}
+            </Typography>
+            {activeFile && (activeFile.serverCreated || activeFile.serverModified) && (
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{
+                  flexShrink: 0,
+                  whiteSpace: "nowrap",
+                }}
+                data-testid="editor-active-timestamps"
+              >
+                {activeFile.serverCreated && (
+                  <>作成: {formatLocalTimestamp(activeFile.serverCreated)}</>
+                )}
+                {activeFile.serverCreated && activeFile.serverModified && " · "}
+                {activeFile.serverModified && (
+                  <>更新: {formatLocalTimestamp(activeFile.serverModified)}</>
+                )}
+              </Typography>
+            )}
+          </Box>
           <Tooltip title="選択範囲にコメントを追加">
             <span>
               <Button

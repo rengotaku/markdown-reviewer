@@ -145,6 +145,7 @@ export const handlers = [
       path,
       content: `# ${path}\n\nmock content`,
       modified: "2026-05-20T00:00:00Z",
+      created: "2026-05-19T00:00:00Z",
     });
   }),
 
@@ -156,12 +157,17 @@ export const handlers = [
       path,
       content: body.content,
       modified: new Date().toISOString(),
+      created: "2026-05-19T00:00:00Z",
     });
   }),
 
   http.get(`${API_BASE}/api/stat/*`, ({ request }) => {
     const url = new URL(request.url);
     const path = url.pathname.replace(/^\/api\/stat\//, "");
-    return HttpResponse.json({ path, modified: "2026-05-20T00:00:00Z" });
+    return HttpResponse.json({
+      path,
+      modified: "2026-05-20T00:00:00Z",
+      created: "2026-05-19T00:00:00Z",
+    });
   }),
 ];

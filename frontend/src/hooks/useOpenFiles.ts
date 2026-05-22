@@ -19,6 +19,11 @@ export interface OpenFile {
    * server-side counterpart yet (e.g. fresh "untitled" buffers).
    */
   serverModified: string;
+  /**
+   * RFC3339 birth time when the OS records one (darwin); empty otherwise.
+   * Surfaced in the editor header alongside serverModified.
+   */
+  serverCreated: string;
 }
 
 export interface IncomingFile {
@@ -26,6 +31,7 @@ export interface IncomingFile {
   path?: string;
   markdown: string;
   modified?: string;
+  created?: string;
 }
 
 interface OpenFilesState {
@@ -39,7 +45,7 @@ interface OpenFilesState {
   closeAll: () => void;
   createUntitled: () => void;
   openServerFile: (incoming: IncomingFile) => void;
-  markActiveSaved: (modified?: string) => void;
+  markActiveSaved: (modified?: string, created?: string) => void;
   /** Revert the active file's markdown back to its last-saved state. */
   discardActiveChanges: () => void;
   /**
@@ -50,7 +56,8 @@ interface OpenFilesState {
   applyExternalReload: (
     id: string,
     markdown: string,
-    modified: string
+    modified: string,
+    created?: string
   ) => void;
   /**
    * Record a new serverModified without touching the file's contents — used
@@ -91,6 +98,7 @@ function buildUntitledFile(existing: Set<string>): OpenFile {
     reloadToken: 0,
     initialHash: simpleHash(""),
     serverModified: "",
+    serverCreated: "",
   };
 }
 
@@ -139,6 +147,7 @@ export const useOpenFiles = create<OpenFilesState>()(
             reloadToken: 0,
             initialHash: simpleHash(item.markdown),
             serverModified: item.modified ?? "",
+            serverCreated: item.created ?? "",
           }));
           const files = [...state.files, ...created];
           return { files, activeId: created[0].id };
@@ -160,6 +169,7 @@ export const useOpenFiles = create<OpenFilesState>()(
               isDirty: false,
               reloadToken: file.reloadToken + 1,
               serverModified: item.modified ?? file.serverModified,
+              serverCreated: item.created ?? file.serverCreated,
             };
           });
           const firstOverwritten = files.find((f) => byName.has(f.name));
@@ -235,11 +245,12 @@ export const useOpenFiles = create<OpenFilesState>()(
             reloadToken: 0,
             initialHash: simpleHash(incoming.markdown),
             serverModified: incoming.modified ?? "",
+            serverCreated: incoming.created ?? "",
           };
           return { files: [...state.files, created], activeId: created.id };
         }),
 
-      markActiveSaved: (modified) =>
+      markActiveSaved: (modified, created) =>
         set((state) => {
           if (!state.activeId) return state;
           return {
@@ -251,6 +262,7 @@ export const useOpenFiles = create<OpenFilesState>()(
                     isDirty: false,
                     initialHash: simpleHash(file.markdown),
                     serverModified: modified ?? file.serverModified,
+                    serverCreated: created ?? file.serverCreated,
                   }
                 : file
             ),
@@ -274,7 +286,7 @@ export const useOpenFiles = create<OpenFilesState>()(
           };
         }),
 
-      applyExternalReload: (id, markdown, modified) =>
+      applyExternalReload: (id, markdown, modified, created) =>
         set((state) => {
           if (!state.files.some((f) => f.id === id)) return state;
           return {
@@ -288,6 +300,7 @@ export const useOpenFiles = create<OpenFilesState>()(
                     reloadToken: file.reloadToken + 1,
                     initialHash: simpleHash(markdown),
                     serverModified: modified,
+                    serverCreated: created ?? file.serverCreated,
                   }
                 : file
             ),
@@ -328,6 +341,7 @@ export const useOpenFiles = create<OpenFilesState>()(
           // Older persisted entries don't have serverModified. The next
           // watcher poll will populate it from the live stat response.
           serverModified: f.serverModified ?? "",
+          serverCreated: f.serverCreated ?? "",
         }));
         if (!state.activeId || !state.files.some((f) => f.id === state.activeId)) {
           state.activeId = state.files[0].id;

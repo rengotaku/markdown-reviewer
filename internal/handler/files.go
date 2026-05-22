@@ -48,10 +48,15 @@ type DirListResponse struct {
 }
 
 // FileReadResponse is the response body for GET /api/files/*path.
+//
+// Created is the platform-reported birth time (darwin) when available;
+// empty string otherwise. Callers should treat an empty Created the same
+// as "unknown" and fall back to Modified.
 type FileReadResponse struct {
 	Path     string `json:"path"`
 	Content  string `json:"content"`
 	Modified string `json:"modified"`
+	Created  string `json:"created"`
 }
 
 // FileStatResponse is the response body for GET /api/stat/*path. Returned
@@ -60,6 +65,18 @@ type FileReadResponse struct {
 type FileStatResponse struct {
 	Path     string `json:"path"`
 	Modified string `json:"modified"`
+	Created  string `json:"created"`
+}
+
+// fileTimes returns the RFC3339-UTC mtime and (best-effort) birth time
+// strings for a given FileInfo. Created is empty when the platform does
+// not record a birth time.
+func fileTimes(info os.FileInfo) (modified, created string) {
+	modified = info.ModTime().UTC().Format(time.RFC3339)
+	if bt, ok := fileBirthTime(info); ok {
+		created = bt.UTC().Format(time.RFC3339)
+	}
+	return modified, created
 }
 
 // FileWriteRequest is the request body for PUT /api/files/*path.
@@ -229,11 +246,16 @@ func (h *Handler) ReadFile(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read file"})
 		return
 	}
-	var modified string
+	var modified, created string
 	if info, ierr := os.Stat(full); ierr == nil {
-		modified = info.ModTime().UTC().Format(time.RFC3339)
+		modified, created = fileTimes(info)
 	}
-	c.JSON(http.StatusOK, FileReadResponse{Path: rel, Content: string(data), Modified: modified})
+	c.JSON(http.StatusOK, FileReadResponse{
+		Path:     rel,
+		Content:  string(data),
+		Modified: modified,
+		Created:  created,
+	})
 }
 
 // StatFile returns just the modified timestamp for REVIEW_ROOT/<path> so
@@ -253,9 +275,11 @@ func (h *Handler) StatFile(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to stat file"})
 		return
 	}
+	modified, created := fileTimes(info)
 	c.JSON(http.StatusOK, FileStatResponse{
 		Path:     rel,
-		Modified: info.ModTime().UTC().Format(time.RFC3339),
+		Modified: modified,
+		Created:  created,
 	})
 }
 
@@ -283,11 +307,16 @@ func (h *Handler) WriteFile(c *gin.Context) {
 		return
 	}
 
-	var modified string
+	var modified, created string
 	if info, ierr := os.Stat(full); ierr == nil {
-		modified = info.ModTime().UTC().Format(time.RFC3339)
+		modified, created = fileTimes(info)
 	}
-	c.JSON(http.StatusOK, FileReadResponse{Path: rel, Content: req.Content, Modified: modified})
+	c.JSON(http.StatusOK, FileReadResponse{
+		Path:     rel,
+		Content:  req.Content,
+		Modified: modified,
+		Created:  created,
+	})
 }
 
 // resolveRequest pulls *path off the gin context, validates the .md

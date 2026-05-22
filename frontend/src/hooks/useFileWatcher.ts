@@ -72,7 +72,12 @@ export function useFileWatcher(intervalMs: number = FILE_WATCHER_INTERVAL_MS) {
           if (cancelled) return;
           useOpenFiles
             .getState()
-            .applyExternalReload(live.id, fresh.content, fresh.modified);
+            .applyExternalReload(
+              live.id,
+              fresh.content,
+              fresh.modified,
+              fresh.created
+            );
           showToast(
             `「${live.name}」が外部で更新されたため再読み込みしました`,
             "info"
@@ -104,7 +109,12 @@ export function useFileWatcher(intervalMs: number = FILE_WATCHER_INTERVAL_MS) {
           if (cancelled) return;
           useOpenFiles
             .getState()
-            .applyExternalReload(live.id, fresh.content, fresh.modified);
+            .applyExternalReload(
+              live.id,
+              fresh.content,
+              fresh.modified,
+              fresh.created
+            );
           showToast(`「${live.name}」を外部の最新内容で再読み込みしました`, "info");
         } catch (err) {
           showToast(
