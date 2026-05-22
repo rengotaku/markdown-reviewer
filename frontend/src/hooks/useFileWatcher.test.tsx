@@ -32,6 +32,7 @@ function seedActiveFile(opts: {
         reloadToken: 0,
         initialHash: "hash",
         serverModified: opts.serverModified,
+        serverCreated: "",
       },
     ],
     activeId: id,
