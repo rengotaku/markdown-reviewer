@@ -27,8 +27,8 @@ describe("useDir", () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
     expect(result.current.data?.entries).toEqual([
-      { name: "docs", path: "docs", type: "dir" },
-      { name: "README.md", path: "README.md", type: "file" },
+      { name: "docs", path: "docs", type: "dir", modified: "2026-05-20T00:00:00Z" },
+      { name: "README.md", path: "README.md", type: "file", modified: "2026-05-20T00:00:00Z" },
     ]);
   });
 
@@ -62,7 +62,7 @@ describe("useDir", () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(result.current.data?.entries).toEqual([
-      { name: "spec.md", path: "docs/api/spec.md", type: "file" },
+      { name: "spec.md", path: "docs/api/spec.md", type: "file", modified: "2026-05-20T00:00:00Z" },
     ]);
   });
 });

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -257,6 +258,11 @@ func TestFiles_Write_ParentDoesNotExist(t *testing.T) {
 
 // listDir is a small helper that hits GET /api/dirs?path=<rel> and decodes
 // the response. It keeps the table-driven tests below tidy.
+//
+// Modified is cleared on each entry so positional assertions can use literal
+// DirEntry{...} without having to invent or freeze mtime values. Tests that
+// care about the timestamp value (or the mtime-desc ordering) check it
+// explicitly.
 func listDir(t *testing.T, h *handler.Handler, rel string) (*httptest.ResponseRecorder, handler.DirListResponse) {
 	t.Helper()
 	url := "/api/dirs"
@@ -267,6 +273,9 @@ func listDir(t *testing.T, h *handler.Handler, rel string) (*httptest.ResponseRe
 	var resp handler.DirListResponse
 	if rec.Code == http.StatusOK {
 		require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+		for i := range resp.Entries {
+			resp.Entries[i].Modified = ""
+		}
 	}
 	return rec, resp
 }
@@ -304,12 +313,46 @@ func TestListDir_RootListsDirsAndMarkdownOnly(t *testing.T) {
 	rec, resp := listDir(t, h, "")
 	require.Equal(t, http.StatusOK, rec.Code)
 
-	// dirs before files, each group sorted ascending by name.
+	// dirs come before files; within each group with identical (second-
+	// precision) mtimes the name tie-breaker (ascending) is what determines
+	// the order. Distinct-mtime ordering is verified separately in
+	// TestListDir_SortedByModifiedTimeDesc.
 	require.Len(t, resp.Entries, 4)
 	assert.Equal(t, handler.DirEntry{Name: "alpha", Path: "alpha", Type: "dir"}, resp.Entries[0])
 	assert.Equal(t, handler.DirEntry{Name: "beta", Path: "beta", Type: "dir"}, resp.Entries[1])
 	assert.Equal(t, handler.DirEntry{Name: "readme.md", Path: "readme.md", Type: "file"}, resp.Entries[2])
 	assert.Equal(t, handler.DirEntry{Name: "zeta.md", Path: "zeta.md", Type: "file"}, resp.Entries[3])
+}
+
+func TestListDir_SortedByModifiedTimeDesc(t *testing.T) {
+	t.Parallel()
+	h, root := setupFilesHandler(t)
+
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "alpha"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "beta"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "readme.md"), []byte("r"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "zeta.md"), []byte("z"), 0o644))
+
+	// Stamp explicit mtimes so the sort behavior is deterministic regardless
+	// of the underlying filesystem's mtime resolution. The "newest" entry in
+	// each group (mtime-desc) should win, with name asc as the tie-breaker.
+	now := time.Now()
+	// alpha older than beta → beta should come first.
+	require.NoError(t, os.Chtimes(filepath.Join(root, "alpha"), now, now.Add(-2*time.Hour)))
+	require.NoError(t, os.Chtimes(filepath.Join(root, "beta"), now, now.Add(-1*time.Hour)))
+	// zeta.md newer than readme.md → zeta.md should come first within files.
+	require.NoError(t, os.Chtimes(filepath.Join(root, "readme.md"), now, now.Add(-2*time.Hour)))
+	require.NoError(t, os.Chtimes(filepath.Join(root, "zeta.md"), now, now.Add(-1*time.Hour)))
+
+	rec, resp := listDir(t, h, "")
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	require.Len(t, resp.Entries, 4)
+	// dirs first (beta newer than alpha), then files (zeta.md newer than readme.md).
+	assert.Equal(t, "beta", resp.Entries[0].Name)
+	assert.Equal(t, "alpha", resp.Entries[1].Name)
+	assert.Equal(t, "zeta.md", resp.Entries[2].Name)
+	assert.Equal(t, "readme.md", resp.Entries[3].Name)
 }
 
 func TestListDir_SkipsDotfilesAndNoiseDirs(t *testing.T) {
@@ -463,4 +506,40 @@ func TestListDir_ReadDirError(t *testing.T) {
 
 	rec, _ := listDir(t, h, "noread")
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+}
+
+// --- StatFile tests -------------------------------------------------------
+
+func TestStatFile_ReturnsModifiedTimestamp(t *testing.T) {
+	t.Parallel()
+	h, root := setupFilesHandler(t)
+
+	require.NoError(t, os.WriteFile(filepath.Join(root, "x.md"), []byte("x"), 0o644))
+	// Stamp a known mtime so we can assert the exact RFC3339 value.
+	mtime := time.Date(2026, 4, 1, 12, 30, 0, 0, time.UTC)
+	require.NoError(t, os.Chtimes(filepath.Join(root, "x.md"), mtime, mtime))
+
+	rec := serve(h, httptest.NewRequest(http.MethodGet, "/api/stat/x.md", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp handler.FileStatResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	assert.Equal(t, "x.md", resp.Path)
+	assert.Equal(t, mtime.Format(time.RFC3339), resp.Modified)
+}
+
+func TestStatFile_NotFound(t *testing.T) {
+	t.Parallel()
+	h, _ := setupFilesHandler(t)
+
+	rec := serve(h, httptest.NewRequest(http.MethodGet, "/api/stat/missing.md", nil))
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+func TestStatFile_RejectsNonMarkdown(t *testing.T) {
+	t.Parallel()
+	h, _ := setupFilesHandler(t)
+
+	rec := serve(h, httptest.NewRequest(http.MethodGet, "/api/stat/foo.txt", nil))
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }

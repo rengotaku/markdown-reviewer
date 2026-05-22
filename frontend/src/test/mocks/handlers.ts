@@ -107,22 +107,22 @@ export const handlers = [
     if (path === "") {
       return HttpResponse.json({
         entries: [
-          { name: "docs", path: "docs", type: "dir" },
-          { name: "README.md", path: "README.md", type: "file" },
+          { name: "docs", path: "docs", type: "dir", modified: "2026-05-20T00:00:00Z" },
+          { name: "README.md", path: "README.md", type: "file", modified: "2026-05-20T00:00:00Z" },
         ],
       });
     }
     if (path === "docs") {
       return HttpResponse.json({
         entries: [
-          { name: "api", path: "docs/api", type: "dir" },
-          { name: "intro.md", path: "docs/intro.md", type: "file" },
+          { name: "api", path: "docs/api", type: "dir", modified: "2026-05-20T00:00:00Z" },
+          { name: "intro.md", path: "docs/intro.md", type: "file", modified: "2026-05-20T00:00:00Z" },
         ],
       });
     }
     if (path === "docs/api") {
       return HttpResponse.json({
-        entries: [{ name: "spec.md", path: "docs/api/spec.md", type: "file" }],
+        entries: [{ name: "spec.md", path: "docs/api/spec.md", type: "file", modified: "2026-05-20T00:00:00Z" }],
       });
     }
     return HttpResponse.json({ entries: [] });
@@ -141,13 +141,27 @@ export const handlers = [
   http.get(`${API_BASE}/api/files/*`, ({ request }) => {
     const url = new URL(request.url);
     const path = url.pathname.replace(/^\/api\/files\//, "");
-    return HttpResponse.json({ path, content: `# ${path}\n\nmock content` });
+    return HttpResponse.json({
+      path,
+      content: `# ${path}\n\nmock content`,
+      modified: "2026-05-20T00:00:00Z",
+    });
   }),
 
   http.put(`${API_BASE}/api/files/*`, async ({ request }) => {
     const url = new URL(request.url);
     const path = url.pathname.replace(/^\/api\/files\//, "");
     const body = (await request.json()) as { content: string };
-    return HttpResponse.json({ path, content: body.content });
+    return HttpResponse.json({
+      path,
+      content: body.content,
+      modified: new Date().toISOString(),
+    });
+  }),
+
+  http.get(`${API_BASE}/api/stat/*`, ({ request }) => {
+    const url = new URL(request.url);
+    const path = url.pathname.replace(/^\/api\/stat\//, "");
+    return HttpResponse.json({ path, modified: "2026-05-20T00:00:00Z" });
   }),
 ];

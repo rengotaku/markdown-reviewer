@@ -4,6 +4,7 @@ export {
   listDir,
   listFiles,
   readFile,
+  statFile,
   writeFile,
   type ConfigResponse,
   type DirEntry as DirEntryApi,
@@ -11,4 +12,5 @@ export {
   type FileEntry,
   type FileListResponse,
   type FileReadResponse,
+  type FileStatResponse,
 } from "./files";
