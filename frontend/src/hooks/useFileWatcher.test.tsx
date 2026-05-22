@@ -1,0 +1,174 @@
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import { http, HttpResponse } from "msw";
+import { renderHook, act, waitFor } from "@testing-library/react";
+import { server } from "@/test/mocks/server";
+import { useOpenFiles } from "./useOpenFiles";
+import { useConfirm } from "./useConfirm";
+import { useToast } from "./useToast";
+import { useFileWatcher } from "./useFileWatcher";
+
+const API_BASE = "http://localhost:8080";
+// Short interval so tests don't have to wait — uses real timers because
+// react-testing-library's waitFor interacts poorly with vi.useFakeTimers().
+const POLL_MS = 20;
+
+function seedActiveFile(opts: {
+  name: string;
+  path: string;
+  markdown: string;
+  serverModified: string;
+  isDirty?: boolean;
+}) {
+  const id = `test-${opts.path}`;
+  useOpenFiles.setState({
+    files: [
+      {
+        id,
+        name: opts.name,
+        path: opts.path,
+        markdown: opts.markdown,
+        savedMarkdown: opts.isDirty ? "older" : opts.markdown,
+        isDirty: !!opts.isDirty,
+        reloadToken: 0,
+        initialHash: "hash",
+        serverModified: opts.serverModified,
+      },
+    ],
+    activeId: id,
+  });
+  return id;
+}
+
+describe("useFileWatcher", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    useOpenFiles.setState({ files: [], activeId: null });
+    useConfirm.setState({ pending: null });
+    useToast.setState({ toasts: [] });
+  });
+
+  it("silently reloads the active file when external mtime is newer and buffer is clean", async () => {
+    const id = seedActiveFile({
+      name: "a.md",
+      path: "a.md",
+      markdown: "old content",
+      serverModified: "2026-05-20T00:00:00Z",
+    });
+
+    server.use(
+      http.get(`${API_BASE}/api/stat/a.md`, () =>
+        HttpResponse.json({ path: "a.md", modified: "2026-05-21T00:00:00Z" })
+      ),
+      http.get(`${API_BASE}/api/files/a.md`, () =>
+        HttpResponse.json({
+          path: "a.md",
+          content: "new content",
+          modified: "2026-05-21T00:00:00Z",
+        })
+      )
+    );
+
+    renderHook(() => useFileWatcher(POLL_MS));
+
+    await waitFor(
+      () => {
+        const f = useOpenFiles.getState().files.find((x) => x.id === id)!;
+        expect(f.markdown).toBe("new content");
+        expect(f.serverModified).toBe("2026-05-21T00:00:00Z");
+        expect(f.isDirty).toBe(false);
+      },
+      { timeout: 2000 }
+    );
+  });
+
+  it("prompts and applies external content when the user accepts on a dirty buffer", async () => {
+    const id = seedActiveFile({
+      name: "b.md",
+      path: "b.md",
+      markdown: "my edits",
+      serverModified: "2026-05-20T00:00:00Z",
+      isDirty: true,
+    });
+
+    server.use(
+      http.get(`${API_BASE}/api/stat/b.md`, () =>
+        HttpResponse.json({ path: "b.md", modified: "2026-05-21T00:00:00Z" })
+      ),
+      http.get(`${API_BASE}/api/files/b.md`, () =>
+        HttpResponse.json({
+          path: "b.md",
+          content: "external content",
+          modified: "2026-05-21T00:00:00Z",
+        })
+      )
+    );
+
+    renderHook(() => useFileWatcher(POLL_MS));
+
+    await waitFor(() => expect(useConfirm.getState().pending).not.toBeNull(), {
+      timeout: 2000,
+    });
+    act(() => useConfirm.getState().resolve(true));
+
+    await waitFor(
+      () => {
+        const f = useOpenFiles.getState().files.find((x) => x.id === id)!;
+        expect(f.markdown).toBe("external content");
+        expect(f.isDirty).toBe(false);
+      },
+      { timeout: 2000 }
+    );
+  });
+
+  it("keeps the user's edits and acknowledges the new mtime when the user declines", async () => {
+    const id = seedActiveFile({
+      name: "c.md",
+      path: "c.md",
+      markdown: "my edits",
+      serverModified: "2026-05-20T00:00:00Z",
+      isDirty: true,
+    });
+
+    server.use(
+      http.get(`${API_BASE}/api/stat/c.md`, () =>
+        HttpResponse.json({ path: "c.md", modified: "2026-05-21T00:00:00Z" })
+      )
+    );
+
+    renderHook(() => useFileWatcher(POLL_MS));
+
+    await waitFor(() => expect(useConfirm.getState().pending).not.toBeNull(), {
+      timeout: 2000,
+    });
+    act(() => useConfirm.getState().resolve(false));
+
+    await waitFor(
+      () => {
+        const f = useOpenFiles.getState().files.find((x) => x.id === id)!;
+        expect(f.markdown).toBe("my edits");
+        expect(f.isDirty).toBe(true);
+        expect(f.serverModified).toBe("2026-05-21T00:00:00Z");
+      },
+      { timeout: 2000 }
+    );
+  });
+
+  it("skips files without a serverModified baseline (e.g. fresh untitled buffers)", async () => {
+    const statSpy = vi.fn(() =>
+      HttpResponse.json({ path: "untitled.md", modified: "2026-05-21T00:00:00Z" })
+    );
+    server.use(http.get(`${API_BASE}/api/stat/*`, statSpy));
+
+    seedActiveFile({
+      name: "untitled.md",
+      path: "untitled.md",
+      markdown: "",
+      serverModified: "",
+    });
+
+    renderHook(() => useFileWatcher(POLL_MS));
+
+    await new Promise((r) => setTimeout(r, POLL_MS * 5));
+    expect(statSpy).not.toHaveBeenCalled();
+  });
+});

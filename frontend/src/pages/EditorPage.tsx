@@ -15,6 +15,7 @@ import SaveIcon from "@mui/icons-material/Save";
 import SaveAsIcon from "@mui/icons-material/SaveAs";
 import MenuOpenIcon from "@mui/icons-material/MenuOpen";
 import MenuIcon from "@mui/icons-material/Menu";
+import RefreshIcon from "@mui/icons-material/Refresh";
 import AddCommentIcon from "@mui/icons-material/AddComment";
 import CommentIcon from "@mui/icons-material/Comment";
 import FormatAlignCenterIcon from "@mui/icons-material/FormatAlignCenter";
@@ -29,6 +30,7 @@ import {
 } from "@/components";
 import { useOpenFiles } from "@/hooks/useOpenFiles";
 import { useReadFile, useWriteFile } from "@/hooks/useFileContent";
+import { useFileWatcher } from "@/hooks/useFileWatcher";
 import { useConfirm } from "@/hooks/useConfirm";
 import { useToast } from "@/hooks/useToast";
 import { useUIStore } from "@/hooks/useUIStore";
@@ -88,6 +90,12 @@ export function EditorPage() {
   const { data: config } = useConfig();
   const queryClient = useQueryClient();
   const reviewRootName = config?.review_root_name ?? "Files";
+
+  useFileWatcher();
+
+  const handleRefreshTree = () => {
+    void queryClient.invalidateQueries({ queryKey: ["dir"] });
+  };
 
   const [commentDialog, setCommentDialog] = useState<{
     open: boolean;
@@ -179,6 +187,7 @@ export function EditorPage() {
         name: basename(res.path),
         path: res.path,
         markdown: res.content,
+        modified: res.modified,
       });
     } catch (err) {
       showToast(
@@ -191,11 +200,11 @@ export function EditorPage() {
   const handleSave = async () => {
     if (!activeFile) return;
     try {
-      await writeFile.mutateAsync({
+      const res = await writeFile.mutateAsync({
         path: activeFile.path,
         content: activeFile.markdown,
       });
-      markActiveSaved();
+      markActiveSaved(res.modified);
       showToast(`「${activeFile.name}」を保存しました`, "success");
     } catch (err) {
       showToast(
@@ -222,6 +231,7 @@ export function EditorPage() {
         name: basename(res.path),
         path: res.path,
         markdown: res.content,
+        modified: res.modified,
       });
       showToast(`「${basename(res.path)}」として保存しました`, "success");
     } catch (err) {
@@ -353,6 +363,16 @@ export function EditorPage() {
                 <MenuOpenIcon fontSize="small" />
               </IconButton>
             </Tooltip>
+            <Tooltip title="ファイルツリーを再読み込み">
+              <IconButton
+                size="small"
+                onClick={handleRefreshTree}
+                aria-label="refresh file tree"
+                data-testid="sidebar-refresh"
+              >
+                <RefreshIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
             <Tooltip title={reviewRootName} placement="bottom-start">
               <Typography
                 variant="subtitle2"
@@ -467,81 +487,84 @@ export function EditorPage() {
           </Tooltip>
         </Box>
 
-        {files.length > 1 && (
-          <Tabs
-            value={activeFile?.id ?? false}
-            onChange={(_, v) => setActive(v as string)}
-            variant="scrollable"
-            scrollButtons={false}
-            sx={{
+        {/*
+         * Tab bar is always rendered even with a single open file, so the user
+         * always has a visible target for close / switch and the layout stays
+         * stable when a second file is opened.
+         */}
+        <Tabs
+          value={activeFile?.id ?? false}
+          onChange={(_, v) => setActive(v as string)}
+          variant="scrollable"
+          scrollButtons={false}
+          sx={{
+            minHeight: 36,
+            borderBottom: 1,
+            borderColor: "divider",
+            flexShrink: 0,
+            "& .MuiTab-root": {
               minHeight: 36,
-              borderBottom: 1,
-              borderColor: "divider",
-              flexShrink: 0,
-              "& .MuiTab-root": {
-                minHeight: 36,
-                textTransform: "none",
-                py: 0.5,
-                px: 1,
-                minWidth: 0,
-                width: 180,
-                maxWidth: 180,
-                flex: "0 0 180px",
-              },
-            }}
-            data-testid="editor-tabs"
-          >
-            {files.map((f) => (
-              <Tab
-                key={f.id}
-                value={f.id}
-                data-testid={`editor-tab-${f.path}`}
-                label={
+              textTransform: "none",
+              py: 0.5,
+              px: 1,
+              minWidth: 0,
+              width: 180,
+              maxWidth: 180,
+              flex: "0 0 180px",
+            },
+          }}
+          data-testid="editor-tabs"
+        >
+          {files.map((f) => (
+            <Tab
+              key={f.id}
+              value={f.id}
+              data-testid={`editor-tab-${f.path}`}
+              label={
+                <Box
+                  sx={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 0.5,
+                    width: "100%",
+                    minWidth: 0,
+                  }}
+                >
                   <Box
+                    component="span"
                     sx={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 0.5,
-                      width: "100%",
+                      flex: 1,
                       minWidth: 0,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                      textAlign: "left",
                     }}
                   >
-                    <Box
-                      component="span"
-                      sx={{
-                        flex: 1,
-                        minWidth: 0,
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                        textAlign: "left",
-                      }}
-                    >
-                      {f.name}
-                      {f.isDirty ? " •" : ""}
-                    </Box>
-                    <CloseIcon
-                      fontSize="inherit"
-                      role="button"
-                      aria-label={`close ${f.name}`}
-                      data-testid={`editor-tab-close-${f.path}`}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        closeFile(f.id);
-                      }}
-                      sx={{
-                        flexShrink: 0,
-                        ml: 0.5,
-                        opacity: 0.55,
-                        "&:hover": { opacity: 1 },
-                      }}
-                    />
+                    {f.name}
+                    {f.isDirty ? " •" : ""}
                   </Box>
-                }
-              />
-            ))}
-          </Tabs>
-        )}
+                  <CloseIcon
+                    fontSize="inherit"
+                    role="button"
+                    aria-label={`close ${f.name}`}
+                    data-testid={`editor-tab-close-${f.path}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      closeFile(f.id);
+                    }}
+                    sx={{
+                      flexShrink: 0,
+                      ml: 0.5,
+                      opacity: 0.55,
+                      "&:hover": { opacity: 1 },
+                    }}
+                  />
+                </Box>
+              }
+            />
+          ))}
+        </Tabs>
 
         <Box sx={{ flex: 1, minHeight: 0 }}>
           <TiptapEditor />
