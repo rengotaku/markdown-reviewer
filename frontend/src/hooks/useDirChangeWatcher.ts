@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { useQueryClient, type QueryCacheNotifyEvent } from "@tanstack/react-query";
 import { useToast } from "@/hooks/useToast";
-import type { DirListResponse, DirEntry } from "@/api";
+import type { DirListResponse, DirEntryApi } from "@/api";
 
 interface UseDirChangeWatcherOpts {
   /** Called when the user clicks a notification for a markdown file. */
@@ -72,7 +72,7 @@ export function useDirChangeWatcher({
         return;
       }
 
-      const changed: DirEntry[] = [];
+      const changed: DirEntryApi[] = [];
       for (const entry of data.entries) {
         const prevMtime = prev.get(entry.path);
         const sig = `${entry.path}@${entry.modified ?? ""}`;
