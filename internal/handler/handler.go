@@ -47,6 +47,7 @@ func (h *Handler) Routes(staticHandler http.Handler) http.Handler {
 		api.GET("/files", h.ListFiles)
 		api.GET("/files/*path", h.ReadFile)
 		api.PUT("/files/*path", h.WriteFile)
+		api.GET("/stat/*path", h.StatFile)
 	}
 
 	r.NoRoute(gin.WrapH(staticHandler))

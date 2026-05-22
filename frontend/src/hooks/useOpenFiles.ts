@@ -12,12 +12,20 @@ export interface OpenFile {
   isDirty: boolean;
   reloadToken: number;
   initialHash: string;
+  /**
+   * RFC3339 mtime of the file on disk as of the last read/write. Used by the
+   * external-change watcher to decide whether a poll-found newer mtime
+   * counts as an external edit. Empty string for files that don't have a
+   * server-side counterpart yet (e.g. fresh "untitled" buffers).
+   */
+  serverModified: string;
 }
 
 export interface IncomingFile {
   name: string;
   path?: string;
   markdown: string;
+  modified?: string;
 }
 
 interface OpenFilesState {
@@ -31,9 +39,25 @@ interface OpenFilesState {
   closeAll: () => void;
   createUntitled: () => void;
   openServerFile: (incoming: IncomingFile) => void;
-  markActiveSaved: () => void;
+  markActiveSaved: (modified?: string) => void;
   /** Revert the active file's markdown back to its last-saved state. */
   discardActiveChanges: () => void;
+  /**
+   * Apply an externally-edited reload to the given file: replace markdown +
+   * savedMarkdown, clear isDirty, bump reloadToken, and record the new
+   * serverModified. Used when the watcher detects an external change.
+   */
+  applyExternalReload: (
+    id: string,
+    markdown: string,
+    modified: string
+  ) => void;
+  /**
+   * Record a new serverModified without touching the file's contents — used
+   * when the user chooses to keep their unsaved edits over an external
+   * change, so the watcher doesn't keep re-firing on the same mtime.
+   */
+  acknowledgeExternalChange: (id: string, modified: string) => void;
 }
 
 const UNTITLED_BASE = "untitled";
@@ -66,6 +90,7 @@ function buildUntitledFile(existing: Set<string>): OpenFile {
     isDirty: false,
     reloadToken: 0,
     initialHash: simpleHash(""),
+    serverModified: "",
   };
 }
 
@@ -113,6 +138,7 @@ export const useOpenFiles = create<OpenFilesState>()(
             isDirty: false,
             reloadToken: 0,
             initialHash: simpleHash(item.markdown),
+            serverModified: item.modified ?? "",
           }));
           const files = [...state.files, ...created];
           return { files, activeId: created[0].id };
@@ -121,16 +147,19 @@ export const useOpenFiles = create<OpenFilesState>()(
       overwriteFiles: (incoming) =>
         set((state) => {
           if (incoming.length === 0) return state;
-          const byName = new Map(incoming.map((item) => [item.name, item.markdown]));
+          const byName = new Map(
+            incoming.map((item) => [item.name, item] as const)
+          );
           const files = state.files.map((file) => {
-            const markdown = byName.get(file.name);
-            if (markdown === undefined) return file;
+            const item = byName.get(file.name);
+            if (item === undefined) return file;
             return {
               ...file,
-              markdown,
-              savedMarkdown: markdown,
+              markdown: item.markdown,
+              savedMarkdown: item.markdown,
               isDirty: false,
               reloadToken: file.reloadToken + 1,
+              serverModified: item.modified ?? file.serverModified,
             };
           });
           const firstOverwritten = files.find((f) => byName.has(f.name));
@@ -205,11 +234,12 @@ export const useOpenFiles = create<OpenFilesState>()(
             isDirty: false,
             reloadToken: 0,
             initialHash: simpleHash(incoming.markdown),
+            serverModified: incoming.modified ?? "",
           };
           return { files: [...state.files, created], activeId: created.id };
         }),
 
-      markActiveSaved: () =>
+      markActiveSaved: (modified) =>
         set((state) => {
           if (!state.activeId) return state;
           return {
@@ -220,6 +250,7 @@ export const useOpenFiles = create<OpenFilesState>()(
                     savedMarkdown: file.markdown,
                     isDirty: false,
                     initialHash: simpleHash(file.markdown),
+                    serverModified: modified ?? file.serverModified,
                   }
                 : file
             ),
@@ -239,6 +270,36 @@ export const useOpenFiles = create<OpenFilesState>()(
                     reloadToken: file.reloadToken + 1,
                   }
                 : file
+            ),
+          };
+        }),
+
+      applyExternalReload: (id, markdown, modified) =>
+        set((state) => {
+          if (!state.files.some((f) => f.id === id)) return state;
+          return {
+            files: state.files.map((file) =>
+              file.id === id
+                ? {
+                    ...file,
+                    markdown,
+                    savedMarkdown: markdown,
+                    isDirty: false,
+                    reloadToken: file.reloadToken + 1,
+                    initialHash: simpleHash(markdown),
+                    serverModified: modified,
+                  }
+                : file
+            ),
+          };
+        }),
+
+      acknowledgeExternalChange: (id, modified) =>
+        set((state) => {
+          if (!state.files.some((f) => f.id === id)) return state;
+          return {
+            files: state.files.map((file) =>
+              file.id === id ? { ...file, serverModified: modified } : file
             ),
           };
         }),
@@ -264,6 +325,9 @@ export const useOpenFiles = create<OpenFilesState>()(
           // Older persisted entries don't have savedMarkdown. Treat the
           // last-persisted markdown as the saved baseline.
           savedMarkdown: f.savedMarkdown ?? f.markdown,
+          // Older persisted entries don't have serverModified. The next
+          // watcher poll will populate it from the live stat response.
+          serverModified: f.serverModified ?? "",
         }));
         if (!state.activeId || !state.files.some((f) => f.id === state.activeId)) {
           state.activeId = state.files[0].id;

@@ -13,6 +13,12 @@ export interface FileListResponse {
 export interface FileReadResponse {
   path: string;
   content: string;
+  modified: string;
+}
+
+export interface FileStatResponse {
+  path: string;
+  modified: string;
 }
 
 function encodePath(path: string): string {
@@ -28,6 +34,7 @@ export interface DirEntry {
   name: string;
   path: string;
   type: "dir" | "file";
+  modified: string;
 }
 
 export interface DirListResponse {
@@ -55,4 +62,8 @@ export async function writeFile(path: string, content: string): Promise<FileRead
   return apiClient
     .put(`api/files/${encodePath(path)}`, { json: { content } })
     .json<FileReadResponse>();
+}
+
+export async function statFile(path: string): Promise<FileStatResponse> {
+  return apiClient.get(`api/stat/${encodePath(path)}`).json<FileStatResponse>();
 }
