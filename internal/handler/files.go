@@ -36,9 +36,10 @@ type FileListResponse struct {
 
 // DirEntry is one entry in the /api/dirs listing.
 type DirEntry struct {
-	Name string `json:"name"`
-	Path string `json:"path"`
-	Type string `json:"type"` // "dir" or "file"
+	Name     string `json:"name"`
+	Path     string `json:"path"`
+	Type     string `json:"type"` // "dir" or "file"
+	Modified string `json:"modified"`
 }
 
 // DirListResponse is the response body for GET /api/dirs.
@@ -48,8 +49,17 @@ type DirListResponse struct {
 
 // FileReadResponse is the response body for GET /api/files/*path.
 type FileReadResponse struct {
-	Path    string `json:"path"`
-	Content string `json:"content"`
+	Path     string `json:"path"`
+	Content  string `json:"content"`
+	Modified string `json:"modified"`
+}
+
+// FileStatResponse is the response body for GET /api/stat/*path. Returned
+// without the file content so the frontend can cheaply poll for external
+// changes on the currently open file.
+type FileStatResponse struct {
+	Path     string `json:"path"`
+	Modified string `json:"modified"`
 }
 
 // FileWriteRequest is the request body for PUT /api/files/*path.
@@ -174,17 +184,29 @@ func (h *Handler) ListDir(c *gin.Context) {
 			childRel = rel + "/" + name
 		}
 
+		var modified string
+		if info, ierr := item.Info(); ierr == nil {
+			modified = info.ModTime().UTC().Format(time.RFC3339)
+		}
+
 		switch {
 		case item.IsDir():
-			entries = append(entries, DirEntry{Name: name, Path: childRel, Type: "dir"})
+			entries = append(entries, DirEntry{Name: name, Path: childRel, Type: "dir", Modified: modified})
 		case strings.EqualFold(filepath.Ext(name), markdownExt):
-			entries = append(entries, DirEntry{Name: name, Path: childRel, Type: "file"})
+			entries = append(entries, DirEntry{Name: name, Path: childRel, Type: "file", Modified: modified})
 		}
 	}
 
+	// Group dirs above files, then sort each group by modified time
+	// descending so the most recently-touched entries surface at the top.
+	// Name is the tie-breaker (ascending) so the ordering is stable when
+	// timestamps collide (e.g. fresh directories created in the same second).
 	sort.SliceStable(entries, func(i, j int) bool {
 		if entries[i].Type != entries[j].Type {
 			return entries[i].Type == "dir"
+		}
+		if entries[i].Modified != entries[j].Modified {
+			return entries[i].Modified > entries[j].Modified
 		}
 		return entries[i].Name < entries[j].Name
 	})
@@ -207,7 +229,34 @@ func (h *Handler) ReadFile(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read file"})
 		return
 	}
-	c.JSON(http.StatusOK, FileReadResponse{Path: rel, Content: string(data)})
+	var modified string
+	if info, ierr := os.Stat(full); ierr == nil {
+		modified = info.ModTime().UTC().Format(time.RFC3339)
+	}
+	c.JSON(http.StatusOK, FileReadResponse{Path: rel, Content: string(data), Modified: modified})
+}
+
+// StatFile returns just the modified timestamp for REVIEW_ROOT/<path> so
+// the frontend can poll for external edits on the open file without
+// re-transferring the body each tick.
+func (h *Handler) StatFile(c *gin.Context) {
+	full, rel, ok := h.resolveRequest(c)
+	if !ok {
+		return
+	}
+	info, err := os.Stat(full)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "file not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to stat file"})
+		return
+	}
+	c.JSON(http.StatusOK, FileStatResponse{
+		Path:     rel,
+		Modified: info.ModTime().UTC().Format(time.RFC3339),
+	})
 }
 
 // WriteFile saves the request body to REVIEW_ROOT/<path> atomically via
@@ -234,7 +283,11 @@ func (h *Handler) WriteFile(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, FileReadResponse{Path: rel, Content: req.Content})
+	var modified string
+	if info, ierr := os.Stat(full); ierr == nil {
+		modified = info.ModTime().UTC().Format(time.RFC3339)
+	}
+	c.JSON(http.StatusOK, FileReadResponse{Path: rel, Content: req.Content, Modified: modified})
 }
 
 // resolveRequest pulls *path off the gin context, validates the .md
