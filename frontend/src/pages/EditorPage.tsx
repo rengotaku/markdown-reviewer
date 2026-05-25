@@ -131,13 +131,25 @@ export function EditorPage() {
 
   const [commentDialog, setCommentDialog] = useState<{
     open: boolean;
-    mode: "anchored" | "global" | "cross-section";
+    mode: "anchored" | "block" | "global" | "cross-section";
     snippet: string;
+    /**
+     * For block-mode submissions only. The text range to apply the
+     * scope=block comment to. Captured at the moment the drag-handle menu
+     * is invoked so it survives the dialog focus dance.
+     */
+    blockRange?: { from: number; to: number };
     headings: ReadonlyArray<{ level: 1 | 2 | 3 | 4 | 5 | 6; text: string }>;
   }>({ open: false, mode: "anchored", snippet: "", headings: [] });
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(
     null
   );
+  const [dragMenu, setDragMenu] = useState<{
+    x: number;
+    y: number;
+    pos: number;
+    size: number;
+  } | null>(null);
 
   // Re-render the toolbar Add-Comment button when selection / doc changes.
   const [, setSelectionTick] = useState(0);
@@ -151,6 +163,26 @@ export function EditorPage() {
       editor.off("transaction", tick);
     };
   }, [editor]);
+
+  // Drag handle right-click → block context menu. The TiptapEditor dispatches
+  // a custom "mdr:block-context-menu" event on window with pos/size of the
+  // currently hovered block; we capture it here to open the menu near the
+  // pointer.
+  useEffect(() => {
+    const onBlockMenu = (e: Event) => {
+      const detail = (e as CustomEvent).detail as {
+        x: number;
+        y: number;
+        pos: number;
+        size: number;
+      };
+      if (!detail) return;
+      setDragMenu(detail);
+    };
+    window.addEventListener("mdr:block-context-menu", onBlockMenu);
+    return () =>
+      window.removeEventListener("mdr:block-context-menu", onBlockMenu);
+  }, []);
 
   // Right-click on a non-empty selection (outside an existing comment) opens
   // our custom mini menu with "コメント追加". The editor `view` may not be
@@ -305,6 +337,39 @@ export function EditorPage() {
     });
   };
 
+  const closeDragMenu = () => setDragMenu(null);
+
+  const handleAddBlockCommentFromDragMenu = () => {
+    if (!editor || !dragMenu) {
+      closeDragMenu();
+      return;
+    }
+    const { pos, size } = dragMenu;
+    const node = editor.state.doc.nodeAt(pos);
+    closeDragMenu();
+    if (!node) return;
+    // Atom blocks (mermaid, standalone comments, etc.) have no inner text to
+    // wrap; refuse rather than producing an empty-target block comment.
+    if (node.isAtom) {
+      showToast("このブロックにはコメントを付けられません", "info");
+      return;
+    }
+    const from = pos + 1;
+    const to = pos + size - 1;
+    if (to <= from) {
+      showToast("空のブロックにはコメントを付けられません", "info");
+      return;
+    }
+    const blockText = editor.state.doc.textBetween(from, to, " ");
+    setCommentDialog({
+      open: true,
+      mode: "block",
+      snippet: buildTargetSnippet(blockText),
+      blockRange: { from, to },
+      headings: [],
+    });
+  };
+
   const handleAddGlobalClick = () => {
     if (!editor) return;
     setCommentDialog({
@@ -341,7 +406,12 @@ export function EditorPage() {
   };
 
   const closeCommentDialog = () =>
-    setCommentDialog({ open: false, mode: "anchored", snippet: "", headings: [] });
+    setCommentDialog({
+      open: false,
+      mode: "anchored",
+      snippet: "",
+      headings: [],
+    });
 
   const handleCommentSubmit = ({
     body,
@@ -359,6 +429,7 @@ export function EditorPage() {
     const id = generateCommentId();
     const date = todayISO();
     const snippet = commentDialog.snippet;
+    const blockRange = commentDialog.blockRange;
 
     if (scope === "cross-section" || scope === "global") {
       // Standalone — not anchored to text; appended as a block node.
@@ -369,12 +440,22 @@ export function EditorPage() {
         .focus()
         .addStandaloneComment({ id, author, date, target, body, scope })
         .run();
-    } else {
-      // Anchored — wraps the current selection.
+    } else if (scope === "block" && blockRange) {
+      // Block-scope wrap: apply the comment mark to the entire block's text
+      // range captured when the drag-handle menu was opened. The selection
+      // may have moved while the dialog was up, so set it explicitly.
       editor
         .chain()
         .focus()
-        .setComment({ id, author, date, target: snippet, body, scope })
+        .setTextSelection({ from: blockRange.from, to: blockRange.to })
+        .setComment({ id, author, date, target: snippet, body, scope: "block" })
+        .run();
+    } else {
+      // Anchored inline — wraps the current selection.
+      editor
+        .chain()
+        .focus()
+        .setComment({ id, author, date, target: snippet, body, scope: "inline" })
         .run();
     }
 
@@ -787,6 +868,30 @@ export function EditorPage() {
             <AddCommentIcon fontSize="small" />
           </ListItemIcon>
           <ListItemText>コメント追加</ListItemText>
+        </MenuItem>
+      </Menu>
+
+      <Menu
+        open={!!dragMenu}
+        onClose={closeDragMenu}
+        anchorReference="anchorPosition"
+        anchorPosition={
+          dragMenu ? { top: dragMenu.y, left: dragMenu.x } : undefined
+        }
+        slotProps={{
+          root: {
+            "data-testid": "editor-block-context-menu",
+          } as Record<string, unknown>,
+        }}
+      >
+        <MenuItem
+          onClick={handleAddBlockCommentFromDragMenu}
+          data-testid="ctx-add-block-comment"
+        >
+          <ListItemIcon>
+            <AddCommentIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText>ブロックにコメント追加</ListItemText>
         </MenuItem>
       </Menu>
 

@@ -7,24 +7,27 @@ import Button from "@mui/material/Button";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
 import Box from "@mui/material/Box";
-import FormControl from "@mui/material/FormControl";
 import FormGroup from "@mui/material/FormGroup";
-import RadioGroup from "@mui/material/RadioGroup";
 import FormControlLabel from "@mui/material/FormControlLabel";
-import Radio from "@mui/material/Radio";
 import Checkbox from "@mui/material/Checkbox";
 
 /**
- * The dialog supports three discrete flows; the caller picks which by setting
- * `mode`, and the dialog renders the right inputs without asking the user to
- * pick a scope from a radio.
+ * The dialog supports four discrete flows; the caller picks which by setting
+ * `mode`, and the dialog renders only the inputs that flow needs. No scope
+ * radio is shown — the scope is implied by which entry point opened the
+ * dialog.
  *
- *   - "anchored"      → wraps the active selection. Sub-scope (inline / block)
- *                       still surfaces as a radio because both are anchored.
+ *   - "anchored"      → wraps the active selection (scope=inline)
+ *   - "block"         → wraps an entire block (scope=block).
+ *                       Triggered from the drag-handle context menu.
  *   - "global"        → file-wide comment. Body only.
  *   - "cross-section" → bind to a chosen set of H1/H2 headings.
  */
-export type CommentDialogMode = "anchored" | "global" | "cross-section";
+export type CommentDialogMode =
+  | "anchored"
+  | "block"
+  | "global"
+  | "cross-section";
 
 export type CommentDialogScope =
   | "inline"
@@ -36,17 +39,6 @@ export interface DialogHeading {
   level: 1 | 2 | 3 | 4 | 5 | 6;
   text: string;
 }
-
-interface AnchoredScopeChoice {
-  value: "inline" | "block";
-  label: string;
-  hint: string;
-}
-
-const ANCHORED_SCOPES: ReadonlyArray<AnchoredScopeChoice> = [
-  { value: "inline", label: "inline", hint: "選択範囲だけに紐付ける（デフォルト）" },
-  { value: "block", label: "block", hint: "段落単位の指摘" },
-];
 
 export interface CommentDialogSubmit {
   body: string;
@@ -60,7 +52,6 @@ interface Props {
   mode?: CommentDialogMode;
   targetSnippet: string;
   defaultBody?: string;
-  defaultScope?: "inline" | "block";
   /** H1/H2 headings of the current document; used only when mode = "cross-section". */
   headings?: ReadonlyArray<DialogHeading>;
   onClose: () => void;
@@ -83,16 +74,21 @@ function dialogTitle(mode: CommentDialogMode): string {
       return "全体コメントを追加";
     case "cross-section":
       return "横断コメントを追加";
+    case "block":
+      return "ブロックにコメントを追加";
     default:
       return "コメントを追加";
   }
+}
+
+function targetLabel(mode: CommentDialogMode): string {
+  return mode === "block" ? "対象ブロック" : "対象テキスト";
 }
 
 function DialogBody({
   mode = "anchored",
   targetSnippet,
   defaultBody,
-  defaultScope,
   headings,
   onClose,
   onSubmit,
@@ -104,20 +100,18 @@ function DialogBody({
   const hasHeadings = availableHeadings.length > 0;
 
   const [body, setBody] = useState(defaultBody ?? "");
-  const [anchoredScope, setAnchoredScope] = useState<"inline" | "block">(
-    defaultScope ?? "inline"
-  );
   const [selectedSections, setSelectedSections] = useState<string[]>([]);
 
   const trimmed = body.trim();
   const isCrossSection = mode === "cross-section";
+  const showTarget = mode === "anchored" || mode === "block";
   const canSubmit =
     trimmed.length > 0 &&
     (!isCrossSection || selectedSections.length > 0);
 
   const snippetPreview = targetSnippet.length
     ? truncate(targetSnippet, SNIPPET_LIMIT)
-    : "(範囲が選択されていません)";
+    : "(対象が指定されていません)";
 
   const toggleSection = (text: string) => {
     setSelectedSections((prev) =>
@@ -127,30 +121,34 @@ function DialogBody({
 
   const submit = () => {
     if (!canSubmit) return;
-    if (mode === "anchored") {
-      onSubmit({ body: trimmed, scope: anchoredScope });
-      return;
+    switch (mode) {
+      case "anchored":
+        onSubmit({ body: trimmed, scope: "inline" });
+        return;
+      case "block":
+        onSubmit({ body: trimmed, scope: "block" });
+        return;
+      case "global":
+        onSubmit({ body: trimmed, scope: "global" });
+        return;
+      case "cross-section":
+        onSubmit({
+          body: trimmed,
+          scope: "cross-section",
+          sections: selectedSections,
+        });
+        return;
     }
-    if (mode === "global") {
-      onSubmit({ body: trimmed, scope: "global" });
-      return;
-    }
-    // cross-section
-    onSubmit({
-      body: trimmed,
-      scope: "cross-section",
-      sections: selectedSections,
-    });
   };
 
   return (
     <>
       <DialogTitle>{dialogTitle(mode)}</DialogTitle>
       <DialogContent>
-        {mode === "anchored" && (
+        {showTarget && (
           <Box sx={{ mb: 2 }}>
             <Typography variant="caption" color="text.secondary">
-              対象テキスト
+              {targetLabel(mode)}
             </Typography>
             <Typography
               variant="body2"
@@ -167,53 +165,6 @@ function DialogBody({
               {snippetPreview}
             </Typography>
           </Box>
-        )}
-        {mode === "anchored" && (
-          <FormControl
-            sx={{ mb: 2 }}
-            component="fieldset"
-            data-testid="comment-scope-group"
-          >
-            <Typography variant="caption" color="text.secondary" sx={{ mb: 0.5 }}>
-              スコープ
-            </Typography>
-            <RadioGroup
-              row
-              value={anchoredScope}
-              onChange={(e) =>
-                setAnchoredScope(e.target.value as "inline" | "block")
-              }
-            >
-              {ANCHORED_SCOPES.map((c) => (
-                <FormControlLabel
-                  key={c.value}
-                  value={c.value}
-                  control={
-                    <Radio
-                      size="small"
-                      inputProps={{
-                        "data-testid": `comment-scope-radio-${c.value}`,
-                      } as React.InputHTMLAttributes<HTMLInputElement>}
-                    />
-                  }
-                  label={
-                    <Box>
-                      <Typography variant="body2" component="span">
-                        {c.label}
-                      </Typography>
-                      <Typography
-                        variant="caption"
-                        color="text.secondary"
-                        sx={{ ml: 1 }}
-                      >
-                        {c.hint}
-                      </Typography>
-                    </Box>
-                  }
-                />
-              ))}
-            </RadioGroup>
-          </FormControl>
         )}
         {isCrossSection && (
           <Box sx={{ mb: 2 }} data-testid="comment-sections-picker">
