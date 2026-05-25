@@ -234,6 +234,41 @@ describe("StandaloneCommentNode", () => {
     expect(ids).toEqual(["g1", "g2"]);
   });
 
+  it("stacks consecutive standalone markers without a blank line between them", () => {
+    editor = createEditor("Body paragraph.");
+    editor.commands.addStandaloneComment({
+      id: "g1",
+      author: "k",
+      date: "2026-05-25",
+      body: "first",
+      scope: "global",
+    });
+    editor.commands.addStandaloneComment({
+      id: "g2",
+      author: "k",
+      date: "2026-05-25",
+      body: "second",
+      scope: "global",
+    });
+    editor.commands.addStandaloneComment({
+      id: "x1",
+      author: "k",
+      date: "2026-05-25",
+      target: "A\nB",
+      body: "third",
+      scope: "cross-section",
+    });
+
+    const md = getMarkdown(editor);
+    // Exactly one newline between consecutive @comment markers, not a blank
+    // line (which would be `\n\n`).
+    expect(md).toMatch(/id="g1"[^>]*-->\n<!-- @comment id="g2"/);
+    expect(md).toMatch(/id="g2"[^>]*-->\n<!-- @comment id="x1"/);
+    // Blank line is preserved between regular content and the standalone
+    // group so the HTML block is recognised on round-trip.
+    expect(md).toMatch(/Body paragraph\.\n\n<!-- @comment id="g1"/);
+  });
+
   it("survives a full reload after multiple additions (re-parse round-trip)", () => {
     editor = createEditor("Intro.");
     editor.commands.addStandaloneComment({
