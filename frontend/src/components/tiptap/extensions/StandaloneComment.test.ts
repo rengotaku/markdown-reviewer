@@ -152,6 +152,83 @@ describe("StandaloneCommentNode", () => {
     expect(out).toContain('id="g2"');
   });
 
+  it("appends successive addStandaloneComment calls without replacing each other", () => {
+    editor = createEditor("Body paragraph.");
+    editor.commands.addStandaloneComment({
+      id: "g1",
+      author: "k",
+      date: "2026-05-25",
+      body: "first",
+      scope: "global",
+    });
+    editor.commands.addStandaloneComment({
+      id: "g2",
+      author: "k",
+      date: "2026-05-25",
+      body: "second",
+      scope: "global",
+    });
+    editor.commands.addStandaloneComment({
+      id: "x1",
+      author: "k",
+      date: "2026-05-25",
+      target: "Section A\nSection B",
+      body: "cross",
+      scope: "cross-section",
+    });
+
+    const ids: string[] = [];
+    editor.state.doc.descendants((node) => {
+      if (node.type.name === "standaloneComment") ids.push(node.attrs.id);
+    });
+    expect(ids).toEqual(["g1", "g2", "x1"]);
+
+    const out = getMarkdown(editor);
+    expect(out).toContain('id="g1"');
+    expect(out).toContain('id="g2"');
+    expect(out).toContain('id="x1"');
+    // Three separate open markers, zero close markers.
+    expect((out.match(/@comment id="/g) ?? []).length).toBe(3);
+    expect(out).not.toContain("<!-- /@comment -->");
+  });
+
+  it("survives a full reload after multiple additions (re-parse round-trip)", () => {
+    editor = createEditor("Intro.");
+    editor.commands.addStandaloneComment({
+      id: "g1",
+      author: "k",
+      date: "2026-05-25",
+      body: "global one",
+      scope: "global",
+    });
+    editor.commands.addStandaloneComment({
+      id: "x1",
+      author: "k",
+      date: "2026-05-25",
+      target: "Problem\nTry",
+      body: "cross one",
+      scope: "cross-section",
+    });
+    editor.commands.addStandaloneComment({
+      id: "x2",
+      author: "k",
+      date: "2026-05-25",
+      target: "Action",
+      body: "cross two",
+      scope: "cross-section",
+    });
+
+    const md = getMarkdown(editor);
+    // Reload the markdown into a fresh editor and verify all three survive.
+    const reloaded = createEditor(md);
+    const ids: string[] = [];
+    reloaded.state.doc.descendants((node) => {
+      if (node.type.name === "standaloneComment") ids.push(node.attrs.id);
+    });
+    reloaded.destroy();
+    expect(ids.sort()).toEqual(["g1", "x1", "x2"]);
+  });
+
   it("round-trips a mix of inline marks and standalone markers", () => {
     const md =
       '<!-- @comment id="g1" author="k" date="2026-05-25" body="global" scope="global" -->\n\nIntro <!-- @comment id="c1" author="k" date="2026-05-25" target="word" body="inline note" -->word<!-- /@comment --> end.';
