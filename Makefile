@@ -6,7 +6,7 @@
 
 .DEFAULT_GOAL := help
 
-BINARY_NAME := server
+BINARY_NAME := markdown-review-server
 BIN_DIR := bin
 COVERAGE_FILE := coverage.out
 # Minimum total coverage % for Go. Measured against production packages
