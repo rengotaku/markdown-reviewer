@@ -98,6 +98,42 @@ describe("StandaloneCommentNode", () => {
     expect(md).not.toContain("<!-- /@comment -->");
   });
 
+  it("round-trips a cross-section marker with bound section titles", () => {
+    const md =
+      '<!-- @comment id="x1" author="k" date="2026-05-25" target="Problem\\nTry\\nAction" body="連動で書き直し" scope="cross-section" -->';
+    editor = createEditor(md);
+
+    let parsed: { target: string; scope: string } | null = null;
+    editor.state.doc.descendants((node) => {
+      if (node.type.name === "standaloneComment") {
+        parsed = { target: node.attrs.target, scope: node.attrs.scope };
+      }
+    });
+    expect(parsed).not.toBeNull();
+    expect(parsed!.scope).toBe("cross-section");
+    expect(parsed!.target).toBe("Problem\nTry\nAction");
+
+    const out = getMarkdown(editor);
+    expect(out).toContain('target="Problem\\nTry\\nAction"');
+    expect(out).toContain('scope="cross-section"');
+  });
+
+  it("serializes a cross-section node added via the command with sections target", () => {
+    editor = createEditor("Body.");
+    editor.commands.addStandaloneComment({
+      id: "x2",
+      author: "k",
+      date: "2026-05-25",
+      target: "Section A\nSection B",
+      body: "横断指摘",
+      scope: "cross-section",
+    });
+    const md = getMarkdown(editor);
+    expect(md).toContain('target="Section A\\nSection B"');
+    expect(md).toContain('scope="cross-section"');
+    expect(md).not.toContain("<!-- /@comment -->");
+  });
+
   it("removes a standalone node by id", () => {
     const md =
       '<!-- @comment id="g1" author="k" date="2026-05-25" body="one" scope="global" -->\n\n<!-- @comment id="g2" author="k" date="2026-05-25" body="two" scope="cross-section" -->';

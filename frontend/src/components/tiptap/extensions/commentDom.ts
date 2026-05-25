@@ -120,6 +120,7 @@ function replaceWithStandalone(
   div.setAttribute("data-comment-id", attrs.id ?? "");
   div.setAttribute("data-comment-author", attrs.author ?? "");
   div.setAttribute("data-comment-date", attrs.date ?? "");
+  div.setAttribute("data-comment-target", attrs.target ?? "");
   div.setAttribute("data-comment-body", attrs.body ?? "");
   div.setAttribute("data-comment-scope", normalizeScope(attrs.scope));
 

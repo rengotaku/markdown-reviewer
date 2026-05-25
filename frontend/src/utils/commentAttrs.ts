@@ -113,22 +113,33 @@ export function buildCommentAttrs(attrs: {
 
 /**
  * Build the attribute string for a standalone (cross-section / global) comment
- * marker. Omits `target` because the comment is not anchored to any text.
+ * marker.
+ *
+ * `target` is included only when non-empty. For `scope="cross-section"` it
+ * holds the newline-joined list of bound section titles (see
+ * `encodeSections` in `utils/headings.ts`). For `scope="global"` it is
+ * typically empty and therefore omitted.
  */
 export function buildStandaloneCommentAttrs(attrs: {
   id: string;
   author: string;
   date: string;
+  target?: string;
   body: string;
   scope: string;
 }): string {
-  return [
+  const parts = [
     `id="${escapeCommentAttr(attrs.id)}"`,
     `author="${escapeCommentAttr(attrs.author)}"`,
     `date="${escapeCommentAttr(attrs.date)}"`,
-    `body="${escapeCommentAttr(attrs.body)}"`,
-    `scope="${escapeCommentAttr(attrs.scope)}"`,
-  ].join(" ");
+  ];
+  const target = attrs.target ?? "";
+  if (target) {
+    parts.push(`target="${escapeCommentAttr(target)}"`);
+  }
+  parts.push(`body="${escapeCommentAttr(attrs.body)}"`);
+  parts.push(`scope="${escapeCommentAttr(attrs.scope)}"`);
+  return parts.join(" ");
 }
 
 /** Regex that matches `@comment id="..." ...` inside a comment node's `.data`. */
