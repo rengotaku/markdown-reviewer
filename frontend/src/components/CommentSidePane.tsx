@@ -6,7 +6,15 @@ import IconButton from "@mui/material/IconButton";
 import Tooltip from "@mui/material/Tooltip";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import CommentsDisabledIcon from "@mui/icons-material/CommentsDisabled";
+import Chip from "@mui/material/Chip";
 import { collectComments, type CollectedComment } from "@/utils/collectComments";
+import { decodeSections } from "@/utils/headings";
+
+const SCOPE_BADGE: Record<string, { label: string; color: string }> = {
+  block: { label: "block", color: "#fff8c5" },
+  "cross-section": { label: "横断", color: "#fef3c7" },
+  global: { label: "全体", color: "#e0f2fe" },
+};
 
 interface Props {
   editor: Editor | null;
@@ -24,7 +32,7 @@ const EMPTY_SNAPSHOT: CommentSnapshot = { comments: [], fingerprint: "" };
 
 function fingerprintOf(comments: CollectedComment[]): string {
   return comments
-    .map((c) => `${c.id}|${c.from}|${c.to}|${c.body}|${c.target}`)
+    .map((c) => `${c.id}|${c.from}|${c.to}|${c.body}|${c.target}|${c.scope}`)
     .join("\n");
 }
 
@@ -69,11 +77,12 @@ export function CommentSidePane({ editor, onDelete, onClose, activeId }: Props) 
     if (!id) return;
     const root = editor?.view?.dom;
     if (!root) return;
+    // Match both inline marks (.comment-mark) and standalone nodes
+    // (.standalone-comment) via their shared data-comment-id attribute.
     const nodes = root.querySelectorAll<HTMLElement>(
       `[data-comment-id="${CSS.escape(id)}"]`
     );
     if (nodes.length === 0) return;
-    // Scroll the first occurrence into view, flash all of them.
     nodes[0].scrollIntoView({ behavior: "smooth", block: "center" });
     nodes.forEach((el) => {
       el.classList.remove("is-flash");
@@ -171,6 +180,19 @@ export function CommentSidePane({ editor, onDelete, onClose, activeId }: Props) 
                   mb: 0.5,
                 }}
               >
+                {SCOPE_BADGE[c.scope] && (
+                  <Chip
+                    label={SCOPE_BADGE[c.scope].label}
+                    size="small"
+                    sx={{
+                      height: 18,
+                      fontSize: "0.65rem",
+                      bgcolor: SCOPE_BADGE[c.scope].color,
+                      "& .MuiChip-label": { px: 0.75 },
+                    }}
+                    data-testid={`comment-scope-${c.scope}`}
+                  />
+                )}
                 <Typography variant="caption" color="text.secondary" sx={{ flexGrow: 1 }}>
                   {c.date || "?"}
                 </Typography>
@@ -188,7 +210,20 @@ export function CommentSidePane({ editor, onDelete, onClose, activeId }: Props) 
                   </IconButton>
                 </Tooltip>
               </Box>
-              {c.target && (
+              {c.target && c.scope === "cross-section" ? (
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  sx={{
+                    display: "block",
+                    fontStyle: "italic",
+                    wordBreak: "break-word",
+                  }}
+                  data-testid={`comment-sections-${c.id}`}
+                >
+                  対象: {decodeSections(c.target).join(" / ")}
+                </Typography>
+              ) : c.target ? (
                 <Typography
                   variant="caption"
                   color="text.secondary"
@@ -202,7 +237,7 @@ export function CommentSidePane({ editor, onDelete, onClose, activeId }: Props) 
                 >
                   対象: {c.target}
                 </Typography>
-              )}
+              ) : null}
               <Typography
                 variant="body2"
                 sx={{

@@ -1,5 +1,9 @@
 import { Mark, mergeAttributes } from "@tiptap/core";
-import { buildCommentAttrs } from "@/utils/commentAttrs";
+import {
+  buildCommentAttrs,
+  DEFAULT_COMMENT_SCOPE,
+  normalizeScope,
+} from "@/utils/commentAttrs";
 import { transformCommentMarkers } from "./commentDom";
 
 export interface CommentAttributes {
@@ -8,6 +12,12 @@ export interface CommentAttributes {
   date: string;
   target: string;
   body: string;
+  /**
+   * Comment scope. Defaults to "inline". Only "inline" / "block" make sense
+   * for the wrapping mark — "cross-section" / "global" live as standalone
+   * nodes (see StandaloneCommentNode).
+   */
+  scope?: string;
 }
 
 declare module "@tiptap/core" {
@@ -33,6 +43,7 @@ export const CommentMark = Mark.create({
       date: { default: null },
       target: { default: null },
       body: { default: null },
+      scope: { default: DEFAULT_COMMENT_SCOPE },
     };
   },
 
@@ -48,6 +59,7 @@ export const CommentMark = Mark.create({
             date: el.getAttribute("data-comment-date"),
             target: el.getAttribute("data-comment-target"),
             body: el.getAttribute("data-comment-body"),
+            scope: normalizeScope(el.getAttribute("data-comment-scope")),
           };
         },
       },
@@ -64,6 +76,7 @@ export const CommentMark = Mark.create({
           "data-comment-date": HTMLAttributes.date ?? "",
           "data-comment-target": HTMLAttributes.target ?? "",
           "data-comment-body": HTMLAttributes.body ?? "",
+          "data-comment-scope": HTMLAttributes.scope ?? DEFAULT_COMMENT_SCOPE,
           class: "comment-mark",
         },
         // Drop bare attribute keys — only the data-* form is rendered.
@@ -84,6 +97,7 @@ export const CommentMark = Mark.create({
               date: mark.attrs.date ?? "",
               target: mark.attrs.target ?? "",
               body: mark.attrs.body ?? "",
+              scope: mark.attrs.scope ?? "",
             });
             return `<!-- @comment ${attrs} -->`;
           },

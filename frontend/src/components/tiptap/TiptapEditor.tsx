@@ -22,6 +22,7 @@ import { SlashCommand } from "./extensions/SlashCommand";
 import { MermaidBlock } from "./extensions/MermaidBlock";
 import { MarkdownPaste } from "./extensions/MarkdownPaste";
 import { CommentMark } from "./extensions/CommentMark";
+import { StandaloneCommentNode } from "./extensions/StandaloneComment";
 import "./styles/editor.css";
 
 function getEditorMarkdown(editor: { storage: unknown }): string {
@@ -42,6 +43,7 @@ export function TiptapEditor() {
   });
   const updateActiveMarkdown = useOpenFiles((s) => s.updateActiveMarkdown);
   const lastLoadedKeyRef = useRef<string | null>(null);
+  const dragHandleBlockRef = useRef<{ pos: number; size: number } | null>(null);
   /**
    * Timestamp (ms) until which onUpdate should be ignored. setContent's
    * `emitUpdate: false` only suppresses the direct dispatch; extensions like
@@ -72,6 +74,7 @@ export function TiptapEditor() {
       MermaidBlock,
       MarkdownPaste,
       CommentMark,
+      StandaloneCommentNode,
     ],
     content: "",
     editable: true,
@@ -147,8 +150,33 @@ export function TiptapEditor() {
           className="drag-handle"
           nested={dragHandleNested}
           computePositionConfig={dragHandlePosition}
+          onNodeChange={({ node, pos }) => {
+            dragHandleBlockRef.current = node
+              ? { pos, size: node.nodeSize }
+              : null;
+          }}
         >
-          <DragIndicatorIcon fontSize="small" />
+          <Box
+            component="span"
+            sx={{ display: "inline-flex", cursor: "grab" }}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              const info = dragHandleBlockRef.current;
+              if (!info) return;
+              const customEvent = new CustomEvent("mdr:block-context-menu", {
+                detail: {
+                  x: e.clientX,
+                  y: e.clientY,
+                  pos: info.pos,
+                  size: info.size,
+                },
+                bubbles: true,
+              });
+              window.dispatchEvent(customEvent);
+            }}
+          >
+            <DragIndicatorIcon fontSize="small" />
+          </Box>
         </DragHandle>
       )}
       <EditorContent editor={editor} />
