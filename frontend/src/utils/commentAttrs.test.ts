@@ -57,11 +57,23 @@ describe("parseCommentAttrs / buildCommentAttrs", () => {
       id: "01J8FOO",
       author: "kishira",
       date: "2026-05-20",
-      target: 'tricky -- "value"',
       body: 'multi\nline -- with "quotes"',
     };
     const built = buildCommentAttrs(attrs);
     expect(parseCommentAttrs(built)).toEqual(attrs);
+  });
+
+  it("does not emit a target attribute for wrapped comments", () => {
+    // The SoT for wrapped comments is the text between <!-- @comment ... -->
+    // and <!-- /@comment -->. Storing a redundant target attribute gets stale
+    // and adds visual noise to the saved file.
+    const built = buildCommentAttrs({
+      id: "c1",
+      author: "k",
+      date: "2026-05-25",
+      body: "fix this",
+    });
+    expect(built).not.toContain("target=");
   });
 
   it("ignores unknown / missing keys gracefully", () => {
@@ -95,7 +107,6 @@ describe("buildCommentAttrs scope emission", () => {
     id: "c1",
     author: "k",
     date: "2026-05-20",
-    target: "x",
     body: "note",
   };
 
