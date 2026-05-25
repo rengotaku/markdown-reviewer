@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { Editor } from "@tiptap/core";
+import { NodeSelection } from "@tiptap/pm/state";
 import StarterKit from "@tiptap/starter-kit";
 import { Markdown } from "tiptap-markdown";
 import { CommentMark } from "./CommentMark";
@@ -190,6 +191,47 @@ describe("StandaloneCommentNode", () => {
     // Three separate open markers, zero close markers.
     expect((out.match(/@comment id="/g) ?? []).length).toBe(3);
     expect(out).not.toContain("<!-- /@comment -->");
+  });
+
+  it("appends rather than replaces even when the previous standalone node is selected", () => {
+    // Simulates what happens in the real UI: TipTap's selection can end up
+    // wrapping a previously-inserted atom block (NodeSelection). Without an
+    // explicit "insert at end" the next addStandaloneComment used to replace
+    // the selected node — exactly the user-visible "global overwrites" bug.
+    editor = createEditor("Body.");
+    editor.commands.addStandaloneComment({
+      id: "g1",
+      author: "k",
+      date: "2026-05-25",
+      body: "first",
+      scope: "global",
+    });
+
+    // Find the inserted standalone node and force the editor selection to
+    // wrap it as a NodeSelection.
+    let standalonePos = -1;
+    editor.state.doc.descendants((node, pos) => {
+      if (node.type.name === "standaloneComment") standalonePos = pos;
+    });
+    expect(standalonePos).toBeGreaterThanOrEqual(0);
+    const tr = editor.state.tr.setSelection(
+      NodeSelection.create(editor.state.doc, standalonePos)
+    );
+    editor.view.dispatch(tr);
+
+    editor.commands.addStandaloneComment({
+      id: "g2",
+      author: "k",
+      date: "2026-05-25",
+      body: "second",
+      scope: "global",
+    });
+
+    const ids: string[] = [];
+    editor.state.doc.descendants((node) => {
+      if (node.type.name === "standaloneComment") ids.push(node.attrs.id);
+    });
+    expect(ids).toEqual(["g1", "g2"]);
   });
 
   it("survives a full reload after multiple additions (re-parse round-trip)", () => {

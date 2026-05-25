@@ -172,8 +172,14 @@ export const StandaloneCommentNode = Node.create({
     return {
       addStandaloneComment:
         (attrs: StandaloneCommentAttributes) =>
-        ({ commands }) =>
-          commands.insertContent({
+        ({ commands, state }) =>
+          // Always append at the very end of the document. Inserting at the
+          // current selection makes the command sensitive to where the cursor
+          // happens to be when the dialog closes — e.g. if the editor's
+          // selection ends up wrapping a previously-inserted standalone node,
+          // the next insertContent would *replace* that node instead of
+          // appending. Pinning to doc.size makes the behavior deterministic.
+          commands.insertContentAt(state.doc.content.size, {
             type: this.name,
             attrs: {
               id: attrs.id,
