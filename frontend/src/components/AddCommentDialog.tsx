@@ -223,6 +223,11 @@ function DialogBody({
             {hasHeadings ? (
               <FormGroup
                 sx={{
+                  // MUI FormGroup defaults to flex-wrap: wrap which, combined
+                  // with a constrained height, causes items to wrap into a
+                  // second column instead of scrolling vertically. Force a
+                  // single column and let overflow scroll handle the rest.
+                  flexWrap: "nowrap",
                   maxHeight: 220,
                   overflow: "auto",
                   border: "1px solid",
