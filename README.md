@@ -68,7 +68,7 @@ SPA を Go バイナリに embed し、`:8080` 単独で配信する。
 
 ```bash
 make build
-REVIEW_ROOT=/path/to/markdowns ./bin/server
+REVIEW_ROOT=/path/to/markdowns ./bin/markdown-review-server
 ```
 
 または `make run-binary` で起動。
