@@ -142,10 +142,13 @@ export const StandaloneCommentNode = Node.create({
       markdown: {
         serialize(
           state: {
+            out: string;
             write: (s: string) => void;
             closeBlock: (n: unknown) => void;
           },
-          node: { attrs: Record<string, string | null> }
+          node: { attrs: Record<string, string | null>; type: { name: string } },
+          parent: { maybeChild: (i: number) => { type: { name: string } } | null } | null,
+          index: number | undefined
         ) {
           const attrs = buildStandaloneCommentAttrs({
             id: node.attrs.id ?? "",
@@ -156,7 +159,20 @@ export const StandaloneCommentNode = Node.create({
             scope: normalizeScope(node.attrs.scope),
           });
           state.write(`<!-- @comment ${attrs} -->`);
-          state.closeBlock(node);
+          // If the next sibling is another standalone comment, stack them on
+          // consecutive lines with no blank line between. Otherwise close the
+          // block normally so we keep a blank line separator from neighbouring
+          // markdown blocks (CommonMark needs that blank line to recognise the
+          // HTML comment as an HTML block when round-tripping).
+          const next =
+            parent && typeof index === "number"
+              ? parent.maybeChild(index + 1)
+              : null;
+          if (next && next.type.name === node.type.name) {
+            state.out += "\n";
+          } else {
+            state.closeBlock(node);
+          }
         },
         parse: {
           // Parsing happens via commentDom.transformCommentMarkers: it converts
@@ -172,24 +188,44 @@ export const StandaloneCommentNode = Node.create({
     return {
       addStandaloneComment:
         (attrs: StandaloneCommentAttributes) =>
-        ({ commands, state }) =>
-          // Always append at the very end of the document. Inserting at the
-          // current selection makes the command sensitive to where the cursor
-          // happens to be when the dialog closes — e.g. if the editor's
-          // selection ends up wrapping a previously-inserted standalone node,
-          // the next insertContent would *replace* that node instead of
-          // appending. Pinning to doc.size makes the behavior deterministic.
-          commands.insertContentAt(state.doc.content.size, {
-            type: this.name,
-            attrs: {
-              id: attrs.id,
-              author: attrs.author,
-              date: attrs.date,
-              target: attrs.target ?? "",
-              body: attrs.body,
-              scope: normalizeScope(attrs.scope),
-            },
-          }),
+        ({ tr, state, dispatch }) => {
+          // Append the node via a raw transaction. The high-level
+          // commands.insertContent* APIs both (a) wrap atom blocks with a
+          // trailing empty paragraph (causing blank lines between consecutive
+          // standalones on save) and (b) replace whatever node the selection
+          // currently encloses (the "previous global gets overwritten" bug).
+          //
+          // TipTap still keeps a trailing empty paragraph at the very end of
+          // the doc so the cursor has somewhere to live after an atom. Insert
+          // *before* that trailing empty paragraph so consecutive standalones
+          // end up as direct top-level siblings with no empty paragraphs
+          // sandwiched between them.
+          const nodeType = state.schema.nodes[this.name];
+          if (!nodeType) return false;
+          const created = nodeType.create({
+            id: attrs.id,
+            author: attrs.author,
+            date: attrs.date,
+            target: attrs.target ?? "",
+            body: attrs.body,
+            scope: normalizeScope(attrs.scope),
+          });
+          const doc = state.doc;
+          let insertPos = doc.content.size;
+          const last = doc.lastChild;
+          if (
+            last &&
+            last.type.name === "paragraph" &&
+            last.content.size === 0
+          ) {
+            insertPos -= last.nodeSize;
+          }
+          if (dispatch) {
+            tr.insert(insertPos, created);
+            dispatch(tr);
+          }
+          return true;
+        },
       removeStandaloneCommentById:
         (id: string) =>
         ({ tr, state, dispatch }) => {
