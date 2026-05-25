@@ -22,6 +22,7 @@ import { SlashCommand } from "./extensions/SlashCommand";
 import { MermaidBlock } from "./extensions/MermaidBlock";
 import { MarkdownPaste } from "./extensions/MarkdownPaste";
 import { CommentMark } from "./extensions/CommentMark";
+import { StandaloneCommentNode } from "./extensions/StandaloneComment";
 import "./styles/editor.css";
 
 function getEditorMarkdown(editor: { storage: unknown }): string {
@@ -72,6 +73,7 @@ export function TiptapEditor() {
       MermaidBlock,
       MarkdownPaste,
       CommentMark,
+      StandaloneCommentNode,
     ],
     content: "",
     editable: true,

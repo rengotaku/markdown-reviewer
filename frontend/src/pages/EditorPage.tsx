@@ -18,6 +18,7 @@ import MenuIcon from "@mui/icons-material/Menu";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import AddCommentIcon from "@mui/icons-material/AddComment";
 import CommentIcon from "@mui/icons-material/Comment";
+import PublicIcon from "@mui/icons-material/Public";
 import FormatAlignCenterIcon from "@mui/icons-material/FormatAlignCenter";
 import UnfoldMoreIcon from "@mui/icons-material/UnfoldMore";
 import { TiptapEditor } from "@/components/tiptap/TiptapEditor";
@@ -128,8 +129,9 @@ export function EditorPage() {
 
   const [commentDialog, setCommentDialog] = useState<{
     open: boolean;
+    mode: "anchored" | "standalone";
     snippet: string;
-  }>({ open: false, snippet: "" });
+  }>({ open: false, mode: "anchored", snippet: "" });
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(
     null
   );
@@ -294,7 +296,17 @@ export function EditorPage() {
     const selectedText = editor.state.doc.textBetween(from, to, " ");
     setCommentDialog({
       open: true,
+      mode: "anchored",
       snippet: buildTargetSnippet(selectedText),
+    });
+  };
+
+  const handleAddStandaloneClick = () => {
+    if (!editor) return;
+    setCommentDialog({
+      open: true,
+      mode: "standalone",
+      snippet: "",
     });
   };
 
@@ -305,28 +317,51 @@ export function EditorPage() {
     handleAddCommentClick();
   };
 
-  const handleCommentSubmit = ({ body }: { body: string }) => {
+  const closeCommentDialog = () =>
+    setCommentDialog({ open: false, mode: "anchored", snippet: "" });
+
+  const handleCommentSubmit = ({
+    body,
+    scope,
+  }: {
+    body: string;
+    scope: "inline" | "block" | "cross-section" | "global";
+  }) => {
     if (!editor) {
-      setCommentDialog({ open: false, snippet: "" });
+      closeCommentDialog();
       return;
     }
     const id = generateCommentId();
     const date = todayISO();
     const snippet = commentDialog.snippet;
 
-    // Notion-style: mark only — don't insert the comment body into the document.
-    editor
-      .chain()
-      .focus()
-      .setComment({ id, author, date, target: snippet, body })
-      .run();
+    if (scope === "cross-section" || scope === "global") {
+      // Standalone — not anchored to text; appended as a block node.
+      editor
+        .chain()
+        .focus()
+        .addStandaloneComment({ id, author, date, body, scope })
+        .run();
+    } else {
+      // Anchored — wraps the current selection.
+      editor
+        .chain()
+        .focus()
+        .setComment({ id, author, date, target: snippet, body, scope })
+        .run();
+    }
 
-    setCommentDialog({ open: false, snippet: "" });
+    closeCommentDialog();
   };
 
   const handleDeleteComment = (id: string) => {
     if (!editor) return;
-    editor.chain().focus().unsetCommentById(id).run();
+    // Try the wrapping-mark removal first; standalone comments share the same
+    // id space, so fall back to node removal if no mark was touched.
+    const removed = editor.chain().focus().unsetCommentById(id).run();
+    if (!removed) {
+      editor.chain().focus().removeStandaloneCommentById(id).run();
+    }
   };
 
   const canSave = Boolean(activeFile);
@@ -506,6 +541,20 @@ export function EditorPage() {
                 data-testid="editor-add-comment"
               >
                 コメント
+              </Button>
+            </span>
+          </Tooltip>
+          <Tooltip title="ファイル全体 / 横断的なコメントを追加（選択不要）">
+            <span>
+              <Button
+                variant="outlined"
+                size="small"
+                startIcon={<PublicIcon />}
+                disabled={!editor}
+                onClick={handleAddStandaloneClick}
+                data-testid="editor-add-standalone-comment"
+              >
+                全体
               </Button>
             </span>
           </Tooltip>
@@ -702,8 +751,9 @@ export function EditorPage() {
 
       <AddCommentDialog
         open={commentDialog.open}
+        mode={commentDialog.mode}
         targetSnippet={commentDialog.snippet}
-        onClose={() => setCommentDialog({ open: false, snippet: "" })}
+        onClose={closeCommentDialog}
         onSubmit={handleCommentSubmit}
       />
 
