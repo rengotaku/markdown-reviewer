@@ -19,6 +19,7 @@ import RefreshIcon from "@mui/icons-material/Refresh";
 import AddCommentIcon from "@mui/icons-material/AddComment";
 import CommentIcon from "@mui/icons-material/Comment";
 import PublicIcon from "@mui/icons-material/Public";
+import HubIcon from "@mui/icons-material/Hub";
 import FormatAlignCenterIcon from "@mui/icons-material/FormatAlignCenter";
 import UnfoldMoreIcon from "@mui/icons-material/UnfoldMore";
 import { TiptapEditor } from "@/components/tiptap/TiptapEditor";
@@ -130,7 +131,7 @@ export function EditorPage() {
 
   const [commentDialog, setCommentDialog] = useState<{
     open: boolean;
-    mode: "anchored" | "standalone";
+    mode: "anchored" | "global" | "cross-section";
     snippet: string;
     headings: ReadonlyArray<{ level: 1 | 2 | 3 | 4 | 5 | 6; text: string }>;
   }>({ open: false, mode: "anchored", snippet: "", headings: [] });
@@ -304,13 +305,31 @@ export function EditorPage() {
     });
   };
 
-  const handleAddStandaloneClick = () => {
+  const handleAddGlobalClick = () => {
     if (!editor) return;
     setCommentDialog({
       open: true,
-      mode: "standalone",
+      mode: "global",
       snippet: "",
-      headings: collectHeadings(editor, [1, 2]),
+      headings: [],
+    });
+  };
+
+  const handleAddCrossSectionClick = () => {
+    if (!editor) return;
+    const headings = collectHeadings(editor, [1, 2]);
+    if (headings.length === 0) {
+      showToast(
+        "横断コメントを付ける見出し（# / ##）が見つかりません。先に見出しを追加してください。",
+        "info"
+      );
+      return;
+    }
+    setCommentDialog({
+      open: true,
+      mode: "cross-section",
+      snippet: "",
+      headings,
     });
   };
 
@@ -552,17 +571,31 @@ export function EditorPage() {
               </Button>
             </span>
           </Tooltip>
-          <Tooltip title="ファイル全体 / 横断的なコメントを追加（選択不要）">
+          <Tooltip title="ファイル全体に向けたコメントを追加（選択不要）">
             <span>
               <Button
                 variant="outlined"
                 size="small"
                 startIcon={<PublicIcon />}
                 disabled={!editor}
-                onClick={handleAddStandaloneClick}
-                data-testid="editor-add-standalone-comment"
+                onClick={handleAddGlobalClick}
+                data-testid="editor-add-global-comment"
               >
                 全体
+              </Button>
+            </span>
+          </Tooltip>
+          <Tooltip title="複数の見出しに紐付ける横断コメントを追加">
+            <span>
+              <Button
+                variant="outlined"
+                size="small"
+                startIcon={<HubIcon />}
+                disabled={!editor}
+                onClick={handleAddCrossSectionClick}
+                data-testid="editor-add-cross-section-comment"
+              >
+                横断
               </Button>
             </span>
           </Tooltip>
