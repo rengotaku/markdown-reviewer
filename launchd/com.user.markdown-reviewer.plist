@@ -7,7 +7,7 @@
 
     <key>ProgramArguments</key>
     <array>
-        <string>__PROJECT__/bin/server</string>
+        <string>__PROJECT__/bin/markdown-review-server</string>
     </array>
 
     <key>EnvironmentVariables</key>
