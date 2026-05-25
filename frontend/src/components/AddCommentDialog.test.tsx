@@ -144,13 +144,13 @@ describe("AddCommentDialog", () => {
     expect(onSubmit).toHaveBeenCalledWith({ body: "para note", scope: "block" });
   });
 
-  it("defaults to scope=global and hides the target snippet in standalone mode", async () => {
+  it("global mode: no target snippet, no scope radio, submits scope=global", async () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn();
     render(
       <AddCommentDialog
         open
-        mode="standalone"
+        mode="global"
         targetSnippet=""
         onClose={() => {}}
         onSubmit={onSubmit}
@@ -158,7 +158,10 @@ describe("AddCommentDialog", () => {
     );
 
     expect(screen.queryByTestId("comment-target-snippet")).not.toBeInTheDocument();
-    expect(screen.getByTestId("comment-scope-radio-global")).toBeChecked();
+    expect(screen.queryByTestId("comment-scope-group")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("comment-sections-picker")
+    ).not.toBeInTheDocument();
 
     await user.type(screen.getByTestId("comment-body-input"), "file-wide note");
     await user.click(screen.getByTestId("comment-submit"));
@@ -169,30 +172,28 @@ describe("AddCommentDialog", () => {
     });
   });
 
-  it("hides cross-section in standalone mode when no H1/H2 headings exist", () => {
+  it("cross-section mode: shows empty-state hint when no H1/H2 headings exist", () => {
     render(
       <AddCommentDialog
         open
-        mode="standalone"
+        mode="cross-section"
         targetSnippet=""
         headings={[]}
         onClose={() => {}}
         onSubmit={() => {}}
       />
     );
-    expect(
-      screen.queryByTestId("comment-scope-radio-cross-section")
-    ).not.toBeInTheDocument();
+    expect(screen.getByTestId("comment-sections-picker")).toBeInTheDocument();
     expect(screen.getByTestId("comment-no-headings-hint")).toBeInTheDocument();
   });
 
-  it("requires at least one section selected for cross-section and submits sections[]", async () => {
+  it("cross-section mode: requires ≥1 section and submits sections[]", async () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn();
     render(
       <AddCommentDialog
         open
-        mode="standalone"
+        mode="cross-section"
         targetSnippet=""
         headings={[
           { level: 1, text: "Top" },
@@ -205,7 +206,6 @@ describe("AddCommentDialog", () => {
       />
     );
 
-    await user.click(screen.getByTestId("comment-scope-radio-cross-section"));
     await user.type(screen.getByTestId("comment-body-input"), "cross note");
 
     // Body filled but no section selected → submit still disabled.
@@ -220,29 +220,6 @@ describe("AddCommentDialog", () => {
       body: "cross note",
       scope: "cross-section",
       sections: ["Problem", "Try"],
-    });
-  });
-
-  it("global submission omits sections even when standalone mode is active", async () => {
-    const user = userEvent.setup();
-    const onSubmit = vi.fn();
-    render(
-      <AddCommentDialog
-        open
-        mode="standalone"
-        targetSnippet=""
-        headings={[{ level: 1, text: "Top" }]}
-        onClose={() => {}}
-        onSubmit={onSubmit}
-      />
-    );
-
-    await user.type(screen.getByTestId("comment-body-input"), "file note");
-    await user.click(screen.getByTestId("comment-submit"));
-
-    expect(onSubmit).toHaveBeenCalledWith({
-      body: "file note",
-      scope: "global",
     });
   });
 
