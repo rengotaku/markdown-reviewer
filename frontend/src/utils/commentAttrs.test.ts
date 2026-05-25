@@ -1,7 +1,10 @@
 import { describe, it, expect } from "vitest";
 import {
   buildCommentAttrs,
+  buildStandaloneCommentAttrs,
   escapeCommentAttr,
+  isStandaloneScope,
+  normalizeScope,
   parseCommentAttrs,
   unescapeCommentAttr,
 } from "./commentAttrs";
@@ -64,5 +67,71 @@ describe("parseCommentAttrs / buildCommentAttrs", () => {
   it("ignores unknown / missing keys gracefully", () => {
     expect(parseCommentAttrs("id=\"only\"")).toEqual({ id: "only" });
     expect(parseCommentAttrs("")).toEqual({});
+  });
+});
+
+describe("scope helpers", () => {
+  it("normalizes recognised scope strings, falls back to inline otherwise", () => {
+    expect(normalizeScope("inline")).toBe("inline");
+    expect(normalizeScope("block")).toBe("block");
+    expect(normalizeScope("cross-section")).toBe("cross-section");
+    expect(normalizeScope("global")).toBe("global");
+    expect(normalizeScope("")).toBe("inline");
+    expect(normalizeScope(null)).toBe("inline");
+    expect(normalizeScope(undefined)).toBe("inline");
+    expect(normalizeScope("bogus")).toBe("inline");
+  });
+
+  it("flags cross-section and global as standalone scopes", () => {
+    expect(isStandaloneScope("inline")).toBe(false);
+    expect(isStandaloneScope("block")).toBe(false);
+    expect(isStandaloneScope("cross-section")).toBe(true);
+    expect(isStandaloneScope("global")).toBe(true);
+  });
+});
+
+describe("buildCommentAttrs scope emission", () => {
+  const base = {
+    id: "c1",
+    author: "k",
+    date: "2026-05-20",
+    target: "x",
+    body: "note",
+  };
+
+  it("omits scope attribute when scope is missing or default inline", () => {
+    expect(buildCommentAttrs(base)).not.toContain("scope=");
+    expect(buildCommentAttrs({ ...base, scope: "" })).not.toContain("scope=");
+    expect(buildCommentAttrs({ ...base, scope: "inline" })).not.toContain(
+      "scope="
+    );
+  });
+
+  it("emits scope attribute when scope is non-default", () => {
+    expect(buildCommentAttrs({ ...base, scope: "block" })).toContain(
+      'scope="block"'
+    );
+    expect(buildCommentAttrs({ ...base, scope: "cross-section" })).toContain(
+      'scope="cross-section"'
+    );
+    expect(buildCommentAttrs({ ...base, scope: "global" })).toContain(
+      'scope="global"'
+    );
+  });
+});
+
+describe("buildStandaloneCommentAttrs", () => {
+  it("omits target, always emits scope, and round-trips through parse", () => {
+    const attrs = {
+      id: "g1",
+      author: "k",
+      date: "2026-05-25",
+      body: "ファイル全体への指摘",
+      scope: "global",
+    };
+    const built = buildStandaloneCommentAttrs(attrs);
+    expect(built).not.toContain("target=");
+    expect(built).toContain('scope="global"');
+    expect(parseCommentAttrs(built)).toEqual(attrs);
   });
 });

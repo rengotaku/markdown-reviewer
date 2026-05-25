@@ -3,6 +3,7 @@ import { Editor } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
 import { Markdown } from "tiptap-markdown";
 import { CommentMark } from "@/components/tiptap/extensions/CommentMark";
+import { StandaloneCommentNode } from "@/components/tiptap/extensions/StandaloneComment";
 import { collectComments } from "./collectComments";
 
 function createEditor(content = ""): Editor {
@@ -14,6 +15,7 @@ function createEditor(content = ""): Editor {
         transformCopiedText: false,
       }),
       CommentMark,
+      StandaloneCommentNode,
     ],
     content,
   });
@@ -66,6 +68,27 @@ describe("collectComments", () => {
     );
     const result = collectComments(editor);
     expect(result.map((c) => c.id)).toEqual(["c1", "c2"]);
+  });
+
+  it("defaults inline-scope marks to scope=\"inline\"", () => {
+    editor = createEditor(
+      'Pre <!-- @comment id="c1" author="k" date="2026-05-20" target="word" body="b" -->word<!-- /@comment --> post.'
+    );
+    const result = collectComments(editor);
+    expect(result[0].scope).toBe("inline");
+  });
+
+  it("collects standalone (global / cross-section) comments alongside marks", () => {
+    editor = createEditor(
+      '<!-- @comment id="g1" author="k" date="2026-05-25" body="file note" scope="global" -->\n\nIntro <!-- @comment id="c1" author="k" date="2026-05-25" target="word" body="inline note" -->word<!-- /@comment --> end.'
+    );
+    const result = collectComments(editor);
+    const ids = result.map((c) => c.id).sort();
+    expect(ids).toEqual(["c1", "g1"]);
+    const g = result.find((c) => c.id === "g1");
+    expect(g?.scope).toBe("global");
+    expect(g?.body).toBe("file note");
+    expect(g?.target).toBe("");
   });
 
   it("merges same-id marks split across block boundaries into one entry", () => {

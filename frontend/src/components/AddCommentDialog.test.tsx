@@ -105,7 +105,7 @@ describe("AddCommentDialog", () => {
     expect(submit).toBeEnabled();
   });
 
-  it("calls onSubmit with trimmed body when submit is clicked", async () => {
+  it("calls onSubmit with trimmed body and default scope=inline when submit is clicked", async () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn();
     render(
@@ -122,7 +122,74 @@ describe("AddCommentDialog", () => {
     await user.click(screen.getByTestId("comment-submit"));
 
     expect(onSubmit).toHaveBeenCalledTimes(1);
-    expect(onSubmit).toHaveBeenCalledWith({ body: "my comment" });
+    expect(onSubmit).toHaveBeenCalledWith({ body: "my comment", scope: "inline" });
+  });
+
+  it("submits scope=block when the block radio is selected", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    render(
+      <AddCommentDialog
+        open
+        targetSnippet="snip"
+        onClose={() => {}}
+        onSubmit={onSubmit}
+      />
+    );
+
+    await user.type(screen.getByTestId("comment-body-input"), "para note");
+    await user.click(screen.getByTestId("comment-scope-radio-block"));
+    await user.click(screen.getByTestId("comment-submit"));
+
+    expect(onSubmit).toHaveBeenCalledWith({ body: "para note", scope: "block" });
+  });
+
+  it("defaults to scope=global and hides the target snippet in standalone mode", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    render(
+      <AddCommentDialog
+        open
+        mode="standalone"
+        targetSnippet=""
+        onClose={() => {}}
+        onSubmit={onSubmit}
+      />
+    );
+
+    expect(screen.queryByTestId("comment-target-snippet")).not.toBeInTheDocument();
+    expect(screen.getByTestId("comment-scope-radio-global")).toBeChecked();
+
+    await user.type(screen.getByTestId("comment-body-input"), "file-wide note");
+    await user.click(screen.getByTestId("comment-submit"));
+
+    expect(onSubmit).toHaveBeenCalledWith({
+      body: "file-wide note",
+      scope: "global",
+    });
+  });
+
+  it("allows switching to cross-section in standalone mode", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    render(
+      <AddCommentDialog
+        open
+        mode="standalone"
+        targetSnippet=""
+        onClose={() => {}}
+        onSubmit={onSubmit}
+      />
+    );
+
+    await user.click(screen.getByTestId("comment-scope-radio-cross-section"));
+    await user.type(screen.getByTestId("comment-body-input"), "cross note");
+    await user.click(screen.getByTestId("comment-submit"));
+
+    expect(onSubmit).toHaveBeenCalledWith({
+      body: "cross note",
+      scope: "cross-section",
+    });
   });
 
   it("prefills the body input with defaultBody", () => {

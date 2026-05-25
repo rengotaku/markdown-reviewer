@@ -122,6 +122,54 @@ describe("CommentMark", () => {
     expect(out).toContain('id="c2"');
   });
 
+  it("defaults to scope=inline and omits the scope attribute on serialize", () => {
+    editor = createEditor("plain text");
+    editor
+      .chain()
+      .setTextSelection({ from: 1, to: 6 })
+      .setComment({
+        id: "s1",
+        author: "k",
+        date: "2026-05-25",
+        target: "plain",
+        body: "no scope arg",
+      })
+      .run();
+    const md = getMarkdown(editor);
+    // Default scope must not leak into the file format (backward compat).
+    expect(md).not.toContain("scope=");
+  });
+
+  it("round-trips an explicit scope=block attribute on a wrapping comment", () => {
+    const original =
+      'A <!-- @comment id="b1" author="k" date="2026-05-25" target="x" body="block-level note" scope="block" -->paragraph<!-- /@comment --> end.';
+    editor = createEditor(original);
+    let scope = "";
+    editor.state.doc.descendants((node) => {
+      if (!node.isText) return;
+      const mark = node.marks.find((m) => m.type.name === "comment");
+      if (mark) scope = mark.attrs.scope ?? "";
+    });
+    expect(scope).toBe("block");
+    const out = getMarkdown(editor);
+    expect(out).toContain('scope="block"');
+  });
+
+  it("falls back to scope=inline for legacy markers missing the attribute", () => {
+    const original =
+      '<!-- @comment id="legacy" author="k" date="2026-05-25" target="x" body="b" -->word<!-- /@comment -->';
+    editor = createEditor(original);
+    let scope = "";
+    editor.state.doc.descendants((node) => {
+      if (!node.isText) return;
+      const mark = node.marks.find((m) => m.type.name === "comment");
+      if (mark) scope = mark.attrs.scope ?? "";
+    });
+    expect(scope).toBe("inline");
+    // Legacy file should still round-trip byte-for-byte.
+    expect(getMarkdown(editor).trim()).toBe(original.trim());
+  });
+
   it("excludes nesting — a second comment mark replaces the existing one over the same range", () => {
     editor = createEditor("plain");
     editor
