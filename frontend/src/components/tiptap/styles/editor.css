@@ -251,3 +251,56 @@
 .ProseMirror .comment-mark.is-flash {
   animation: comment-flash 0.35s ease-in-out 4;
 }
+
+/* Standalone comment node — scope="cross-section" / "global". */
+.ProseMirror .standalone-comment {
+  margin: 12px 0;
+  padding: 10px 14px;
+  border-radius: 6px;
+  background-color: #fef3c7;
+  border-left: 4px solid #f59e0b;
+  cursor: default;
+  user-select: none;
+}
+
+.ProseMirror .standalone-comment--global {
+  background-color: #e0f2fe;
+  border-left-color: #0284c7;
+}
+
+.ProseMirror .standalone-comment--cross-section {
+  background-color: #fef3c7;
+  border-left-color: #f59e0b;
+}
+
+.ProseMirror .standalone-comment__label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #475569;
+  letter-spacing: 0.02em;
+  margin-bottom: 4px;
+}
+
+.ProseMirror .standalone-comment__sections {
+  font-size: 11px;
+  font-style: italic;
+  color: #475569;
+  margin-bottom: 6px;
+  word-break: break-word;
+}
+
+.ProseMirror .standalone-comment__body {
+  font-size: 13px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #1f2937;
+}
+
+.ProseMirror .standalone-comment.is-flash {
+  animation: comment-flash 0.35s ease-in-out 4;
+}
+
+.ProseMirror .standalone-comment.ProseMirror-selectednode {
+  outline: 2px solid #2563eb;
+  outline-offset: 1px;
+}

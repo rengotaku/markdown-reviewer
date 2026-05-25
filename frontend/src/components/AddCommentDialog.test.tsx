@@ -64,7 +64,7 @@ describe("AddCommentDialog", () => {
     );
 
     expect(screen.getByTestId("comment-target-snippet")).toHaveTextContent(
-      "(範囲が選択されていません)"
+      "(対象が指定されていません)"
     );
   });
 
@@ -105,7 +105,7 @@ describe("AddCommentDialog", () => {
     expect(submit).toBeEnabled();
   });
 
-  it("calls onSubmit with trimmed body when submit is clicked", async () => {
+  it("anchored mode: no scope radio, submits scope=inline", async () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn();
     render(
@@ -117,12 +117,120 @@ describe("AddCommentDialog", () => {
       />
     );
 
+    expect(screen.queryByTestId("comment-scope-group")).not.toBeInTheDocument();
+
     const input = screen.getByTestId("comment-body-input");
     await user.type(input, "  my comment  ");
     await user.click(screen.getByTestId("comment-submit"));
 
     expect(onSubmit).toHaveBeenCalledTimes(1);
-    expect(onSubmit).toHaveBeenCalledWith({ body: "my comment" });
+    expect(onSubmit).toHaveBeenCalledWith({ body: "my comment", scope: "inline" });
+  });
+
+  it("block mode: shows the block target, no scope radio, submits scope=block", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    render(
+      <AddCommentDialog
+        open
+        mode="block"
+        targetSnippet="The whole block paragraph contents."
+        onClose={() => {}}
+        onSubmit={onSubmit}
+      />
+    );
+
+    expect(screen.getByTestId("comment-target-snippet")).toHaveTextContent(
+      "The whole block paragraph contents."
+    );
+    expect(screen.queryByTestId("comment-scope-group")).not.toBeInTheDocument();
+
+    await user.type(screen.getByTestId("comment-body-input"), "block note");
+    await user.click(screen.getByTestId("comment-submit"));
+
+    expect(onSubmit).toHaveBeenCalledWith({
+      body: "block note",
+      scope: "block",
+    });
+  });
+
+  it("global mode: no target snippet, no scope radio, submits scope=global", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    render(
+      <AddCommentDialog
+        open
+        mode="global"
+        targetSnippet=""
+        onClose={() => {}}
+        onSubmit={onSubmit}
+      />
+    );
+
+    expect(screen.queryByTestId("comment-target-snippet")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("comment-scope-group")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("comment-sections-picker")
+    ).not.toBeInTheDocument();
+
+    await user.type(screen.getByTestId("comment-body-input"), "file-wide note");
+    await user.click(screen.getByTestId("comment-submit"));
+
+    expect(onSubmit).toHaveBeenCalledWith({
+      body: "file-wide note",
+      scope: "global",
+    });
+  });
+
+  it("cross-section mode: shows empty-state hint when no H1/H2 headings exist", () => {
+    render(
+      <AddCommentDialog
+        open
+        mode="cross-section"
+        targetSnippet=""
+        headings={[]}
+        onClose={() => {}}
+        onSubmit={() => {}}
+      />
+    );
+    expect(screen.getByTestId("comment-sections-picker")).toBeInTheDocument();
+    expect(screen.getByTestId("comment-no-headings-hint")).toBeInTheDocument();
+  });
+
+  it("cross-section mode: requires ≥1 section and submits sections[]", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    render(
+      <AddCommentDialog
+        open
+        mode="cross-section"
+        targetSnippet=""
+        headings={[
+          { level: 1, text: "Top" },
+          { level: 2, text: "Problem" },
+          { level: 2, text: "Try" },
+          { level: 2, text: "Action" },
+        ]}
+        onClose={() => {}}
+        onSubmit={onSubmit}
+      />
+    );
+
+    await user.type(screen.getByTestId("comment-body-input"), "cross note");
+
+    // Body filled but no section selected → submit still disabled.
+    expect(screen.getByTestId("comment-submit")).toBeDisabled();
+
+    await user.click(screen.getByTestId("comment-section-1")); // Problem
+    await user.click(screen.getByTestId("comment-section-2")); // Try
+    expect(screen.getByTestId("comment-submit")).toBeEnabled();
+    await user.click(screen.getByTestId("comment-submit"));
+
+    expect(onSubmit).toHaveBeenCalledWith({
+      body: "cross note",
+      scope: "cross-section",
+      sections: ["Problem", "Try"],
+    });
   });
 
   it("prefills the body input with defaultBody", () => {

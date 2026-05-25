@@ -18,6 +18,8 @@ import MenuIcon from "@mui/icons-material/Menu";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import AddCommentIcon from "@mui/icons-material/AddComment";
 import CommentIcon from "@mui/icons-material/Comment";
+import PublicIcon from "@mui/icons-material/Public";
+import HubIcon from "@mui/icons-material/Hub";
 import FormatAlignCenterIcon from "@mui/icons-material/FormatAlignCenter";
 import UnfoldMoreIcon from "@mui/icons-material/UnfoldMore";
 import { TiptapEditor } from "@/components/tiptap/TiptapEditor";
@@ -44,6 +46,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { listDir } from "@/api";
 import { generateCommentId } from "@/utils/commentId";
 import { nextVersionedPath } from "@/utils/versionedPath";
+import { collectHeadings, encodeSections } from "@/utils/headings";
 
 function basename(path: string): string {
   const idx = path.lastIndexOf("/");
@@ -128,11 +131,25 @@ export function EditorPage() {
 
   const [commentDialog, setCommentDialog] = useState<{
     open: boolean;
+    mode: "anchored" | "block" | "global" | "cross-section";
     snippet: string;
-  }>({ open: false, snippet: "" });
+    /**
+     * For block-mode submissions only. The text range to apply the
+     * scope=block comment to. Captured at the moment the drag-handle menu
+     * is invoked so it survives the dialog focus dance.
+     */
+    blockRange?: { from: number; to: number };
+    headings: ReadonlyArray<{ level: 1 | 2 | 3 | 4 | 5 | 6; text: string }>;
+  }>({ open: false, mode: "anchored", snippet: "", headings: [] });
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(
     null
   );
+  const [dragMenu, setDragMenu] = useState<{
+    x: number;
+    y: number;
+    pos: number;
+    size: number;
+  } | null>(null);
 
   // Re-render the toolbar Add-Comment button when selection / doc changes.
   const [, setSelectionTick] = useState(0);
@@ -146,6 +163,26 @@ export function EditorPage() {
       editor.off("transaction", tick);
     };
   }, [editor]);
+
+  // Drag handle right-click → block context menu. The TiptapEditor dispatches
+  // a custom "mdr:block-context-menu" event on window with pos/size of the
+  // currently hovered block; we capture it here to open the menu near the
+  // pointer.
+  useEffect(() => {
+    const onBlockMenu = (e: Event) => {
+      const detail = (e as CustomEvent).detail as {
+        x: number;
+        y: number;
+        pos: number;
+        size: number;
+      };
+      if (!detail) return;
+      setDragMenu(detail);
+    };
+    window.addEventListener("mdr:block-context-menu", onBlockMenu);
+    return () =>
+      window.removeEventListener("mdr:block-context-menu", onBlockMenu);
+  }, []);
 
   // Right-click on a non-empty selection (outside an existing comment) opens
   // our custom mini menu with "コメント追加". The editor `view` may not be
@@ -294,7 +331,70 @@ export function EditorPage() {
     const selectedText = editor.state.doc.textBetween(from, to, " ");
     setCommentDialog({
       open: true,
+      mode: "anchored",
       snippet: buildTargetSnippet(selectedText),
+      headings: [],
+    });
+  };
+
+  const closeDragMenu = () => setDragMenu(null);
+
+  const handleAddBlockCommentFromDragMenu = () => {
+    if (!editor || !dragMenu) {
+      closeDragMenu();
+      return;
+    }
+    const { pos, size } = dragMenu;
+    const node = editor.state.doc.nodeAt(pos);
+    closeDragMenu();
+    if (!node) return;
+    // Atom blocks (mermaid, standalone comments, etc.) have no inner text to
+    // wrap; refuse rather than producing an empty-target block comment.
+    if (node.isAtom) {
+      showToast("このブロックにはコメントを付けられません", "info");
+      return;
+    }
+    const from = pos + 1;
+    const to = pos + size - 1;
+    if (to <= from) {
+      showToast("空のブロックにはコメントを付けられません", "info");
+      return;
+    }
+    const blockText = editor.state.doc.textBetween(from, to, " ");
+    setCommentDialog({
+      open: true,
+      mode: "block",
+      snippet: buildTargetSnippet(blockText),
+      blockRange: { from, to },
+      headings: [],
+    });
+  };
+
+  const handleAddGlobalClick = () => {
+    if (!editor) return;
+    setCommentDialog({
+      open: true,
+      mode: "global",
+      snippet: "",
+      headings: [],
+    });
+  };
+
+  const handleAddCrossSectionClick = () => {
+    if (!editor) return;
+    const headings = collectHeadings(editor, [1, 2]);
+    if (headings.length === 0) {
+      showToast(
+        "横断コメントを付ける見出し（# / ##）が見つかりません。先に見出しを追加してください。",
+        "info"
+      );
+      return;
+    }
+    setCommentDialog({
+      open: true,
+      mode: "cross-section",
+      snippet: "",
+      headings,
     });
   };
 
@@ -305,28 +405,71 @@ export function EditorPage() {
     handleAddCommentClick();
   };
 
-  const handleCommentSubmit = ({ body }: { body: string }) => {
+  const closeCommentDialog = () =>
+    setCommentDialog({
+      open: false,
+      mode: "anchored",
+      snippet: "",
+      headings: [],
+    });
+
+  const handleCommentSubmit = ({
+    body,
+    scope,
+    sections,
+  }: {
+    body: string;
+    scope: "inline" | "block" | "cross-section" | "global";
+    sections?: string[];
+  }) => {
     if (!editor) {
-      setCommentDialog({ open: false, snippet: "" });
+      closeCommentDialog();
       return;
     }
     const id = generateCommentId();
     const date = todayISO();
     const snippet = commentDialog.snippet;
+    const blockRange = commentDialog.blockRange;
 
-    // Notion-style: mark only — don't insert the comment body into the document.
-    editor
-      .chain()
-      .focus()
-      .setComment({ id, author, date, target: snippet, body })
-      .run();
+    if (scope === "cross-section" || scope === "global") {
+      // Standalone — not anchored to text; appended as a block node.
+      const target =
+        scope === "cross-section" && sections ? encodeSections(sections) : "";
+      editor
+        .chain()
+        .focus()
+        .addStandaloneComment({ id, author, date, target, body, scope })
+        .run();
+    } else if (scope === "block" && blockRange) {
+      // Block-scope wrap: apply the comment mark to the entire block's text
+      // range captured when the drag-handle menu was opened. The selection
+      // may have moved while the dialog was up, so set it explicitly.
+      editor
+        .chain()
+        .focus()
+        .setTextSelection({ from: blockRange.from, to: blockRange.to })
+        .setComment({ id, author, date, target: snippet, body, scope: "block" })
+        .run();
+    } else {
+      // Anchored inline — wraps the current selection.
+      editor
+        .chain()
+        .focus()
+        .setComment({ id, author, date, target: snippet, body, scope: "inline" })
+        .run();
+    }
 
-    setCommentDialog({ open: false, snippet: "" });
+    closeCommentDialog();
   };
 
   const handleDeleteComment = (id: string) => {
     if (!editor) return;
-    editor.chain().focus().unsetCommentById(id).run();
+    // Try the wrapping-mark removal first; standalone comments share the same
+    // id space, so fall back to node removal if no mark was touched.
+    const removed = editor.chain().focus().unsetCommentById(id).run();
+    if (!removed) {
+      editor.chain().focus().removeStandaloneCommentById(id).run();
+    }
   };
 
   const canSave = Boolean(activeFile);
@@ -506,6 +649,34 @@ export function EditorPage() {
                 data-testid="editor-add-comment"
               >
                 コメント
+              </Button>
+            </span>
+          </Tooltip>
+          <Tooltip title="ファイル全体に向けたコメントを追加（選択不要）">
+            <span>
+              <Button
+                variant="outlined"
+                size="small"
+                startIcon={<PublicIcon />}
+                disabled={!editor}
+                onClick={handleAddGlobalClick}
+                data-testid="editor-add-global-comment"
+              >
+                全体
+              </Button>
+            </span>
+          </Tooltip>
+          <Tooltip title="複数の見出しに紐付ける横断コメントを追加">
+            <span>
+              <Button
+                variant="outlined"
+                size="small"
+                startIcon={<HubIcon />}
+                disabled={!editor}
+                onClick={handleAddCrossSectionClick}
+                data-testid="editor-add-cross-section-comment"
+              >
+                横断
               </Button>
             </span>
           </Tooltip>
@@ -700,10 +871,36 @@ export function EditorPage() {
         </MenuItem>
       </Menu>
 
+      <Menu
+        open={!!dragMenu}
+        onClose={closeDragMenu}
+        anchorReference="anchorPosition"
+        anchorPosition={
+          dragMenu ? { top: dragMenu.y, left: dragMenu.x } : undefined
+        }
+        slotProps={{
+          root: {
+            "data-testid": "editor-block-context-menu",
+          } as Record<string, unknown>,
+        }}
+      >
+        <MenuItem
+          onClick={handleAddBlockCommentFromDragMenu}
+          data-testid="ctx-add-block-comment"
+        >
+          <ListItemIcon>
+            <AddCommentIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText>ブロックにコメント追加</ListItemText>
+        </MenuItem>
+      </Menu>
+
       <AddCommentDialog
         open={commentDialog.open}
+        mode={commentDialog.mode}
         targetSnippet={commentDialog.snippet}
-        onClose={() => setCommentDialog({ open: false, snippet: "" })}
+        headings={commentDialog.headings}
+        onClose={closeCommentDialog}
         onSubmit={handleCommentSubmit}
       />
 

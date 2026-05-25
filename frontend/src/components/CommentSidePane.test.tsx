@@ -51,6 +51,7 @@ const sampleComment = (
   date: "2026-05-20",
   target: "selected text",
   body: `body of ${id}`,
+  scope: "inline",
   from: 1,
   to: 10,
   ...overrides,
@@ -185,6 +186,35 @@ describe("CommentSidePane", () => {
     mark.classList.remove("is-flash");
     await user.keyboard(" ");
     expect(mark.classList.contains("is-flash")).toBe(true);
+  });
+
+  it("renders the section list for a cross-section comment via decodeSections", () => {
+    const editor = makeFakeEditor([
+      sampleComment("x1", {
+        scope: "cross-section",
+        target: "Problem\nTry\nAction",
+        body: "連動で書き直し",
+      }),
+    ]);
+    render(<CommentSidePane editor={asEditor(editor)} onDelete={() => {}} />);
+    expect(screen.getByTestId("comment-sections-x1")).toHaveTextContent(
+      "対象: Problem / Try / Action"
+    );
+  });
+
+  it("renders a scope badge for non-inline comments and omits it for inline ones", () => {
+    const editor = makeFakeEditor([
+      sampleComment("c1"),
+      sampleComment("c2", { scope: "global", target: "" }),
+      sampleComment("c3", { scope: "cross-section", target: "" }),
+    ]);
+    render(<CommentSidePane editor={asEditor(editor)} onDelete={() => {}} />);
+
+    expect(screen.queryByTestId("comment-scope-inline")).not.toBeInTheDocument();
+    expect(screen.getByTestId("comment-scope-global")).toBeInTheDocument();
+    expect(
+      screen.getByTestId("comment-scope-cross-section")
+    ).toBeInTheDocument();
   });
 
   it("highlights the row matching activeId via action.selected background", () => {
