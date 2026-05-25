@@ -64,7 +64,7 @@ describe("AddCommentDialog", () => {
     );
 
     expect(screen.getByTestId("comment-target-snippet")).toHaveTextContent(
-      "(範囲が選択されていません)"
+      "(対象が指定されていません)"
     );
   });
 
@@ -105,7 +105,7 @@ describe("AddCommentDialog", () => {
     expect(submit).toBeEnabled();
   });
 
-  it("calls onSubmit with trimmed body and default scope=inline when submit is clicked", async () => {
+  it("anchored mode: no scope radio, submits scope=inline", async () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn();
     render(
@@ -116,6 +116,8 @@ describe("AddCommentDialog", () => {
         onSubmit={onSubmit}
       />
     );
+
+    expect(screen.queryByTestId("comment-scope-group")).not.toBeInTheDocument();
 
     const input = screen.getByTestId("comment-body-input");
     await user.type(input, "  my comment  ");
@@ -125,23 +127,31 @@ describe("AddCommentDialog", () => {
     expect(onSubmit).toHaveBeenCalledWith({ body: "my comment", scope: "inline" });
   });
 
-  it("submits scope=block when the block radio is selected", async () => {
+  it("block mode: shows the block target, no scope radio, submits scope=block", async () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn();
     render(
       <AddCommentDialog
         open
-        targetSnippet="snip"
+        mode="block"
+        targetSnippet="The whole block paragraph contents."
         onClose={() => {}}
         onSubmit={onSubmit}
       />
     );
 
-    await user.type(screen.getByTestId("comment-body-input"), "para note");
-    await user.click(screen.getByTestId("comment-scope-radio-block"));
+    expect(screen.getByTestId("comment-target-snippet")).toHaveTextContent(
+      "The whole block paragraph contents."
+    );
+    expect(screen.queryByTestId("comment-scope-group")).not.toBeInTheDocument();
+
+    await user.type(screen.getByTestId("comment-body-input"), "block note");
     await user.click(screen.getByTestId("comment-submit"));
 
-    expect(onSubmit).toHaveBeenCalledWith({ body: "para note", scope: "block" });
+    expect(onSubmit).toHaveBeenCalledWith({
+      body: "block note",
+      scope: "block",
+    });
   });
 
   it("global mode: no target snippet, no scope radio, submits scope=global", async () => {
