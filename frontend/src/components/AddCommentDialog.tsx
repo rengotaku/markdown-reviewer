@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import Dialog from "@mui/material/Dialog";
 import DialogTitle from "@mui/material/DialogTitle";
 import DialogContent from "@mui/material/DialogContent";
@@ -8,9 +8,11 @@ import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
 import Box from "@mui/material/Box";
 import FormControl from "@mui/material/FormControl";
+import FormGroup from "@mui/material/FormGroup";
 import RadioGroup from "@mui/material/RadioGroup";
 import FormControlLabel from "@mui/material/FormControlLabel";
 import Radio from "@mui/material/Radio";
+import Checkbox from "@mui/material/Checkbox";
 
 export type CommentDialogMode = "anchored" | "standalone";
 
@@ -20,27 +22,37 @@ export type CommentDialogScope =
   | "cross-section"
   | "global";
 
-const ANCHORED_SCOPES: ReadonlyArray<{
+export interface DialogHeading {
+  level: 1 | 2 | 3 | 4 | 5 | 6;
+  text: string;
+}
+
+interface ScopeChoice {
   value: CommentDialogScope;
   label: string;
   hint: string;
-}> = [
+}
+
+const ANCHORED_SCOPES: ReadonlyArray<ScopeChoice> = [
   { value: "inline", label: "inline", hint: "選択範囲だけに紐付ける（デフォルト）" },
   { value: "block", label: "block", hint: "段落単位の指摘" },
 ];
 
-const STANDALONE_SCOPES: ReadonlyArray<{
-  value: CommentDialogScope;
-  label: string;
-  hint: string;
-}> = [
+const STANDALONE_SCOPES: ReadonlyArray<ScopeChoice> = [
   { value: "global", label: "global", hint: "ファイル全体への指摘" },
   {
     value: "cross-section",
     label: "cross-section",
-    hint: "複数セクションに波及する指摘",
+    hint: "複数の見出しに波及する指摘",
   },
 ];
+
+export interface CommentDialogSubmit {
+  body: string;
+  scope: CommentDialogScope;
+  /** Selected H1/H2 titles when scope = "cross-section". */
+  sections?: string[];
+}
 
 interface Props {
   open: boolean;
@@ -48,15 +60,15 @@ interface Props {
   targetSnippet: string;
   defaultBody?: string;
   defaultScope?: CommentDialogScope;
+  /** H1/H2 headings of the current document; required for cross-section. */
+  headings?: ReadonlyArray<DialogHeading>;
   onClose: () => void;
-  onSubmit: (input: { body: string; scope: CommentDialogScope }) => void;
+  onSubmit: (input: CommentDialogSubmit) => void;
 }
 
 const SNIPPET_LIMIT = 80;
 
 export function AddCommentDialog(props: Props) {
-  // Re-mount the form whenever the dialog re-opens so state resets cleanly
-  // without an effect-driven setState.
   return (
     <Dialog open={props.open} onClose={props.onClose} fullWidth maxWidth="sm">
       {props.open ? <DialogBody {...props} /> : null}
@@ -69,10 +81,25 @@ function DialogBody({
   targetSnippet,
   defaultBody,
   defaultScope,
+  headings,
   onClose,
   onSubmit,
 }: Props) {
-  const choices = mode === "standalone" ? STANDALONE_SCOPES : ANCHORED_SCOPES;
+  const availableHeadings = useMemo(
+    () => (headings ?? []).filter((h) => h.text.length > 0),
+    [headings]
+  );
+  const hasHeadings = availableHeadings.length > 0;
+
+  const baseChoices = mode === "standalone" ? STANDALONE_SCOPES : ANCHORED_SCOPES;
+  // Drop cross-section when the document has no H1/H2 headings to bind to.
+  const choices = useMemo(
+    () =>
+      baseChoices.filter(
+        (c) => c.value !== "cross-section" || hasHeadings || mode !== "standalone"
+      ),
+    [baseChoices, hasHeadings, mode]
+  );
   const initialScope: CommentDialogScope =
     defaultScope && choices.some((c) => c.value === defaultScope)
       ? defaultScope
@@ -80,16 +107,29 @@ function DialogBody({
 
   const [body, setBody] = useState(defaultBody ?? "");
   const [scope, setScope] = useState<CommentDialogScope>(initialScope);
+  const [selectedSections, setSelectedSections] = useState<string[]>([]);
 
   const trimmed = body.trim();
-  const canSubmit = trimmed.length > 0;
+  const needsSections = mode === "standalone" && scope === "cross-section";
+  const canSubmit =
+    trimmed.length > 0 && (!needsSections || selectedSections.length > 0);
   const snippetPreview = targetSnippet.length
     ? truncate(targetSnippet, SNIPPET_LIMIT)
     : "(範囲が選択されていません)";
 
+  const toggleSection = (text: string) => {
+    setSelectedSections((prev) =>
+      prev.includes(text) ? prev.filter((t) => t !== text) : [...prev, text]
+    );
+  };
+
   const submit = () => {
     if (!canSubmit) return;
-    onSubmit({ body: trimmed, scope });
+    if (needsSections) {
+      onSubmit({ body: trimmed, scope, sections: selectedSections });
+    } else {
+      onSubmit({ body: trimmed, scope });
+    }
   };
 
   return (
@@ -136,7 +176,6 @@ function DialogBody({
                   <Radio
                     size="small"
                     inputProps={{
-                      // Per-option test hook for picking a specific scope.
                       "data-testid": `comment-scope-radio-${c.value}`,
                     } as React.InputHTMLAttributes<HTMLInputElement>}
                   />
@@ -158,7 +197,73 @@ function DialogBody({
               />
             ))}
           </RadioGroup>
+          {mode === "standalone" && !hasHeadings && (
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              sx={{ mt: 0.5, display: "block" }}
+              data-testid="comment-no-headings-hint"
+            >
+              `# ` または `## ` 見出しが無いため `cross-section` は選べません
+            </Typography>
+          )}
         </FormControl>
+        {needsSections && (
+          <Box sx={{ mb: 2 }} data-testid="comment-sections-picker">
+            <Typography variant="caption" color="text.secondary" sx={{ mb: 0.5 }}>
+              対象の見出し（1 つ以上選んでください）
+            </Typography>
+            <FormGroup
+              sx={{
+                maxHeight: 220,
+                overflow: "auto",
+                border: "1px solid",
+                borderColor: "divider",
+                borderRadius: 1,
+                px: 1,
+                py: 0.5,
+              }}
+            >
+              {availableHeadings.map((h, idx) => {
+                const id = `comment-section-${idx}`;
+                const checked = selectedSections.includes(h.text);
+                return (
+                  <FormControlLabel
+                    key={`${h.level}:${h.text}:${idx}`}
+                    sx={{ py: 0 }}
+                    control={
+                      <Checkbox
+                        size="small"
+                        checked={checked}
+                        onChange={() => toggleSection(h.text)}
+                        inputProps={{
+                          "data-testid": id,
+                          // Make the checkbox state easy to assert in tests.
+                          "aria-label": h.text,
+                        } as React.InputHTMLAttributes<HTMLInputElement>}
+                      />
+                    }
+                    label={
+                      <Typography
+                        variant="body2"
+                        sx={{
+                          fontFamily: "monospace",
+                          fontSize: "0.8125rem",
+                          // Mark H1 vs H2 visually.
+                          fontWeight: h.level === 1 ? 600 : 400,
+                          color:
+                            h.level === 1 ? "text.primary" : "text.secondary",
+                        }}
+                      >
+                        {"#".repeat(h.level)} {h.text}
+                      </Typography>
+                    }
+                  />
+                );
+              })}
+            </FormGroup>
+          </Box>
+        )}
         <TextField
           label="コメント本文"
           value={body}

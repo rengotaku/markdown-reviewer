@@ -8,6 +8,7 @@ import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import CommentsDisabledIcon from "@mui/icons-material/CommentsDisabled";
 import Chip from "@mui/material/Chip";
 import { collectComments, type CollectedComment } from "@/utils/collectComments";
+import { decodeSections } from "@/utils/headings";
 
 const SCOPE_BADGE: Record<string, { label: string; color: string }> = {
   block: { label: "block", color: "#fff8c5" },
@@ -209,7 +210,20 @@ export function CommentSidePane({ editor, onDelete, onClose, activeId }: Props) 
                   </IconButton>
                 </Tooltip>
               </Box>
-              {c.target && (
+              {c.target && c.scope === "cross-section" ? (
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  sx={{
+                    display: "block",
+                    fontStyle: "italic",
+                    wordBreak: "break-word",
+                  }}
+                  data-testid={`comment-sections-${c.id}`}
+                >
+                  対象: {decodeSections(c.target).join(" / ")}
+                </Typography>
+              ) : c.target ? (
                 <Typography
                   variant="caption"
                   color="text.secondary"
@@ -223,7 +237,7 @@ export function CommentSidePane({ editor, onDelete, onClose, activeId }: Props) 
                 >
                   対象: {c.target}
                 </Typography>
-              )}
+              ) : null}
               <Typography
                 variant="body2"
                 sx={{

@@ -169,7 +169,24 @@ describe("AddCommentDialog", () => {
     });
   });
 
-  it("allows switching to cross-section in standalone mode", async () => {
+  it("hides cross-section in standalone mode when no H1/H2 headings exist", () => {
+    render(
+      <AddCommentDialog
+        open
+        mode="standalone"
+        targetSnippet=""
+        headings={[]}
+        onClose={() => {}}
+        onSubmit={() => {}}
+      />
+    );
+    expect(
+      screen.queryByTestId("comment-scope-radio-cross-section")
+    ).not.toBeInTheDocument();
+    expect(screen.getByTestId("comment-no-headings-hint")).toBeInTheDocument();
+  });
+
+  it("requires at least one section selected for cross-section and submits sections[]", async () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn();
     render(
@@ -177,6 +194,12 @@ describe("AddCommentDialog", () => {
         open
         mode="standalone"
         targetSnippet=""
+        headings={[
+          { level: 1, text: "Top" },
+          { level: 2, text: "Problem" },
+          { level: 2, text: "Try" },
+          { level: 2, text: "Action" },
+        ]}
         onClose={() => {}}
         onSubmit={onSubmit}
       />
@@ -184,11 +207,42 @@ describe("AddCommentDialog", () => {
 
     await user.click(screen.getByTestId("comment-scope-radio-cross-section"));
     await user.type(screen.getByTestId("comment-body-input"), "cross note");
+
+    // Body filled but no section selected → submit still disabled.
+    expect(screen.getByTestId("comment-submit")).toBeDisabled();
+
+    await user.click(screen.getByTestId("comment-section-1")); // Problem
+    await user.click(screen.getByTestId("comment-section-2")); // Try
+    expect(screen.getByTestId("comment-submit")).toBeEnabled();
     await user.click(screen.getByTestId("comment-submit"));
 
     expect(onSubmit).toHaveBeenCalledWith({
       body: "cross note",
       scope: "cross-section",
+      sections: ["Problem", "Try"],
+    });
+  });
+
+  it("global submission omits sections even when standalone mode is active", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    render(
+      <AddCommentDialog
+        open
+        mode="standalone"
+        targetSnippet=""
+        headings={[{ level: 1, text: "Top" }]}
+        onClose={() => {}}
+        onSubmit={onSubmit}
+      />
+    );
+
+    await user.type(screen.getByTestId("comment-body-input"), "file note");
+    await user.click(screen.getByTestId("comment-submit"));
+
+    expect(onSubmit).toHaveBeenCalledWith({
+      body: "file note",
+      scope: "global",
     });
   });
 

@@ -44,7 +44,7 @@ export function collectComments(editor: Editor | null): CollectedComment[] {
         id,
         author: (node.attrs.author as string | null) ?? "",
         date: (node.attrs.date as string | null) ?? "",
-        target: "",
+        target: (node.attrs.target as string | null) ?? "",
         body: (node.attrs.body as string | null) ?? "",
         scope: normalizeScope(node.attrs.scope as string | null),
         from: pos,

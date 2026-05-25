@@ -121,7 +121,7 @@ describe("buildCommentAttrs scope emission", () => {
 });
 
 describe("buildStandaloneCommentAttrs", () => {
-  it("omits target, always emits scope, and round-trips through parse", () => {
+  it("omits target by default and round-trips through parse", () => {
     const attrs = {
       id: "g1",
       author: "k",
@@ -132,6 +132,20 @@ describe("buildStandaloneCommentAttrs", () => {
     const built = buildStandaloneCommentAttrs(attrs);
     expect(built).not.toContain("target=");
     expect(built).toContain('scope="global"');
+    expect(parseCommentAttrs(built)).toEqual(attrs);
+  });
+
+  it("includes target when bound to specific sections (cross-section)", () => {
+    const attrs = {
+      id: "x1",
+      author: "k",
+      date: "2026-05-25",
+      target: "Problem\nTry\nAction",
+      body: "連動で書き直し",
+      scope: "cross-section",
+    };
+    const built = buildStandaloneCommentAttrs(attrs);
+    expect(built).toContain('target="Problem\\nTry\\nAction"');
     expect(parseCommentAttrs(built)).toEqual(attrs);
   });
 });

@@ -281,6 +281,14 @@
   margin-bottom: 4px;
 }
 
+.ProseMirror .standalone-comment__sections {
+  font-size: 11px;
+  font-style: italic;
+  color: #475569;
+  margin-bottom: 6px;
+  word-break: break-word;
+}
+
 .ProseMirror .standalone-comment__body {
   font-size: 13px;
   white-space: pre-wrap;

@@ -10,6 +10,11 @@ export interface StandaloneCommentAttributes {
   id: string;
   author: string;
   date: string;
+  /**
+   * Newline-joined list of bound section titles for `scope="cross-section"`.
+   * Empty for `scope="global"`. See `encodeSections` in `utils/headings.ts`.
+   */
+  target?: string;
   body: string;
   /** Must be one of the standalone scopes ("cross-section" | "global"). */
   scope: string;
@@ -58,6 +63,7 @@ export const StandaloneCommentNode = Node.create({
       id: { default: "" },
       author: { default: "" },
       date: { default: "" },
+      target: { default: "" },
       body: { default: "" },
       scope: { default: "global" },
     };
@@ -75,6 +81,7 @@ export const StandaloneCommentNode = Node.create({
             id: el.getAttribute("data-comment-id") ?? "",
             author: el.getAttribute("data-comment-author") ?? "",
             date: el.getAttribute("data-comment-date") ?? "",
+            target: el.getAttribute("data-comment-target") ?? "",
             body: el.getAttribute("data-comment-body") ?? "",
             scope,
           };
@@ -85,7 +92,31 @@ export const StandaloneCommentNode = Node.create({
 
   renderHTML({ HTMLAttributes, node }) {
     const scope = String(HTMLAttributes.scope ?? DEFAULT_COMMENT_SCOPE);
-    const body = String(HTMLAttributes.body ?? "");
+    const body = String(node.attrs.body ?? HTMLAttributes.body ?? "");
+    const target = String(node.attrs.target ?? HTMLAttributes.target ?? "");
+    const children: Array<unknown> = [
+      [
+        "div",
+        { class: "standalone-comment__label" },
+        scopeLabel(scope),
+      ],
+    ];
+    if (scope === "cross-section" && target) {
+      const sections = target
+        .split("\n")
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0);
+      children.push([
+        "div",
+        { class: "standalone-comment__sections" },
+        `対象: ${sections.join(" / ")}`,
+      ]);
+    }
+    children.push([
+      "div",
+      { class: "standalone-comment__body" },
+      body,
+    ]);
     return [
       "div",
       mergeAttributes(
@@ -94,6 +125,7 @@ export const StandaloneCommentNode = Node.create({
           "data-comment-id": HTMLAttributes.id ?? "",
           "data-comment-author": HTMLAttributes.author ?? "",
           "data-comment-date": HTMLAttributes.date ?? "",
+          "data-comment-target": target,
           "data-comment-body": body,
           "data-comment-scope": scope,
           class: `standalone-comment standalone-comment--${scope}`,
@@ -101,19 +133,7 @@ export const StandaloneCommentNode = Node.create({
         },
         {}
       ),
-      [
-        "div",
-        { class: "standalone-comment__label" },
-        scopeLabel(scope),
-      ],
-      [
-        "div",
-        { class: "standalone-comment__body" },
-        // Use the live attribute (renderHTML is called with HTMLAttributes
-        // sourced from the node attrs, so this stays in sync) — and prefer
-        // node.attrs for the actual text content so multi-line bodies render.
-        String(node.attrs.body ?? body),
-      ],
+      ...children,
     ];
   },
 
@@ -131,6 +151,7 @@ export const StandaloneCommentNode = Node.create({
             id: node.attrs.id ?? "",
             author: node.attrs.author ?? "",
             date: node.attrs.date ?? "",
+            target: node.attrs.target ?? "",
             body: node.attrs.body ?? "",
             scope: normalizeScope(node.attrs.scope),
           });
@@ -158,6 +179,7 @@ export const StandaloneCommentNode = Node.create({
               id: attrs.id,
               author: attrs.author,
               date: attrs.date,
+              target: attrs.target ?? "",
               body: attrs.body,
               scope: normalizeScope(attrs.scope),
             },

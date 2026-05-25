@@ -45,6 +45,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { listDir } from "@/api";
 import { generateCommentId } from "@/utils/commentId";
 import { nextVersionedPath } from "@/utils/versionedPath";
+import { collectHeadings, encodeSections } from "@/utils/headings";
 
 function basename(path: string): string {
   const idx = path.lastIndexOf("/");
@@ -131,7 +132,8 @@ export function EditorPage() {
     open: boolean;
     mode: "anchored" | "standalone";
     snippet: string;
-  }>({ open: false, mode: "anchored", snippet: "" });
+    headings: ReadonlyArray<{ level: 1 | 2 | 3 | 4 | 5 | 6; text: string }>;
+  }>({ open: false, mode: "anchored", snippet: "", headings: [] });
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(
     null
   );
@@ -298,6 +300,7 @@ export function EditorPage() {
       open: true,
       mode: "anchored",
       snippet: buildTargetSnippet(selectedText),
+      headings: [],
     });
   };
 
@@ -307,6 +310,7 @@ export function EditorPage() {
       open: true,
       mode: "standalone",
       snippet: "",
+      headings: collectHeadings(editor, [1, 2]),
     });
   };
 
@@ -318,14 +322,16 @@ export function EditorPage() {
   };
 
   const closeCommentDialog = () =>
-    setCommentDialog({ open: false, mode: "anchored", snippet: "" });
+    setCommentDialog({ open: false, mode: "anchored", snippet: "", headings: [] });
 
   const handleCommentSubmit = ({
     body,
     scope,
+    sections,
   }: {
     body: string;
     scope: "inline" | "block" | "cross-section" | "global";
+    sections?: string[];
   }) => {
     if (!editor) {
       closeCommentDialog();
@@ -337,10 +343,12 @@ export function EditorPage() {
 
     if (scope === "cross-section" || scope === "global") {
       // Standalone — not anchored to text; appended as a block node.
+      const target =
+        scope === "cross-section" && sections ? encodeSections(sections) : "";
       editor
         .chain()
         .focus()
-        .addStandaloneComment({ id, author, date, body, scope })
+        .addStandaloneComment({ id, author, date, target, body, scope })
         .run();
     } else {
       // Anchored — wraps the current selection.
@@ -753,6 +761,7 @@ export function EditorPage() {
         open={commentDialog.open}
         mode={commentDialog.mode}
         targetSnippet={commentDialog.snippet}
+        headings={commentDialog.headings}
         onClose={closeCommentDialog}
         onSubmit={handleCommentSubmit}
       />
