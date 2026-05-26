@@ -31,7 +31,6 @@ interface SidebarProps {
 
 const INDENT_PX = 12;
 const FILTER_PARAM = "filter";
-const SELECT_FILE_PARAM = "select_file";
 
 interface EntryContextMenuState {
   x: number;
@@ -82,9 +81,6 @@ export function Sidebar({ activePath, onSelect }: SidebarProps) {
         const next = new URLSearchParams(prev);
         if (value) next.set(FILTER_PARAM, value);
         else next.delete(FILTER_PARAM);
-        // select_file is a one-shot deeplink — once the user starts navigating
-        // via the filter, drop it so the URL reflects the new intent.
-        next.delete(SELECT_FILE_PARAM);
         return next;
       },
       { replace: true }
