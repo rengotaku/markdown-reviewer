@@ -837,7 +837,23 @@ export function EditorPage() {
         </Tabs>
 
         <Box sx={{ flex: 1, minHeight: 0 }}>
-          <TiptapEditor />
+          {activeFile ? (
+            <TiptapEditor />
+          ) : (
+            <Box
+              sx={{
+                height: "100%",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+              data-testid="editor-empty-state"
+            >
+              <Typography variant="body1" color="text.secondary">
+                ファイルを選択
+              </Typography>
+            </Box>
+          )}
         </Box>
       </Box>
 

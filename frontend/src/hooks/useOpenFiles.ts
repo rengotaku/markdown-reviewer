@@ -126,13 +126,11 @@ const safeLocalStorage: StateStorage = {
   },
 };
 
-const initialUntitled = buildUntitledFile(new Set());
-
 export const useOpenFiles = create<OpenFilesState>()(
   persist(
     (set) => ({
-      files: [initialUntitled],
-      activeId: initialUntitled.id,
+      files: [],
+      activeId: null,
 
       addFiles: (incoming) =>
         set((state) => {
@@ -203,8 +201,7 @@ export const useOpenFiles = create<OpenFilesState>()(
           if (index === -1) return state;
           const remaining = state.files.filter((file) => file.id !== id);
           if (remaining.length === 0) {
-            const fresh = buildUntitledFile(new Set());
-            return { files: [fresh], activeId: fresh.id };
+            return { files: [], activeId: null };
           }
           let activeId = state.activeId;
           if (state.activeId === id) {
@@ -215,10 +212,7 @@ export const useOpenFiles = create<OpenFilesState>()(
         }),
 
       closeAll: () =>
-        set(() => {
-          const fresh = buildUntitledFile(new Set());
-          return { files: [fresh], activeId: fresh.id };
-        }),
+        set(() => ({ files: [], activeId: null })),
 
       createUntitled: () =>
         set((state) => {
@@ -327,9 +321,7 @@ export const useOpenFiles = create<OpenFilesState>()(
       onRehydrateStorage: () => (state) => {
         if (!state) return;
         if (state.files.length === 0) {
-          const fresh = buildUntitledFile(new Set());
-          state.files = [fresh];
-          state.activeId = fresh.id;
+          state.activeId = null;
           return;
         }
         state.files = state.files.map((f) => ({

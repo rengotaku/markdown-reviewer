@@ -87,15 +87,13 @@ describe("useOpenFiles", () => {
     expect(state.files).toHaveLength(1);
   });
 
-  it("auto-creates an untitled file when closing the last open file", () => {
+  it("closing the last open file leaves the store empty and unselected", () => {
     useOpenFiles.getState().addFiles([{ name: "a.md", markdown: "# A" }]);
     const id = useOpenFiles.getState().files[0].id;
     useOpenFiles.getState().closeFile(id);
     const state = useOpenFiles.getState();
-    expect(state.files).toHaveLength(1);
-    expect(state.files[0].name).toBe("untitled.md");
-    expect(state.files[0].markdown).toBe("");
-    expect(state.activeId).toBe(state.files[0].id);
+    expect(state.files).toEqual([]);
+    expect(state.activeId).toBeNull();
   });
 
   it("overwriteFiles replaces markdown by name, resets dirty, bumps reloadToken", () => {
@@ -151,16 +149,15 @@ describe("useOpenFiles", () => {
     expect(state.files[0].markdown).toBe("# A");
   });
 
-  it("closeAll replaces all files with a fresh untitled file", () => {
+  it("closeAll empties the store and clears the active id", () => {
     useOpenFiles.getState().addFiles([
       { name: "a.md", markdown: "# A" },
       { name: "b.md", markdown: "# B" },
     ]);
     useOpenFiles.getState().closeAll();
     const state = useOpenFiles.getState();
-    expect(state.files).toHaveLength(1);
-    expect(state.files[0].name).toBe("untitled.md");
-    expect(state.activeId).toBe(state.files[0].id);
+    expect(state.files).toEqual([]);
+    expect(state.activeId).toBeNull();
   });
 
   it("createUntitled appends untitled.md and activates it", () => {
