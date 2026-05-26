@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import { EditorPage } from "./EditorPage";
 import { useOpenFiles } from "@/hooks/useOpenFiles";
 import { useToast } from "@/hooks/useToast";
@@ -12,6 +12,12 @@ vi.mock("@/components/tiptap/TiptapEditor", () => ({
   TiptapEditor: () => <div data-testid="tiptap-editor" />,
 }));
 
+/** Renders the URL search string so tests can assert URL state via the DOM. */
+function LocationProbe() {
+  const loc = useLocation();
+  return <span data-testid="loc-search">{loc.search}</span>;
+}
+
 function renderPage(initialPath = "/") {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -20,6 +26,7 @@ function renderPage(initialPath = "/") {
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={[initialPath]}>
         <EditorPage />
+        <LocationProbe />
       </MemoryRouter>
     </QueryClientProvider>
   );
@@ -33,9 +40,12 @@ describe("EditorPage", () => {
     useConfirm.setState({ pending: null });
   });
 
-  it("renders the TiptapEditor inside the layout", () => {
+  it("shows the empty-state placeholder when no file is active", () => {
     renderPage();
-    expect(screen.getByTestId("tiptap-editor")).toBeInTheDocument();
+    expect(screen.getByTestId("editor-empty-state")).toHaveTextContent(
+      "ファイルを選択"
+    );
+    expect(screen.queryByTestId("tiptap-editor")).not.toBeInTheDocument();
   });
 
   it("shows the top-level file tree once /api/dirs resolves", async () => {
@@ -43,6 +53,80 @@ describe("EditorPage", () => {
     await waitFor(() =>
       expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
     );
+  });
+
+  it("mounts the TiptapEditor once a file becomes active", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
+    );
+    await user.click(screen.getByTestId("sidebar-file-README.md"));
+    await waitFor(() =>
+      expect(screen.getByTestId("tiptap-editor")).toBeInTheDocument()
+    );
+    expect(screen.queryByTestId("editor-empty-state")).not.toBeInTheDocument();
+  });
+
+  it("opens the file specified by ?select_file=... on mount", async () => {
+    renderPage("/?select_file=docs/intro.md");
+
+    await waitFor(() => {
+      expect(screen.getByTestId("editor-active-path")).toHaveTextContent(
+        "docs/intro.md"
+      );
+    });
+    const opened = useOpenFiles
+      .getState()
+      .files.find((f) => f.path === "docs/intro.md");
+    expect(opened).toBeDefined();
+  });
+
+  it("syncs the active tab path to the URL's select_file param", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    // Open README.md — URL should pick it up as select_file.
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
+    );
+    await user.click(screen.getByTestId("sidebar-file-README.md"));
+    await waitFor(() => {
+      const params = new URLSearchParams(
+        screen.getByTestId("loc-search").textContent ?? ""
+      );
+      expect(params.get("select_file")).toBe("README.md");
+    });
+
+    // Open a second file via the sidebar and ensure the URL switches to it.
+    await user.click(screen.getByTestId("sidebar-dir-docs"));
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-file-docs/intro.md")).toBeInTheDocument()
+    );
+    await user.click(screen.getByTestId("sidebar-file-docs/intro.md"));
+    await waitFor(() => {
+      const search = screen.getByTestId("loc-search").textContent ?? "";
+      const params = new URLSearchParams(search);
+      expect(params.get("select_file")).toBe("docs/intro.md");
+    });
+  });
+
+  it("preserves an unrelated query param (filter) while syncing select_file", async () => {
+    const user = userEvent.setup();
+    renderPage("/?filter=docs");
+
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
+    );
+    await user.click(screen.getByTestId("sidebar-file-README.md"));
+
+    await waitFor(() => {
+      const params = new URLSearchParams(
+        screen.getByTestId("loc-search").textContent ?? ""
+      );
+      expect(params.get("filter")).toBe("docs");
+      expect(params.get("select_file")).toBe("README.md");
+    });
   });
 
   it("opens a server file when clicked and shows its path in the header", async () => {
@@ -228,6 +312,65 @@ describe("EditorPage", () => {
     expect(screen.getByTestId("editor-active-path")).toHaveTextContent(
       "ファイルが選択されていません"
     );
+  });
+
+  it("switches active file via tab click and closes a tab via the close button", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    // Open two files via the sidebar.
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
+    );
+    await user.click(screen.getByTestId("sidebar-file-README.md"));
+    await user.click(screen.getByTestId("sidebar-dir-docs"));
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-file-docs/intro.md")).toBeInTheDocument()
+    );
+    await user.click(screen.getByTestId("sidebar-file-docs/intro.md"));
+    await waitFor(() =>
+      expect(useOpenFiles.getState().files).toHaveLength(2)
+    );
+
+    // Tab click switches the active file (covers Tabs onChange).
+    await user.click(screen.getByTestId("editor-tab-README.md"));
+    await waitFor(() =>
+      expect(screen.getByTestId("editor-active-path")).toHaveTextContent("README.md")
+    );
+
+    // Close the inactive tab via its close icon — active stays on README.md.
+    await user.click(screen.getByTestId("editor-tab-close-docs/intro.md"));
+    await waitFor(() =>
+      expect(useOpenFiles.getState().files).toHaveLength(1)
+    );
+    expect(useOpenFiles.getState().files[0].path).toBe("README.md");
+
+    // Close the last tab → store goes empty and editor shows the placeholder.
+    await user.click(screen.getByTestId("editor-tab-close-README.md"));
+    await waitFor(() =>
+      expect(screen.getByTestId("editor-empty-state")).toBeInTheDocument()
+    );
+    expect(useOpenFiles.getState().files).toEqual([]);
+    expect(useOpenFiles.getState().activeId).toBeNull();
+  });
+
+  it("shows an error toast and stays on the empty state when select_file points to a missing path", async () => {
+    const { http, HttpResponse } = await import("msw");
+    const { server } = await import("@/test/mocks/server");
+    server.use(
+      http.get("http://localhost:8080/api/files/*", () =>
+        HttpResponse.json({ error: "not found" }, { status: 404 })
+      )
+    );
+
+    renderPage("/?select_file=missing.md");
+
+    await waitFor(() => {
+      const toasts = useToast.getState().toasts;
+      expect(toasts.some((t) => t.severity === "error")).toBe(true);
+    });
+    expect(screen.getByTestId("editor-empty-state")).toBeInTheDocument();
+    expect(useOpenFiles.getState().activeId).toBeNull();
   });
 
   it("save shows an error toast when the API fails", async () => {

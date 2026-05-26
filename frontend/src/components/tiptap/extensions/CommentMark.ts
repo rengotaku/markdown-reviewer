@@ -10,7 +10,6 @@ export interface CommentAttributes {
   id: string;
   author: string;
   date: string;
-  target: string;
   body: string;
   /**
    * Comment scope. Defaults to "inline". Only "inline" / "block" make sense
@@ -41,7 +40,6 @@ export const CommentMark = Mark.create({
       id: { default: null },
       author: { default: null },
       date: { default: null },
-      target: { default: null },
       body: { default: null },
       scope: { default: DEFAULT_COMMENT_SCOPE },
     };
@@ -57,7 +55,6 @@ export const CommentMark = Mark.create({
             id: el.getAttribute("data-comment-id"),
             author: el.getAttribute("data-comment-author"),
             date: el.getAttribute("data-comment-date"),
-            target: el.getAttribute("data-comment-target"),
             body: el.getAttribute("data-comment-body"),
             scope: normalizeScope(el.getAttribute("data-comment-scope")),
           };
@@ -74,7 +71,6 @@ export const CommentMark = Mark.create({
           "data-comment-id": HTMLAttributes.id ?? "",
           "data-comment-author": HTMLAttributes.author ?? "",
           "data-comment-date": HTMLAttributes.date ?? "",
-          "data-comment-target": HTMLAttributes.target ?? "",
           "data-comment-body": HTMLAttributes.body ?? "",
           "data-comment-scope": HTMLAttributes.scope ?? DEFAULT_COMMENT_SCOPE,
           class: "comment-mark",
@@ -95,7 +91,6 @@ export const CommentMark = Mark.create({
               id: mark.attrs.id ?? "",
               author: mark.attrs.author ?? "",
               date: mark.attrs.date ?? "",
-              target: mark.attrs.target ?? "",
               body: mark.attrs.body ?? "",
               scope: mark.attrs.scope ?? "",
             });

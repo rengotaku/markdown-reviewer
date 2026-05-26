@@ -85,7 +85,14 @@ export function normalizeScope(raw: string | null | undefined): CommentScope {
 
 /**
  * Build the attribute string for an anchored comment marker:
- * `id="..." author="..." date="..." target="..." body="..." [scope="..."]`.
+ * `id="..." author="..." date="..." body="..." [scope="..."]`.
+ *
+ * No `target` is emitted: wrapped (inline / block) comments already have
+ * the target text physically between the open/close markers, so storing a
+ * truncated copy in the attribute was redundant and a source of identifier
+ * ambiguity (issue #29). Legacy files with `target="..."` still parse —
+ * `parseCommentAttrs` reads it but it is dropped on serialize.
+ *
  * The scope attribute is emitted only when non-default so existing files
  * without a scope attribute round-trip byte-for-byte.
  */
@@ -93,7 +100,6 @@ export function buildCommentAttrs(attrs: {
   id: string;
   author: string;
   date: string;
-  target: string;
   body: string;
   scope?: string;
 }): string {
@@ -101,7 +107,6 @@ export function buildCommentAttrs(attrs: {
     `id="${escapeCommentAttr(attrs.id)}"`,
     `author="${escapeCommentAttr(attrs.author)}"`,
     `date="${escapeCommentAttr(attrs.date)}"`,
-    `target="${escapeCommentAttr(attrs.target)}"`,
     `body="${escapeCommentAttr(attrs.body)}"`,
   ];
   const scope = attrs.scope ?? "";
