@@ -48,7 +48,7 @@ jobs:
       - name: Smoke test — binary serves SPA + API
         run: |
           set -euo pipefail
-          PORT=18091 ./bin/server >/tmp/server.log 2>&1 &
+          PORT=18091 ./bin/markdown-review-server >/tmp/server.log 2>&1 &
           server_pid=$!
           trap "kill $server_pid 2>/dev/null || true" EXIT
 
