@@ -43,6 +43,12 @@ export function TiptapEditor() {
   });
   const updateActiveMarkdown = useOpenFiles((s) => s.updateActiveMarkdown);
   const lastLoadedKeyRef = useRef<string | null>(null);
+  // Track the editor instance that recorded `lastLoadedKeyRef`. If TipTap
+  // hands us a fresh editor (StrictMode dev unmount-remount, HMR, etc.) the
+  // stale key would make us skip setContent on the new instance and the
+  // user would see an empty editor until they switched tabs. Reset the
+  // tracking ref when the editor identity changes.
+  const lastLoadedEditorRef = useRef<unknown>(null);
   const dragHandleBlockRef = useRef<{ pos: number; size: number } | null>(null);
   /**
    * Timestamp (ms) until which onUpdate should be ignored. setContent's
@@ -107,6 +113,13 @@ export function TiptapEditor() {
 
   useEffect(() => {
     if (!editor) return;
+    // A new editor instance must be re-populated even when activeId hasn't
+    // changed (so the "loaded key" check below doesn't short-circuit on a
+    // blank editor produced by StrictMode dev double-mount).
+    if (lastLoadedEditorRef.current !== editor) {
+      lastLoadedEditorRef.current = editor;
+      lastLoadedKeyRef.current = null;
+    }
     const key = activeId ? `${activeId}:${activeReloadToken}` : null;
     if (lastLoadedKeyRef.current === key) return;
     lastLoadedKeyRef.current = key;
