@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import IconButton from "@mui/material/IconButton";
@@ -54,6 +55,7 @@ function basename(path: string): string {
 }
 
 const TARGET_SNIPPET_LENGTH = 60;
+const SELECT_FILE_PARAM = "select_file";
 
 function todayISO(): string {
   const d = new Date();
@@ -128,6 +130,30 @@ export function EditorPage() {
       setSelectedDirPath(path);
     },
   });
+
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initialSelectFileRef = useRef(searchParams.get(SELECT_FILE_PARAM));
+
+  // Keep the URL's `select_file` param in sync with the active tab so the
+  // current view is bookmarkable / shareable. Runs on every active-file
+  // change (tab click, sidebar open, close-last-tab → undefined).
+  useEffect(() => {
+    setSearchParams(
+      (prev) => {
+        const current = prev.get(SELECT_FILE_PARAM);
+        const next = new URLSearchParams(prev);
+        if (activeFile?.path) {
+          if (current === activeFile.path) return prev;
+          next.set(SELECT_FILE_PARAM, activeFile.path);
+        } else {
+          if (current === null) return prev;
+          next.delete(SELECT_FILE_PARAM);
+        }
+        return next;
+      },
+      { replace: true }
+    );
+  }, [activeFile?.path, setSearchParams]);
 
   const [commentDialog, setCommentDialog] = useState<{
     open: boolean;
@@ -263,6 +289,18 @@ export function EditorPage() {
       );
     }
   };
+
+  // Deeplink: `?select_file=<path>` opens that file on first mount. The
+  // initial value is captured into a ref at render time so subsequent URL
+  // changes (e.g. the user editing the sidebar filter) don't re-trigger the
+  // open, and StrictMode's double-invoke is a no-op the second time.
+  useEffect(() => {
+    const path = initialSelectFileRef.current;
+    if (!path) return;
+    initialSelectFileRef.current = null;
+    void handleSelect(path);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleSave = async () => {
     if (!activeFile) return;
@@ -428,7 +466,6 @@ export function EditorPage() {
     }
     const id = generateCommentId();
     const date = todayISO();
-    const snippet = commentDialog.snippet;
     const blockRange = commentDialog.blockRange;
 
     if (scope === "cross-section" || scope === "global") {
@@ -448,14 +485,14 @@ export function EditorPage() {
         .chain()
         .focus()
         .setTextSelection({ from: blockRange.from, to: blockRange.to })
-        .setComment({ id, author, date, target: snippet, body, scope: "block" })
+        .setComment({ id, author, date, body, scope: "block" })
         .run();
     } else {
       // Anchored inline — wraps the current selection.
       editor
         .chain()
         .focus()
-        .setComment({ id, author, date, target: snippet, body, scope: "inline" })
+        .setComment({ id, author, date, body, scope: "inline" })
         .run();
     }
 
@@ -800,7 +837,23 @@ export function EditorPage() {
         </Tabs>
 
         <Box sx={{ flex: 1, minHeight: 0 }}>
-          <TiptapEditor />
+          {activeFile ? (
+            <TiptapEditor />
+          ) : (
+            <Box
+              sx={{
+                height: "100%",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+              data-testid="editor-empty-state"
+            >
+              <Typography variant="body1" color="text.secondary">
+                ファイルを選択
+              </Typography>
+            </Box>
+          )}
         </Box>
       </Box>
 
