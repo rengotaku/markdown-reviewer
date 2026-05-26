@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import IconButton from "@mui/material/IconButton";
@@ -54,6 +55,7 @@ function basename(path: string): string {
 }
 
 const TARGET_SNIPPET_LENGTH = 60;
+const SELECT_FILE_PARAM = "select_file";
 
 function todayISO(): string {
   const d = new Date();
@@ -128,6 +130,9 @@ export function EditorPage() {
       setSelectedDirPath(path);
     },
   });
+
+  const [searchParams] = useSearchParams();
+  const initialSelectFileRef = useRef(searchParams.get(SELECT_FILE_PARAM));
 
   const [commentDialog, setCommentDialog] = useState<{
     open: boolean;
@@ -263,6 +268,18 @@ export function EditorPage() {
       );
     }
   };
+
+  // Deeplink: `?select_file=<path>` opens that file on first mount. The
+  // initial value is captured into a ref at render time so subsequent URL
+  // changes (e.g. the user editing the sidebar filter) don't re-trigger the
+  // open, and StrictMode's double-invoke is a no-op the second time.
+  useEffect(() => {
+    const path = initialSelectFileRef.current;
+    if (!path) return;
+    initialSelectFileRef.current = null;
+    void handleSelect(path);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleSave = async () => {
     if (!activeFile) return;
