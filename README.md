@@ -11,7 +11,7 @@
 `markdown-reviewer` は:
 
 - 対象ディレクトリ（`REVIEW_ROOT`）の Markdown を Web エディタで開く
-- 選択範囲にコメントを付ける（id / author / date / target）
+- 選択範囲にコメントを付ける（id / author / date / body）
 - 保存すると **HTML コメント形式** で同じファイルに書き戻される
 - そのまま Claude にファイルを渡せばコメント込みで読める
 
@@ -117,7 +117,7 @@ PORT=15174 REVIEW_ROOT=$HOME/notes ./scripts/install-launchd.sh
 ```markdown
 本文の前半...
 
-<!-- @comment id="c-1715414400000" author="kishira" date="2026-05-11" target="この段落を直したい" -->ここの記述を見直してほしい。<!-- /@comment -->
+<!-- @comment id="c-1715414400000" author="kishira" date="2026-05-11" body="ここの記述を見直してほしい。" -->この段落を直したい<!-- /@comment -->
 
 本文の後半...
 ```
@@ -129,9 +129,10 @@ PORT=15174 REVIEW_ROOT=$HOME/notes ./scripts/install-launchd.sh
 | `id` | コメント ID（クライアントが採番、ファイル内一意） |
 | `author` | コメント作成者 |
 | `date` | 作成日（`YYYY-MM-DD`） |
-| `target` | コメントが付いた本文テキスト（参照用、編集時にハイライト復元に使う） |
+| `body` | コメント本文 |
+| `scope` | コメントの種別（`block` / `cross-section` / `global`。`inline` は省略） |
 
-コメント本文は `<!-- @comment ... -->` と `<!-- /@comment -->` の間のテキスト。
+inline / block コメントの**対象テキストは `<!-- @comment ... -->` と `<!-- /@comment -->` の間にラップ**されているので、別途 `target` 属性を持たない（識別曖昧性回避のため、旧 `target` 属性は読み込みのみ後方互換でサポート）。cross-section / global コメントは対象テキストをラップしないため `target` を引き続き使う（cross-section は対象セクション名のリスト）。
 
 **重要**: コメントは標準 Markdown の HTML コメント構文なので、GitHub / VS Code プレビュー / pandoc などで Markdown としてレンダリングしたとき**非表示**になる。
 ただし `cat` や Claude のファイル読み込みでは **そのまま見える** ため、レビュー指示として機能する。
