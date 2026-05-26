@@ -314,6 +314,65 @@ describe("EditorPage", () => {
     );
   });
 
+  it("switches active file via tab click and closes a tab via the close button", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    // Open two files via the sidebar.
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
+    );
+    await user.click(screen.getByTestId("sidebar-file-README.md"));
+    await user.click(screen.getByTestId("sidebar-dir-docs"));
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-file-docs/intro.md")).toBeInTheDocument()
+    );
+    await user.click(screen.getByTestId("sidebar-file-docs/intro.md"));
+    await waitFor(() =>
+      expect(useOpenFiles.getState().files).toHaveLength(2)
+    );
+
+    // Tab click switches the active file (covers Tabs onChange).
+    await user.click(screen.getByTestId("editor-tab-README.md"));
+    await waitFor(() =>
+      expect(screen.getByTestId("editor-active-path")).toHaveTextContent("README.md")
+    );
+
+    // Close the inactive tab via its close icon — active stays on README.md.
+    await user.click(screen.getByTestId("editor-tab-close-docs/intro.md"));
+    await waitFor(() =>
+      expect(useOpenFiles.getState().files).toHaveLength(1)
+    );
+    expect(useOpenFiles.getState().files[0].path).toBe("README.md");
+
+    // Close the last tab → store goes empty and editor shows the placeholder.
+    await user.click(screen.getByTestId("editor-tab-close-README.md"));
+    await waitFor(() =>
+      expect(screen.getByTestId("editor-empty-state")).toBeInTheDocument()
+    );
+    expect(useOpenFiles.getState().files).toEqual([]);
+    expect(useOpenFiles.getState().activeId).toBeNull();
+  });
+
+  it("shows an error toast and stays on the empty state when select_file points to a missing path", async () => {
+    const { http, HttpResponse } = await import("msw");
+    const { server } = await import("@/test/mocks/server");
+    server.use(
+      http.get("http://localhost:8080/api/files/*", () =>
+        HttpResponse.json({ error: "not found" }, { status: 404 })
+      )
+    );
+
+    renderPage("/?select_file=missing.md");
+
+    await waitFor(() => {
+      const toasts = useToast.getState().toasts;
+      expect(toasts.some((t) => t.severity === "error")).toBe(true);
+    });
+    expect(screen.getByTestId("editor-empty-state")).toBeInTheDocument();
+    expect(useOpenFiles.getState().activeId).toBeNull();
+  });
+
   it("save shows an error toast when the API fails", async () => {
     const user = userEvent.setup();
 
