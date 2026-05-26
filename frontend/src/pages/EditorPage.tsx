@@ -131,8 +131,29 @@ export function EditorPage() {
     },
   });
 
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const initialSelectFileRef = useRef(searchParams.get(SELECT_FILE_PARAM));
+
+  // Keep the URL's `select_file` param in sync with the active tab so the
+  // current view is bookmarkable / shareable. Runs on every active-file
+  // change (tab click, sidebar open, close-last-tab → undefined).
+  useEffect(() => {
+    setSearchParams(
+      (prev) => {
+        const current = prev.get(SELECT_FILE_PARAM);
+        const next = new URLSearchParams(prev);
+        if (activeFile?.path) {
+          if (current === activeFile.path) return prev;
+          next.set(SELECT_FILE_PARAM, activeFile.path);
+        } else {
+          if (current === null) return prev;
+          next.delete(SELECT_FILE_PARAM);
+        }
+        return next;
+      },
+      { replace: true }
+    );
+  }, [activeFile?.path, setSearchParams]);
 
   const [commentDialog, setCommentDialog] = useState<{
     open: boolean;

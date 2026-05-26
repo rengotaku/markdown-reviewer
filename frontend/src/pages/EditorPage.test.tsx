@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import { EditorPage } from "./EditorPage";
 import { useOpenFiles } from "@/hooks/useOpenFiles";
 import { useToast } from "@/hooks/useToast";
@@ -12,6 +12,12 @@ vi.mock("@/components/tiptap/TiptapEditor", () => ({
   TiptapEditor: () => <div data-testid="tiptap-editor" />,
 }));
 
+/** Renders the URL search string so tests can assert URL state via the DOM. */
+function LocationProbe() {
+  const loc = useLocation();
+  return <span data-testid="loc-search">{loc.search}</span>;
+}
+
 function renderPage(initialPath = "/") {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -20,6 +26,7 @@ function renderPage(initialPath = "/") {
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={[initialPath]}>
         <EditorPage />
+        <LocationProbe />
       </MemoryRouter>
     </QueryClientProvider>
   );
@@ -57,6 +64,53 @@ describe("EditorPage", () => {
       .getState()
       .files.find((f) => f.path === "docs/intro.md");
     expect(opened).toBeDefined();
+  });
+
+  it("syncs the active tab path to the URL's select_file param", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    // Open README.md — URL should pick it up as select_file.
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
+    );
+    await user.click(screen.getByTestId("sidebar-file-README.md"));
+    await waitFor(() => {
+      const params = new URLSearchParams(
+        screen.getByTestId("loc-search").textContent ?? ""
+      );
+      expect(params.get("select_file")).toBe("README.md");
+    });
+
+    // Open a second file via the sidebar and ensure the URL switches to it.
+    await user.click(screen.getByTestId("sidebar-dir-docs"));
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-file-docs/intro.md")).toBeInTheDocument()
+    );
+    await user.click(screen.getByTestId("sidebar-file-docs/intro.md"));
+    await waitFor(() => {
+      const search = screen.getByTestId("loc-search").textContent ?? "";
+      const params = new URLSearchParams(search);
+      expect(params.get("select_file")).toBe("docs/intro.md");
+    });
+  });
+
+  it("preserves an unrelated query param (filter) while syncing select_file", async () => {
+    const user = userEvent.setup();
+    renderPage("/?filter=docs");
+
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
+    );
+    await user.click(screen.getByTestId("sidebar-file-README.md"));
+
+    await waitFor(() => {
+      const params = new URLSearchParams(
+        screen.getByTestId("loc-search").textContent ?? ""
+      );
+      expect(params.get("filter")).toBe("docs");
+      expect(params.get("select_file")).toBe("README.md");
+    });
   });
 
   it("opens a server file when clicked and shows its path in the header", async () => {
