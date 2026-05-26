@@ -45,6 +45,20 @@ describe("EditorPage", () => {
     );
   });
 
+  it("opens the file specified by ?select_file=... on mount", async () => {
+    renderPage("/?select_file=docs/intro.md");
+
+    await waitFor(() => {
+      expect(screen.getByTestId("editor-active-path")).toHaveTextContent(
+        "docs/intro.md"
+      );
+    });
+    const opened = useOpenFiles
+      .getState()
+      .files.find((f) => f.path === "docs/intro.md");
+    expect(opened).toBeDefined();
+  });
+
   it("opens a server file when clicked and shows its path in the header", async () => {
     const user = userEvent.setup();
     renderPage();

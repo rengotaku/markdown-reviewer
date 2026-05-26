@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import { Sidebar } from "./Sidebar";
 
 function renderWithProviders(ui: React.ReactElement, initialPath = "/") {
@@ -14,6 +14,12 @@ function renderWithProviders(ui: React.ReactElement, initialPath = "/") {
       <MemoryRouter initialEntries={[initialPath]}>{ui}</MemoryRouter>
     </QueryClientProvider>
   );
+}
+
+/** Renders the URL search string so tests can assert URL state via the DOM. */
+function LocationProbe() {
+  const loc = useLocation();
+  return <span data-testid="loc-search">{loc.search}</span>;
 }
 
 describe("Sidebar", () => {
@@ -121,6 +127,49 @@ describe("Sidebar", () => {
     expect(
       (screen.getByTestId("sidebar-filter") as HTMLInputElement).value
     ).toBe("");
+  });
+
+  it("drops select_file from the URL when the filter input changes", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <>
+        <Sidebar onSelect={() => {}} />
+        <LocationProbe />
+      </>,
+      "/?filter=do&select_file=docs/intro.md"
+    );
+
+    // Sanity: initial URL carries both params.
+    expect(screen.getByTestId("loc-search").textContent).toContain(
+      "select_file=docs/intro.md"
+    );
+
+    await user.type(screen.getByTestId("sidebar-filter"), "c");
+
+    await waitFor(() => {
+      const search = screen.getByTestId("loc-search").textContent ?? "";
+      expect(search).not.toContain("select_file");
+      expect(search).toContain("filter=doc");
+    });
+  });
+
+  it("drops select_file from the URL when the filter is cleared", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(
+      <>
+        <Sidebar onSelect={() => {}} />
+        <LocationProbe />
+      </>,
+      "/?filter=docs&select_file=docs/intro.md"
+    );
+
+    await user.click(screen.getByTestId("sidebar-filter-clear"));
+
+    await waitFor(() => {
+      const search = screen.getByTestId("loc-search").textContent ?? "";
+      expect(search).not.toContain("select_file");
+      expect(search).not.toContain("filter=");
+    });
   });
 
   it("shows a no-match note when filter matches no top-level dir (files still visible)", async () => {
