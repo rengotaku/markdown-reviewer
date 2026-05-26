@@ -445,7 +445,6 @@ export function EditorPage() {
     }
     const id = generateCommentId();
     const date = todayISO();
-    const snippet = commentDialog.snippet;
     const blockRange = commentDialog.blockRange;
 
     if (scope === "cross-section" || scope === "global") {
@@ -465,14 +464,14 @@ export function EditorPage() {
         .chain()
         .focus()
         .setTextSelection({ from: blockRange.from, to: blockRange.to })
-        .setComment({ id, author, date, target: snippet, body, scope: "block" })
+        .setComment({ id, author, date, body, scope: "block" })
         .run();
     } else {
       // Anchored inline — wraps the current selection.
       editor
         .chain()
         .focus()
-        .setComment({ id, author, date, target: snippet, body, scope: "inline" })
+        .setComment({ id, author, date, body, scope: "inline" })
         .run();
     }
 

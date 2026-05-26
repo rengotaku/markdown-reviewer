@@ -34,7 +34,7 @@ describe("commentAttrs escape/unescape", () => {
 });
 
 describe("parseCommentAttrs / buildCommentAttrs", () => {
-  it("parses a typical attribute string", () => {
+  it("parses a typical attribute string (including legacy target)", () => {
     const s =
       'id="c1" author="kishira" date="2026-05-20" target="この段落" body="直して"';
     expect(parseCommentAttrs(s)).toEqual({
@@ -46,22 +46,34 @@ describe("parseCommentAttrs / buildCommentAttrs", () => {
     });
   });
 
-  it("handles escaped quotes inside target", () => {
-    const s = 'id="c1" target="say \\"hi\\""';
+  it("handles escaped quotes inside attribute values", () => {
+    const s = 'id="c1" body="say \\"hi\\""';
     const parsed = parseCommentAttrs(s);
-    expect(parsed.target).toBe('say "hi"');
+    expect(parsed.body).toBe('say "hi"');
   });
 
-  it("round-trips through buildCommentAttrs", () => {
+  it("round-trips through buildCommentAttrs (no target attribute)", () => {
     const attrs = {
       id: "01J8FOO",
       author: "kishira",
       date: "2026-05-20",
-      target: 'tricky -- "value"',
       body: 'multi\nline -- with "quotes"',
     };
     const built = buildCommentAttrs(attrs);
+    expect(built).not.toContain("target=");
     expect(parseCommentAttrs(built)).toEqual(attrs);
+  });
+
+  it("drops target on serialize for backward compat with legacy files", () => {
+    // Legacy markers may have a target attribute; the parser still reads it,
+    // but buildCommentAttrs never emits it for wrapped comments.
+    const built = buildCommentAttrs({
+      id: "c1",
+      author: "k",
+      date: "2026-05-20",
+      body: "note",
+    });
+    expect(built).not.toContain("target=");
   });
 
   it("ignores unknown / missing keys gracefully", () => {
@@ -95,7 +107,6 @@ describe("buildCommentAttrs scope emission", () => {
     id: "c1",
     author: "k",
     date: "2026-05-20",
-    target: "x",
     body: "note",
   };
 

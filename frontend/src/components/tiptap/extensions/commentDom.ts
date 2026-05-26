@@ -72,7 +72,8 @@ function wrapBetween(
   span.setAttribute("data-comment-id", attrs.id ?? "");
   span.setAttribute("data-comment-author", attrs.author ?? "");
   span.setAttribute("data-comment-date", attrs.date ?? "");
-  span.setAttribute("data-comment-target", attrs.target ?? "");
+  // Wrapped comments derive their target from the wrapped text at collect
+  // time (see collectComments.ts); no need to round-trip a redundant copy.
   span.setAttribute("data-comment-body", attrs.body ?? "");
   span.setAttribute("data-comment-scope", normalizeScope(attrs.scope));
   span.className = "comment-mark";
