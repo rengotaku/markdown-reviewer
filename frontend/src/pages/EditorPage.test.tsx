@@ -40,9 +40,12 @@ describe("EditorPage", () => {
     useConfirm.setState({ pending: null });
   });
 
-  it("renders the TiptapEditor inside the layout", () => {
+  it("shows the empty-state placeholder when no file is active", () => {
     renderPage();
-    expect(screen.getByTestId("tiptap-editor")).toBeInTheDocument();
+    expect(screen.getByTestId("editor-empty-state")).toHaveTextContent(
+      "ファイルを選択"
+    );
+    expect(screen.queryByTestId("tiptap-editor")).not.toBeInTheDocument();
   });
 
   it("shows the top-level file tree once /api/dirs resolves", async () => {
@@ -50,6 +53,19 @@ describe("EditorPage", () => {
     await waitFor(() =>
       expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
     );
+  });
+
+  it("mounts the TiptapEditor once a file becomes active", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
+    );
+    await user.click(screen.getByTestId("sidebar-file-README.md"));
+    await waitFor(() =>
+      expect(screen.getByTestId("tiptap-editor")).toBeInTheDocument()
+    );
+    expect(screen.queryByTestId("editor-empty-state")).not.toBeInTheDocument();
   });
 
   it("opens the file specified by ?select_file=... on mount", async () => {
