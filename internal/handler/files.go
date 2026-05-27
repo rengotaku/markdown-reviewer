@@ -30,7 +30,12 @@ type FileEntry struct {
 }
 
 // FileListResponse is the response body for GET /api/files.
+//
+// Field order is GC-scan-friendly: the string (one pointer + length) lives
+// before the slice header (one pointer + length + cap) so govet's
+// fieldalignment doesn't complain.
 type FileListResponse struct {
+	Root  string      `json:"root"`
 	Files []FileEntry `json:"files"`
 }
 
@@ -43,7 +48,10 @@ type DirEntry struct {
 }
 
 // DirListResponse is the response body for GET /api/dirs.
+//
+// String before slice for the same reason as FileListResponse.
 type DirListResponse struct {
+	Root    string     `json:"root"`
 	Entries []DirEntry `json:"entries"`
 }
 
@@ -57,6 +65,7 @@ type FileReadResponse struct {
 	Content  string `json:"content"`
 	Modified string `json:"modified"`
 	Created  string `json:"created"`
+	Root     string `json:"root"`
 }
 
 // FileStatResponse is the response body for GET /api/stat/*path. Returned
@@ -66,6 +75,7 @@ type FileStatResponse struct {
 	Path     string `json:"path"`
 	Modified string `json:"modified"`
 	Created  string `json:"created"`
+	Root     string `json:"root"`
 }
 
 // fileTimes returns the RFC3339-UTC mtime and (best-effort) birth time
@@ -84,13 +94,39 @@ type FileWriteRequest struct {
 	Content string `json:"content"`
 }
 
-// ListFiles returns every .md file under REVIEW_ROOT.
-func (h *Handler) ListFiles(c *gin.Context) {
-	if h.resolver == nil {
+// pickResolver returns the resolver matching the request's `?root=` query
+// param. Empty / missing means "use the default (first) root". An unknown
+// name surfaces a 400 so the client gets an obvious failure rather than
+// silently falling back to the default.
+func (h *Handler) pickResolver(c *gin.Context) (*files.Resolver, string, bool) {
+	if h.roots == nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "files API not configured"})
+		return nil, "", false
+	}
+	name := c.Query("root")
+	if name == "" {
+		def, defName := h.roots.Default()
+		if def == nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "no roots configured"})
+			return nil, "", false
+		}
+		return def, defName, true
+	}
+	resolver, ok := h.roots.Get(name)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("unknown root %q", name)})
+		return nil, "", false
+	}
+	return resolver, name, true
+}
+
+// ListFiles returns every .md file under the selected root.
+func (h *Handler) ListFiles(c *gin.Context) {
+	resolver, name, ok := h.pickResolver(c)
+	if !ok {
 		return
 	}
-	root := h.resolver.Root()
+	root := resolver.Root()
 	entries := []FileEntry{}
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -121,7 +157,7 @@ func (h *Handler) ListFiles(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list files"})
 		return
 	}
-	c.JSON(http.StatusOK, FileListResponse{Files: entries})
+	c.JSON(http.StatusOK, FileListResponse{Files: entries, Root: name})
 }
 
 // noiseDirs is the set of directory names skipped in lazy listings. These are
@@ -138,19 +174,19 @@ var noiseDirs = map[string]struct{}{
 }
 
 // ListDir returns the immediate children (dirs + .md files) of
-// REVIEW_ROOT/<path>. Used by the sidebar's lazy file tree. `path` is the
+// <selected-root>/<path>. Used by the sidebar's lazy file tree. `path` is the
 // query param; empty/missing means the root.
 func (h *Handler) ListDir(c *gin.Context) {
-	if h.resolver == nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "files API not configured"})
+	resolver, name, ok := h.pickResolver(c)
+	if !ok {
 		return
 	}
 	rel := strings.TrimPrefix(c.Query("path"), "/")
 	rel = strings.TrimSuffix(rel, "/")
 
-	full := h.resolver.Root()
+	full := resolver.Root()
 	if rel != "" && rel != "." {
-		resolved, err := h.resolver.Resolve(rel)
+		resolved, err := resolver.Resolve(rel)
 		if err != nil {
 			switch {
 			case errors.Is(err, files.ErrPathTraversal), errors.Is(err, files.ErrInvalidPath):
@@ -186,19 +222,19 @@ func (h *Handler) ListDir(c *gin.Context) {
 
 	entries := []DirEntry{}
 	for _, item := range items {
-		name := item.Name()
-		if strings.HasPrefix(name, ".") {
+		itemName := item.Name()
+		if strings.HasPrefix(itemName, ".") {
 			continue
 		}
 		if item.IsDir() {
-			if _, skip := noiseDirs[name]; skip {
+			if _, skip := noiseDirs[itemName]; skip {
 				continue
 			}
 		}
 
-		childRel := name
+		childRel := itemName
 		if rel != "" {
-			childRel = rel + "/" + name
+			childRel = rel + "/" + itemName
 		}
 
 		var modified string
@@ -208,9 +244,9 @@ func (h *Handler) ListDir(c *gin.Context) {
 
 		switch {
 		case item.IsDir():
-			entries = append(entries, DirEntry{Name: name, Path: childRel, Type: "dir", Modified: modified})
-		case strings.EqualFold(filepath.Ext(name), markdownExt):
-			entries = append(entries, DirEntry{Name: name, Path: childRel, Type: "file", Modified: modified})
+			entries = append(entries, DirEntry{Name: itemName, Path: childRel, Type: "dir", Modified: modified})
+		case strings.EqualFold(filepath.Ext(itemName), markdownExt):
+			entries = append(entries, DirEntry{Name: itemName, Path: childRel, Type: "file", Modified: modified})
 		}
 	}
 
@@ -228,12 +264,12 @@ func (h *Handler) ListDir(c *gin.Context) {
 		return entries[i].Name < entries[j].Name
 	})
 
-	c.JSON(http.StatusOK, DirListResponse{Entries: entries})
+	c.JSON(http.StatusOK, DirListResponse{Entries: entries, Root: name})
 }
 
-// ReadFile returns the content of REVIEW_ROOT/<path>.
+// ReadFile returns the content of <selected-root>/<path>.
 func (h *Handler) ReadFile(c *gin.Context) {
-	full, rel, ok := h.resolveRequest(c)
+	full, rel, name, ok := h.resolveRequest(c)
 	if !ok {
 		return
 	}
@@ -255,14 +291,15 @@ func (h *Handler) ReadFile(c *gin.Context) {
 		Content:  string(data),
 		Modified: modified,
 		Created:  created,
+		Root:     name,
 	})
 }
 
-// StatFile returns just the modified timestamp for REVIEW_ROOT/<path> so
+// StatFile returns just the modified timestamp for <selected-root>/<path> so
 // the frontend can poll for external edits on the open file without
 // re-transferring the body each tick.
 func (h *Handler) StatFile(c *gin.Context) {
-	full, rel, ok := h.resolveRequest(c)
+	full, rel, name, ok := h.resolveRequest(c)
 	if !ok {
 		return
 	}
@@ -280,14 +317,15 @@ func (h *Handler) StatFile(c *gin.Context) {
 		Path:     rel,
 		Modified: modified,
 		Created:  created,
+		Root:     name,
 	})
 }
 
-// WriteFile saves the request body to REVIEW_ROOT/<path> atomically via
-// tmp file + rename so a partial write never leaves a half-written .md
-// on disk (rename(2) is atomic within the same filesystem).
+// WriteFile saves the request body to <selected-root>/<path> atomically via
+// tmp file + rename so a partial write never leaves a half-written .md on
+// disk (rename(2) is atomic within the same filesystem).
 func (h *Handler) WriteFile(c *gin.Context) {
-	full, rel, ok := h.resolveRequest(c)
+	full, rel, name, ok := h.resolveRequest(c)
 	if !ok {
 		return
 	}
@@ -316,28 +354,29 @@ func (h *Handler) WriteFile(c *gin.Context) {
 		Content:  req.Content,
 		Modified: modified,
 		Created:  created,
+		Root:     name,
 	})
 }
 
 // resolveRequest pulls *path off the gin context, validates the .md
-// extension, and resolves the path against REVIEW_ROOT. It writes the
+// extension, and resolves the path against the selected root. It writes the
 // appropriate error response and returns ok=false on any failure so the
 // callers can early-return without duplicating the boilerplate.
-func (h *Handler) resolveRequest(c *gin.Context) (full, rel string, ok bool) {
-	if h.resolver == nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "files API not configured"})
-		return "", "", false
+func (h *Handler) resolveRequest(c *gin.Context) (full, rel, name string, ok bool) {
+	resolver, name, ok := h.pickResolver(c)
+	if !ok {
+		return "", "", "", false
 	}
 	rel = strings.TrimPrefix(c.Param("path"), "/")
 	if rel == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "path required"})
-		return "", "", false
+		return "", "", "", false
 	}
 	if !strings.EqualFold(filepath.Ext(rel), markdownExt) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "only .md files supported"})
-		return "", "", false
+		return "", "", "", false
 	}
-	full, err := h.resolver.Resolve(rel)
+	full, err := resolver.Resolve(rel)
 	if err != nil {
 		switch {
 		case errors.Is(err, files.ErrPathTraversal), errors.Is(err, files.ErrInvalidPath):
@@ -347,9 +386,9 @@ func (h *Handler) resolveRequest(c *gin.Context) (full, rel string, ok bool) {
 		default:
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "internal server error"})
 		}
-		return "", "", false
+		return "", "", "", false
 	}
-	return full, filepath.ToSlash(rel), true
+	return full, filepath.ToSlash(rel), name, true
 }
 
 // atomicWrite writes data to a temp file in the same directory and renames

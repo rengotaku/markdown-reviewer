@@ -1,14 +1,26 @@
 import { describe, it, expect } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MemoryRouter } from "react-router-dom";
 import { type ReactNode } from "react";
 import { useFiles } from "./useFiles";
+
+const ROOT = "mock-root";
 
 function wrapper({ children }: { children: ReactNode }) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
-  return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+  client.setQueryData(["config"], {
+    review_root_name: ROOT,
+    review_root: `/tmp/${ROOT}`,
+    review_roots: [{ name: ROOT, path: `/tmp/${ROOT}` }],
+  });
+  return (
+    <QueryClientProvider client={client}>
+      <MemoryRouter>{children}</MemoryRouter>
+    </QueryClientProvider>
+  );
 }
 
 describe("useFiles", () => {

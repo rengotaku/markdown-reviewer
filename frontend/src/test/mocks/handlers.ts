@@ -98,14 +98,17 @@ export const handlers = [
     return HttpResponse.json({
       review_root_name: "mock-root",
       review_root: "/tmp/mock-root",
+      review_roots: [{ name: "mock-root", path: "/tmp/mock-root" }],
     });
   }),
 
   http.get(`${API_BASE}/api/dirs`, ({ request }) => {
     const url = new URL(request.url);
     const path = url.searchParams.get("path") ?? "";
+    const root = url.searchParams.get("root") ?? "mock-root";
     if (path === "") {
       return HttpResponse.json({
+        root,
         entries: [
           { name: "docs", path: "docs", type: "dir", modified: "2026-05-20T00:00:00Z" },
           { name: "README.md", path: "README.md", type: "file", modified: "2026-05-20T00:00:00Z" },
@@ -114,6 +117,7 @@ export const handlers = [
     }
     if (path === "docs") {
       return HttpResponse.json({
+        root,
         entries: [
           { name: "api", path: "docs/api", type: "dir", modified: "2026-05-20T00:00:00Z" },
           { name: "intro.md", path: "docs/intro.md", type: "file", modified: "2026-05-20T00:00:00Z" },
@@ -122,14 +126,18 @@ export const handlers = [
     }
     if (path === "docs/api") {
       return HttpResponse.json({
+        root,
         entries: [{ name: "spec.md", path: "docs/api/spec.md", type: "file", modified: "2026-05-20T00:00:00Z" }],
       });
     }
-    return HttpResponse.json({ entries: [] });
+    return HttpResponse.json({ root, entries: [] });
   }),
 
-  http.get(`${API_BASE}/api/files`, () => {
+  http.get(`${API_BASE}/api/files`, ({ request }) => {
+    const url = new URL(request.url);
+    const root = url.searchParams.get("root") ?? "mock-root";
     return HttpResponse.json({
+      root,
       files: [
         { path: "README.md", size: 12, modified: "2026-05-20T00:00:00Z" },
         { path: "docs/intro.md", size: 34, modified: "2026-05-20T00:00:00Z" },
@@ -141,8 +149,10 @@ export const handlers = [
   http.get(`${API_BASE}/api/files/*`, ({ request }) => {
     const url = new URL(request.url);
     const path = url.pathname.replace(/^\/api\/files\//, "");
+    const root = url.searchParams.get("root") ?? "mock-root";
     return HttpResponse.json({
       path,
+      root,
       content: `# ${path}\n\nmock content`,
       modified: "2026-05-20T00:00:00Z",
       created: "2026-05-19T00:00:00Z",
@@ -152,9 +162,11 @@ export const handlers = [
   http.put(`${API_BASE}/api/files/*`, async ({ request }) => {
     const url = new URL(request.url);
     const path = url.pathname.replace(/^\/api\/files\//, "");
+    const root = url.searchParams.get("root") ?? "mock-root";
     const body = (await request.json()) as { content: string };
     return HttpResponse.json({
       path,
+      root,
       content: body.content,
       modified: new Date().toISOString(),
       created: "2026-05-19T00:00:00Z",
@@ -164,8 +176,10 @@ export const handlers = [
   http.get(`${API_BASE}/api/stat/*`, ({ request }) => {
     const url = new URL(request.url);
     const path = url.pathname.replace(/^\/api\/stat\//, "");
+    const root = url.searchParams.get("root") ?? "mock-root";
     return HttpResponse.json({
       path,
+      root,
       modified: "2026-05-20T00:00:00Z",
       created: "2026-05-19T00:00:00Z",
     });

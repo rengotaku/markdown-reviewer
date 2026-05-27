@@ -95,4 +95,5 @@ Session ベースで認証する。
 - コメント記法のシリアライズ／デシリアライズ: `frontend/src/components/tiptap/extensions/CommentMark.ts`, `commentDom.ts`
 - API: `internal/handler/files.go`, `internal/files/safepath.go`（path traversal 防止）
 - 設定: `internal/config/config.go`, `internal/server/server.go`
-- 動作確認は `make run`（要 `REVIEW_ROOT`）。CI は `make ci`。
+- 動作確認は `make run`（要 `REVIEW_ROOTS` または `REVIEW_ROOT`）。CI は `make ci`。
+- 複数ルート対応の env 形式: `REVIEW_ROOTS='[{"name":"works","path":"/abs/works"},{"name":"rooms","path":"/abs/rooms"}]'`。単一ルートのみ使う場合は引き続き `REVIEW_ROOT=<dir>` でよい（その場合 `name` は basename になる）。

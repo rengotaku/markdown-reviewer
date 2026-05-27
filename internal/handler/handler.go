@@ -12,14 +12,14 @@ import (
 
 type Handler struct {
 	userService *service.UserService
-	resolver    *files.Resolver
+	roots       *files.Roots
 }
 
-// NewHandler builds a Handler. resolver may be nil when the files API is
-// not configured (e.g. user-CRUD-only tests); the files endpoints respond
-// with 500 in that case.
-func NewHandler(userService *service.UserService, resolver *files.Resolver) *Handler {
-	return &Handler{userService: userService, resolver: resolver}
+// NewHandler builds a Handler. roots may be nil when the files API is not
+// configured (e.g. user-CRUD-only tests); the files endpoints respond with
+// 500 in that case.
+func NewHandler(userService *service.UserService, roots *files.Roots) *Handler {
+	return &Handler{userService: userService, roots: roots}
 }
 
 func (h *Handler) Routes(staticHandler http.Handler) http.Handler {
@@ -59,21 +59,44 @@ func (h *Handler) Health(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "ok"})
 }
 
-// Config exposes the basename of REVIEW_ROOT for the sidebar header label,
-// plus the absolute path so the UI can build a clipboard-friendly full path
-// for "copy path" actions.
+// ReviewRootJSON is the public shape returned in /api/config under
+// `review_roots`. Kept as its own type so the JSON surface is explicit and
+// doesn't drift if files.Root grows internal fields.
+type ReviewRootJSON struct {
+	Name string `json:"name"`
+	Path string `json:"path"`
+}
+
+// Config exposes the configured roots so the UI can render the root-tab bar.
+// The legacy `review_root_name` / `review_root` fields are kept and point at
+// the default (first) root so older clients keep working.
 func (h *Handler) Config(c *gin.Context) {
-	if h.resolver == nil {
+	if h.roots == nil {
 		c.JSON(http.StatusOK, gin.H{
 			"review_root_name": "",
 			"review_root":      "",
+			"review_roots":     []ReviewRootJSON{},
 		})
 		return
 	}
-	root := h.resolver.Root()
+	list := h.roots.List()
+	out := make([]ReviewRootJSON, len(list))
+	for i, root := range list {
+		out[i] = ReviewRootJSON{Name: root.Name, Path: root.Resolver.Root()}
+	}
+	def, defName := h.roots.Default()
+	defPath := ""
+	if def != nil {
+		defPath = def.Root()
+	}
+	legacyName := defName
+	if legacyName == "" && defPath != "" {
+		legacyName = filepath.Base(defPath)
+	}
 	c.JSON(http.StatusOK, gin.H{
-		"review_root_name": filepath.Base(root),
-		"review_root":      root,
+		"review_root_name": legacyName,
+		"review_root":      defPath,
+		"review_roots":     out,
 	})
 }
 
