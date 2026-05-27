@@ -30,7 +30,7 @@ describe("useDirChangeWatcher", () => {
     });
 
     act(() => {
-      client.setQueryData(dirQueryKey(""), {
+      client.setQueryData(dirQueryKey("mock-root", ""), {
         entries: [
           { name: "a.md", path: "a.md", type: "file", modified: "2026-05-20T00:00:00Z" },
         ],
@@ -51,14 +51,14 @@ describe("useDirChangeWatcher", () => {
     });
 
     act(() => {
-      client.setQueryData(dirQueryKey(""), {
+      client.setQueryData(dirQueryKey("mock-root", ""), {
         entries: [
           { name: "a.md", path: "a.md", type: "file", modified: "2026-05-20T00:00:00Z" },
         ],
       });
     });
     act(() => {
-      client.setQueryData(dirQueryKey(""), {
+      client.setQueryData(dirQueryKey("mock-root", ""), {
         entries: [
           { name: "a.md", path: "a.md", type: "file", modified: "2026-05-20T00:00:00Z" },
           { name: "b.md", path: "b.md", type: "file", modified: "2026-05-21T00:00:00Z" },
@@ -83,10 +83,10 @@ describe("useDirChangeWatcher", () => {
     });
 
     act(() => {
-      client.setQueryData(dirQueryKey(""), { entries: [] });
+      client.setQueryData(dirQueryKey("mock-root", ""), { entries: [] });
     });
     act(() => {
-      client.setQueryData(dirQueryKey(""), {
+      client.setQueryData(dirQueryKey("mock-root", ""), {
         entries: [
           { name: "newdir", path: "newdir", type: "dir", modified: "2026-05-21T00:00:00Z" },
         ],
@@ -110,14 +110,14 @@ describe("useDirChangeWatcher", () => {
     });
 
     act(() => {
-      client.setQueryData(dirQueryKey(""), {
+      client.setQueryData(dirQueryKey("mock-root", ""), {
         entries: [
           { name: "a.md", path: "a.md", type: "file", modified: "2026-05-20T00:00:00Z" },
         ],
       });
     });
     act(() => {
-      client.setQueryData(dirQueryKey(""), {
+      client.setQueryData(dirQueryKey("mock-root", ""), {
         entries: [
           { name: "a.md", path: "a.md", type: "file", modified: "2026-05-22T00:00:00Z" },
         ],
@@ -137,7 +137,7 @@ describe("useDirChangeWatcher", () => {
     });
 
     act(() => {
-      client.setQueryData(dirQueryKey(""), {
+      client.setQueryData(dirQueryKey("mock-root", ""), {
         entries: [
           { name: "a.md", path: "a.md", type: "file", modified: "2026-05-20T00:00:00Z" },
           { name: "b.md", path: "b.md", type: "file", modified: "2026-05-20T00:00:00Z" },
@@ -145,7 +145,7 @@ describe("useDirChangeWatcher", () => {
       });
     });
     act(() => {
-      client.setQueryData(dirQueryKey(""), {
+      client.setQueryData(dirQueryKey("mock-root", ""), {
         entries: [
           { name: "a.md", path: "a.md", type: "file", modified: "2026-05-20T00:00:00Z" },
         ],

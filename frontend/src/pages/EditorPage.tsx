@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
@@ -26,12 +26,16 @@ import UnfoldMoreIcon from "@mui/icons-material/UnfoldMore";
 import { TiptapEditor } from "@/components/tiptap/TiptapEditor";
 import {
   Sidebar,
+  RootTabs,
   ToastViewport,
   ConfirmDialog,
   AddCommentDialog,
   CommentSidePane,
 } from "@/components";
-import { useOpenFiles } from "@/hooks/useOpenFiles";
+import {
+  useOpenFiles,
+  reattachLegacyFilesToRoot,
+} from "@/hooks/useOpenFiles";
 import { useReadFile, useWriteFile } from "@/hooks/useFileContent";
 import { useFileWatcher } from "@/hooks/useFileWatcher";
 import { useDirChangeWatcher } from "@/hooks/useDirChangeWatcher";
@@ -41,7 +45,7 @@ import { useUIStore } from "@/hooks/useUIStore";
 import { useEditorInstance } from "@/hooks/useEditorInstance";
 import { useEditorPrefs } from "@/hooks/useEditorPrefs";
 import { useCommentAuthor } from "@/hooks/useCommentAuthor";
-import { useConfig } from "@/hooks/useConfig";
+import { useActiveRoot } from "@/hooks/useActiveRoot";
 import { dirQueryKey } from "@/hooks/useDir";
 import { useQueryClient } from "@tanstack/react-query";
 import { listDir } from "@/api";
@@ -93,8 +97,21 @@ export function EditorPage() {
   const setSelectedDirPath = useUIStore((s) => s.setSelectedDirPath);
   const setSidebarOpen = useUIStore((s) => s.setSidebarOpen);
 
-  const files = useOpenFiles((s) => s.files);
-  const activeFile = useOpenFiles((s) => s.files.find((f) => f.id === s.activeId));
+  const { active: activeRoot, roots } = useActiveRoot();
+  const allFiles = useOpenFiles((s) => s.files);
+  const activeIdByRoot = useOpenFiles((s) => s.activeIdByRoot);
+  // Editor-tab list = open files belonging to the currently selected root.
+  // Switching root tabs hot-swaps this list without dropping the other
+  // root's open files.
+  const files = useMemo(
+    () => (activeRoot ? allFiles.filter((f) => f.root === activeRoot) : []),
+    [allFiles, activeRoot]
+  );
+  const activeFileId = activeRoot ? activeIdByRoot[activeRoot] : null;
+  const activeFile = useMemo(
+    () => files.find((f) => f.id === activeFileId) ?? undefined,
+    [files, activeFileId]
+  );
   const openServerFile = useOpenFiles((s) => s.openServerFile);
   const markActiveSaved = useOpenFiles((s) => s.markActiveSaved);
   const discardActiveChanges = useOpenFiles((s) => s.discardActiveChanges);
@@ -109,9 +126,15 @@ export function EditorPage() {
   const centered = useEditorPrefs((s) => s.centered);
   const toggleCentered = useEditorPrefs((s) => s.toggleCentered);
   const { author } = useCommentAuthor();
-  const { data: config } = useConfig();
   const queryClient = useQueryClient();
-  const reviewRootName = config?.review_root_name ?? "Files";
+  const reviewRootName = activeRoot || "Files";
+
+  // Migrate any persisted legacy single-root files onto the default root
+  // the first time we learn which root that is. Idempotent — subsequent
+  // renders with the same root are no-ops.
+  useEffect(() => {
+    if (roots.length > 0) reattachLegacyFilesToRoot(roots[0].name);
+  }, [roots]);
 
   useFileWatcher();
 
@@ -249,11 +272,15 @@ export function EditorPage() {
   }, [editor]);
 
   const handleSelect = async (path: string) => {
+    if (!activeRoot) return;
     const state = useOpenFiles.getState();
-    const active = state.files.find((f) => f.id === state.activeId);
-    const target = state.files.find((f) => f.path === path);
+    const currentActiveId = state.activeIdByRoot[activeRoot];
+    const active = state.files.find((f) => f.id === currentActiveId);
+    const target = state.files.find(
+      (f) => f.path === path && f.root === activeRoot
+    );
 
-    if (target && target.id === state.activeId) return;
+    if (target && target.id === currentActiveId) return;
 
     if (active && active.isDirty && active.path !== path) {
       const ok = await confirm({
@@ -265,19 +292,20 @@ export function EditorPage() {
       // Roll the active file back to its saved baseline so its in-memory
       // edits aren't persisted to localStorage and don't reappear when the
       // user navigates back to it.
-      discardActiveChanges();
+      discardActiveChanges(activeRoot);
     }
 
     if (target) {
-      setActive(target.id);
+      setActive(activeRoot, target.id);
       return;
     }
 
     try {
-      const res = await readFile.mutateAsync(path);
+      const res = await readFile.mutateAsync({ path, root: activeRoot });
       openServerFile({
         name: basename(res.path),
         path: res.path,
+        root: activeRoot,
         markdown: res.content,
         modified: res.modified,
         created: res.created,
@@ -290,17 +318,19 @@ export function EditorPage() {
     }
   };
 
-  // Deeplink: `?select_file=<path>` opens that file on first mount. The
-  // initial value is captured into a ref at render time so subsequent URL
-  // changes (e.g. the user editing the sidebar filter) don't re-trigger the
-  // open, and StrictMode's double-invoke is a no-op the second time.
+  // Deeplink: `?select_file=<path>` opens that file on first mount. Held in
+  // a ref so subsequent URL changes (e.g. user editing the sidebar filter)
+  // don't re-trigger the open, and StrictMode's double-invoke is a no-op
+  // the second time. We wait until activeRoot is non-empty so the read is
+  // scoped to the correct root from the start.
   useEffect(() => {
     const path = initialSelectFileRef.current;
     if (!path) return;
+    if (!activeRoot) return;
     initialSelectFileRef.current = null;
     void handleSelect(path);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [activeRoot]);
 
   const handleSave = async () => {
     if (!activeFile) return;
@@ -308,8 +338,9 @@ export function EditorPage() {
       const res = await writeFile.mutateAsync({
         path: activeFile.path,
         content: activeFile.markdown,
+        root: activeFile.root,
       });
-      markActiveSaved(res.modified, res.created);
+      markActiveSaved(activeFile.root, res.modified, res.created);
       showToast(`「${activeFile.name}」を保存しました`, "success");
     } catch (err) {
       showToast(
@@ -324,17 +355,21 @@ export function EditorPage() {
     const slash = activeFile.path.lastIndexOf("/");
     const dir = slash === -1 ? "" : activeFile.path.slice(0, slash);
     try {
-      const siblings = await listDir(dir);
+      const siblings = await listDir(dir, activeFile.root);
       const siblingPaths = siblings.entries.map((e) => e.path);
       const newPath = nextVersionedPath(activeFile.path, siblingPaths);
       const res = await writeFile.mutateAsync({
         path: newPath,
         content: activeFile.markdown,
+        root: activeFile.root,
       });
-      await queryClient.invalidateQueries({ queryKey: dirQueryKey(dir) });
+      await queryClient.invalidateQueries({
+        queryKey: dirQueryKey(activeFile.root, dir),
+      });
       openServerFile({
         name: basename(res.path),
         path: res.path,
+        root: activeFile.root,
         markdown: res.content,
         modified: res.modified,
         created: res.created,
@@ -600,6 +635,7 @@ export function EditorPage() {
               </IconButton>
             </Tooltip>
           </Box>
+          <RootTabs />
           <Sidebar activePath={activeFile?.path} onSelect={handleSelect} />
         </Box>
       )}
@@ -764,7 +800,7 @@ export function EditorPage() {
          */}
         <Tabs
           value={activeFile?.id ?? false}
-          onChange={(_, v) => setActive(v as string)}
+          onChange={(_, v) => activeRoot && setActive(activeRoot, v as string)}
           variant="scrollable"
           scrollButtons={false}
           sx={{

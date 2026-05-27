@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { readFile, statFile } from "@/api";
 import { useOpenFiles } from "@/hooks/useOpenFiles";
+import { useActiveRoot } from "@/hooks/useActiveRoot";
 import { useConfirm } from "@/hooks/useConfirm";
 import { useToast } from "@/hooks/useToast";
 
@@ -26,6 +27,7 @@ export const FILE_WATCHER_INTERVAL_MS = 5000;
 export function useFileWatcher(intervalMs: number = FILE_WATCHER_INTERVAL_MS) {
   const confirm = useConfirm((s) => s.confirm);
   const showToast = useToast((s) => s.show);
+  const { active: activeRoot } = useActiveRoot();
 
   // The dialog is async. Without this guard the next tick can stack a
   // second dialog on top while the first one is still awaiting user input.
@@ -36,8 +38,10 @@ export function useFileWatcher(intervalMs: number = FILE_WATCHER_INTERVAL_MS) {
 
     const tick = async () => {
       if (cancelled) return;
+      if (!activeRoot) return;
       const state = useOpenFiles.getState();
-      const active = state.files.find((f) => f.id === state.activeId);
+      const activeId = state.activeIdByRoot[activeRoot];
+      const active = state.files.find((f) => f.id === activeId);
       if (!active) return;
       // Untitled or otherwise not-yet-persisted buffers have no server
       // mtime to compare against — nothing to watch.
@@ -48,7 +52,7 @@ export function useFileWatcher(intervalMs: number = FILE_WATCHER_INTERVAL_MS) {
 
       let stat;
       try {
-        stat = await statFile(active.path);
+        stat = await statFile(active.path, active.root);
       } catch {
         // Transient network / 404 (file was deleted out from under us, etc.)
         // Bail silently — the user will see other failures (save etc.) the
@@ -68,7 +72,7 @@ export function useFileWatcher(intervalMs: number = FILE_WATCHER_INTERVAL_MS) {
 
       if (!live.isDirty) {
         try {
-          const fresh = await readFile(live.path);
+          const fresh = await readFile(live.path, live.root);
           if (cancelled) return;
           useOpenFiles
             .getState()
@@ -105,7 +109,7 @@ export function useFileWatcher(intervalMs: number = FILE_WATCHER_INTERVAL_MS) {
 
       if (accept) {
         try {
-          const fresh = await readFile(live.path);
+          const fresh = await readFile(live.path, live.root);
           if (cancelled) return;
           useOpenFiles
             .getState()
@@ -143,5 +147,5 @@ export function useFileWatcher(intervalMs: number = FILE_WATCHER_INTERVAL_MS) {
       cancelled = true;
       window.clearInterval(handle);
     };
-  }, [confirm, showToast, intervalMs]);
+  }, [activeRoot, confirm, showToast, intervalMs]);
 }

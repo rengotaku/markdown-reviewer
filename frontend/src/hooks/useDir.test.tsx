@@ -1,23 +1,35 @@
 import { describe, it, expect } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MemoryRouter } from "react-router-dom";
 import { type ReactNode } from "react";
 import { useDir, dirQueryKey } from "./useDir";
+
+const ROOT = "mock-root";
 
 function makeWrapper() {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
+  client.setQueryData(["config"], {
+    review_root_name: ROOT,
+    review_root: `/tmp/${ROOT}`,
+    review_roots: [{ name: ROOT, path: `/tmp/${ROOT}` }],
+  });
   return function Wrapper({ children }: { children: ReactNode }) {
-    return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+    return (
+      <QueryClientProvider client={client}>
+        <MemoryRouter>{children}</MemoryRouter>
+      </QueryClientProvider>
+    );
   };
 }
 
 describe("useDir", () => {
-  it("exposes a stable query key per path", () => {
-    expect(dirQueryKey("")).toEqual(["dir", ""]);
-    expect(dirQueryKey("docs")).toEqual(["dir", "docs"]);
-    expect(dirQueryKey("docs/api")).toEqual(["dir", "docs/api"]);
+  it("exposes a stable query key per (root, path) pair", () => {
+    expect(dirQueryKey(ROOT, "")).toEqual(["dir", ROOT, ""]);
+    expect(dirQueryKey(ROOT, "docs")).toEqual(["dir", ROOT, "docs"]);
+    expect(dirQueryKey(ROOT, "docs/api")).toEqual(["dir", ROOT, "docs/api"]);
   });
 
   it("fetches the root directory listing when path is empty", async () => {

@@ -35,7 +35,7 @@ function renderPage(initialPath = "/") {
 describe("EditorPage", () => {
   beforeEach(() => {
     localStorage.clear();
-    useOpenFiles.setState({ files: [], activeId: null });
+    useOpenFiles.setState({ files: [], activeIdByRoot: {} });
     useToast.setState({ toasts: [] });
     useConfirm.setState({ pending: null });
   });
@@ -170,7 +170,7 @@ describe("EditorPage", () => {
         .files.find((f) => f.path === "README.md");
       expect(active).toBeDefined();
     });
-    useOpenFiles.getState().updateActiveMarkdown("edited content");
+    useOpenFiles.getState().updateActiveMarkdown("mock-root", "edited content");
 
     // Expand docs/ and attempt to switch to a different file
     await user.click(screen.getByTestId("sidebar-dir-docs"));
@@ -192,7 +192,7 @@ describe("EditorPage", () => {
     );
     const stillActive = useOpenFiles
       .getState()
-      .files.find((f) => f.id === useOpenFiles.getState().activeId);
+      .files.find((f) => f.id === useOpenFiles.getState().activeIdByRoot["mock-root"]);
     expect(stillActive?.path).toBe("README.md");
   });
 
@@ -208,11 +208,11 @@ describe("EditorPage", () => {
       expect(screen.getByTestId("editor-active-path")).toHaveTextContent("README.md")
     );
 
-    useOpenFiles.getState().updateActiveMarkdown("new content");
+    useOpenFiles.getState().updateActiveMarkdown("mock-root", "new content");
     expect(
       useOpenFiles
         .getState()
-        .files.find((f) => f.id === useOpenFiles.getState().activeId)!.isDirty
+        .files.find((f) => f.id === useOpenFiles.getState().activeIdByRoot["mock-root"])!.isDirty
     ).toBe(true);
 
     await user.click(screen.getByTestId("editor-save"));
@@ -220,7 +220,7 @@ describe("EditorPage", () => {
     await waitFor(() => {
       const active = useOpenFiles
         .getState()
-        .files.find((f) => f.id === useOpenFiles.getState().activeId)!;
+        .files.find((f) => f.id === useOpenFiles.getState().activeIdByRoot["mock-root"])!;
       expect(active.isDirty).toBe(false);
     });
     expect(useToast.getState().toasts[0]?.severity).toBe("success");
@@ -351,7 +351,7 @@ describe("EditorPage", () => {
       expect(screen.getByTestId("editor-empty-state")).toBeInTheDocument()
     );
     expect(useOpenFiles.getState().files).toEqual([]);
-    expect(useOpenFiles.getState().activeId).toBeNull();
+    expect(Object.values(useOpenFiles.getState().activeIdByRoot).filter(Boolean)).toEqual([]);
   });
 
   it("shows an error toast and stays on the empty state when select_file points to a missing path", async () => {
@@ -370,7 +370,7 @@ describe("EditorPage", () => {
       expect(toasts.some((t) => t.severity === "error")).toBe(true);
     });
     expect(screen.getByTestId("editor-empty-state")).toBeInTheDocument();
-    expect(useOpenFiles.getState().activeId).toBeNull();
+    expect(Object.values(useOpenFiles.getState().activeIdByRoot).filter(Boolean)).toEqual([]);
   });
 
   it("save shows an error toast when the API fails", async () => {
@@ -393,7 +393,7 @@ describe("EditorPage", () => {
     await waitFor(() =>
       expect(screen.getByTestId("editor-active-path")).toHaveTextContent("README.md")
     );
-    useOpenFiles.getState().updateActiveMarkdown("edited");
+    useOpenFiles.getState().updateActiveMarkdown("mock-root", "edited");
 
     await user.click(screen.getByTestId("editor-save"));
     await waitFor(() => {

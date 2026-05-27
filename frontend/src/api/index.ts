@@ -13,4 +13,5 @@ export {
   type FileListResponse,
   type FileReadResponse,
   type FileStatResponse,
+  type ReviewRootEntry,
 } from "./files";

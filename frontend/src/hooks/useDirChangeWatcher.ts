@@ -55,7 +55,12 @@ export function useDirChangeWatcher({
       const key = event.query.queryKey;
       if (!Array.isArray(key) || key[0] !== "dir") return;
 
-      const dirPath = String(key[1] ?? "");
+      // dirQueryKey is ["dir", root, path]. Older snapshots used
+      // ["dir", path] (no root segment) so we tolerate both: when the third
+      // element is missing, fall back to the second.
+      const dirRoot = key.length >= 3 ? String(key[1] ?? "") : "";
+      const dirPath = key.length >= 3 ? String(key[2] ?? "") : String(key[1] ?? "");
+      const snapshotKey = `${dirRoot}::${dirPath}`;
       const data = event.action.data as DirListResponse | undefined;
       if (!data?.entries) return;
 
@@ -64,8 +69,8 @@ export function useDirChangeWatcher({
         next.set(e.path, e.modified ?? "");
       }
 
-      const prev = snapshotsRef.current.get(dirPath);
-      snapshotsRef.current.set(dirPath, next);
+      const prev = snapshotsRef.current.get(snapshotKey);
+      snapshotsRef.current.set(snapshotKey, next);
 
       if (!prev) {
         // First snapshot — record as baseline without firing toasts.

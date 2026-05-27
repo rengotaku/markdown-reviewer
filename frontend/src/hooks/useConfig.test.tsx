@@ -27,6 +27,7 @@ describe("useConfig", () => {
     expect(result.current.data).toEqual({
       review_root_name: "mock-root",
       review_root: "/tmp/mock-root",
+      review_roots: [{ name: "mock-root", path: "/tmp/mock-root" }],
     });
   });
 });
