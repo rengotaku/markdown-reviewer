@@ -15,6 +15,7 @@ import { offset } from "@floating-ui/dom";
 import DragIndicatorIcon from "@mui/icons-material/DragIndicator";
 import { Markdown } from "tiptap-markdown";
 import { useOpenFiles } from "@/hooks/useOpenFiles";
+import { useActiveRoot } from "@/hooks/useActiveRoot";
 import { useEditorInstance } from "@/hooks/useEditorInstance";
 import { useEditorPrefs } from "@/hooks/useEditorPrefs";
 import { TableMenu } from "./toolbar/TableMenu";
@@ -34,11 +35,15 @@ function getEditorMarkdown(editor: { storage: unknown }): string {
 
 export function TiptapEditor() {
   const centered = useEditorPrefs((s) => s.centered);
-  const activeId = useOpenFiles((s) => s.activeId);
+  const { active: activeRoot } = useActiveRoot();
+  const activeId = useOpenFiles((s) =>
+    activeRoot ? (s.activeIdByRoot[activeRoot] ?? null) : null
+  );
   const scrollToTopToken = useEditorInstance((s) => s.scrollToTopToken);
   const containerRef = useRef<HTMLDivElement>(null);
   const activeReloadToken = useOpenFiles((s) => {
-    const file = s.files.find((f) => f.id === s.activeId);
+    const id = activeRoot ? s.activeIdByRoot[activeRoot] : null;
+    const file = id ? s.files.find((f) => f.id === id) : undefined;
     return file ? file.reloadToken : 0;
   });
   const updateActiveMarkdown = useOpenFiles((s) => s.updateActiveMarkdown);
@@ -85,11 +90,12 @@ export function TiptapEditor() {
     content: "",
     editable: true,
     onUpdate: ({ editor: ed }) => {
-      if (!useOpenFiles.getState().activeId) return;
+      if (!activeRoot) return;
+      if (!useOpenFiles.getState().activeIdByRoot[activeRoot]) return;
       // Drop updates fired by post-setContent extension transactions
       // (e.g. autolink) so an untouched file isn't flagged dirty.
       if (Date.now() < settleUntilRef.current) return;
-      updateActiveMarkdown(getEditorMarkdown(ed));
+      updateActiveMarkdown(activeRoot, getEditorMarkdown(ed));
     },
   });
 
@@ -125,7 +131,7 @@ export function TiptapEditor() {
     lastLoadedKeyRef.current = key;
     if (!activeId) return;
     const state = useOpenFiles.getState();
-    const file = state.files.find((f) => f.id === state.activeId);
+    const file = state.files.find((f) => f.id === activeId);
     if (file) {
       // emitUpdate: false → don't fire onUpdate for the programmatic load.
       // TipTap's Markdown roundtrip can produce a slightly normalized string

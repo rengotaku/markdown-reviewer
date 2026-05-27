@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"markdown-reviewer/internal/files"
 	"markdown-reviewer/internal/handler"
 	"markdown-reviewer/internal/model"
 	"markdown-reviewer/internal/repository"
@@ -201,10 +202,11 @@ func TestConfig_NoResolver(t *testing.T) {
 	rec := serve(h, httptest.NewRequest(http.MethodGet, "/api/config", nil))
 	require.Equal(t, http.StatusOK, rec.Code)
 
-	var resp map[string]string
+	var resp configResponse
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
-	assert.Equal(t, "", resp["review_root_name"])
-	assert.Equal(t, "", resp["review_root"])
+	assert.Equal(t, "", resp.ReviewRootName)
+	assert.Equal(t, "", resp.ReviewRoot)
+	assert.Empty(t, resp.ReviewRoots)
 }
 
 func TestConfig_WithResolver(t *testing.T) {
@@ -214,15 +216,60 @@ func TestConfig_WithResolver(t *testing.T) {
 	rec := serve(h, httptest.NewRequest(http.MethodGet, "/api/config", nil))
 	require.Equal(t, http.StatusOK, rec.Code)
 
-	var resp map[string]string
+	var resp configResponse
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
-	// Resolver.Root() is the symlink-resolved tmpdir; Base() is the leaf
-	// directory name (a random "TestConfig_WithResolver…/001" segment under
-	// t.TempDir()) — we just assert it lines up with filepath.Base(root).
-	assert.Equal(t, filepath.Base(root), resp["review_root_name"])
-	assert.NotEmpty(t, resp["review_root_name"])
-	assert.Equal(t, root, resp["review_root"])
-	assert.True(t, strings.HasPrefix(resp["review_root"], "/"))
+	// setupFilesHandler now configures a single root named "default". The
+	// legacy fields must still surface so older clients keep working.
+	assert.Equal(t, "default", resp.ReviewRootName)
+	assert.Equal(t, root, resp.ReviewRoot)
+	assert.True(t, strings.HasPrefix(resp.ReviewRoot, "/"))
+	require.Len(t, resp.ReviewRoots, 1)
+	assert.Equal(t, "default", resp.ReviewRoots[0].Name)
+	assert.Equal(t, root, resp.ReviewRoots[0].Path)
+}
+
+func TestConfig_MultipleRoots(t *testing.T) {
+	t.Parallel()
+	a := t.TempDir()
+	a, err := filepath.EvalSymlinks(a)
+	require.NoError(t, err)
+	b := t.TempDir()
+	b, err = filepath.EvalSymlinks(b)
+	require.NoError(t, err)
+
+	roots, err := files.NewRoots([]files.RootSpec{
+		{Name: "works", Path: a},
+		{Name: "rooms", Path: b},
+	})
+	require.NoError(t, err)
+	repo := repository.NewUserRepository(testutil.NewTestDB(t))
+	svc := service.NewUserService(repo)
+	h := handler.NewHandler(svc, roots)
+
+	rec := serve(h, httptest.NewRequest(http.MethodGet, "/api/config", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp configResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+
+	// Legacy fields default to the first declared root.
+	assert.Equal(t, "works", resp.ReviewRootName)
+	assert.Equal(t, a, resp.ReviewRoot)
+
+	require.Len(t, resp.ReviewRoots, 2)
+	assert.Equal(t, "works", resp.ReviewRoots[0].Name)
+	assert.Equal(t, a, resp.ReviewRoots[0].Path)
+	assert.Equal(t, "rooms", resp.ReviewRoots[1].Name)
+	assert.Equal(t, b, resp.ReviewRoots[1].Path)
+}
+
+// configResponse mirrors the JSON shape of GET /api/config and is kept local
+// to the test so the production type doesn't have to be exported just for
+// decoding convenience.
+type configResponse struct {
+	ReviewRootName string                   `json:"review_root_name"`
+	ReviewRoot     string                   `json:"review_root"`
+	ReviewRoots    []handler.ReviewRootJSON `json:"review_roots"`
 }
 
 func TestHandler_StaticFallback(t *testing.T) {

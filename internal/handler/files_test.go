@@ -21,21 +21,45 @@ import (
 	"markdown-reviewer/internal/testutil"
 )
 
-// setupFilesHandler returns a Handler whose REVIEW_ROOT is a fresh tmpdir.
-// The tmpdir path is symlink-resolved (e.g. /var → /private/var on macOS)
-// so equality assertions against the resolver's output line up.
+// setupMultiRootHandler returns a Handler configured with two named roots,
+// returning the resolved tmpdir paths so tests can write fixture files to
+// each one. Roots are declared "works" then "rooms" so "works" is the
+// default (returned when ?root= is omitted).
+func setupMultiRootHandler(t *testing.T) (h *handler.Handler, works, rooms string) {
+	t.Helper()
+	a := t.TempDir()
+	worksResolved, err := filepath.EvalSymlinks(a)
+	require.NoError(t, err)
+	b := t.TempDir()
+	roomsResolved, err := filepath.EvalSymlinks(b)
+	require.NoError(t, err)
+
+	roots, err := files.NewRoots([]files.RootSpec{
+		{Name: "works", Path: worksResolved},
+		{Name: "rooms", Path: roomsResolved},
+	})
+	require.NoError(t, err)
+
+	repo := repository.NewUserRepository(testutil.NewTestDB(t))
+	svc := service.NewUserService(repo)
+	return handler.NewHandler(svc, roots), worksResolved, roomsResolved
+}
+
+// setupFilesHandler returns a Handler with a single configured root at a
+// fresh tmpdir. The tmpdir path is symlink-resolved (e.g. /var → /private/var
+// on macOS) so equality assertions against the resolver's output line up.
 func setupFilesHandler(t *testing.T) (*handler.Handler, string) {
 	t.Helper()
 	root := t.TempDir()
 	resolved, err := filepath.EvalSymlinks(root)
 	require.NoError(t, err)
 
-	resolver, err := files.NewResolver(resolved)
+	roots, err := files.NewRoots([]files.RootSpec{{Name: "default", Path: resolved}})
 	require.NoError(t, err)
 
 	repo := repository.NewUserRepository(testutil.NewTestDB(t))
 	svc := service.NewUserService(repo)
-	return handler.NewHandler(svc, resolver), resolved
+	return handler.NewHandler(svc, roots), resolved
 }
 
 func TestFiles_List_Empty(t *testing.T) {
@@ -542,4 +566,89 @@ func TestStatFile_RejectsNonMarkdown(t *testing.T) {
 
 	rec := serve(h, httptest.NewRequest(http.MethodGet, "/api/stat/foo.txt", nil))
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+// --- multi-root selection -------------------------------------------------
+
+func TestMultiRoot_DefaultsToFirstRoot(t *testing.T) {
+	t.Parallel()
+	h, works, rooms := setupMultiRootHandler(t)
+	require.NoError(t, os.WriteFile(filepath.Join(works, "in-works.md"), []byte("w"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(rooms, "in-rooms.md"), []byte("r"), 0o644))
+
+	rec := serve(h, httptest.NewRequest(http.MethodGet, "/api/dirs", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp handler.DirListResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	assert.Equal(t, "works", resp.Root)
+	require.Len(t, resp.Entries, 1)
+	assert.Equal(t, "in-works.md", resp.Entries[0].Name)
+}
+
+func TestMultiRoot_SelectorRoutesToNamedRoot(t *testing.T) {
+	t.Parallel()
+	h, works, rooms := setupMultiRootHandler(t)
+	require.NoError(t, os.WriteFile(filepath.Join(works, "in-works.md"), []byte("w"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(rooms, "in-rooms.md"), []byte("r"), 0o644))
+
+	rec := serve(h, httptest.NewRequest(http.MethodGet, "/api/dirs?root=rooms", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp handler.DirListResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	assert.Equal(t, "rooms", resp.Root)
+	require.Len(t, resp.Entries, 1)
+	assert.Equal(t, "in-rooms.md", resp.Entries[0].Name)
+}
+
+func TestMultiRoot_UnknownRootIs400(t *testing.T) {
+	t.Parallel()
+	h, _, _ := setupMultiRootHandler(t)
+
+	rec := serve(h, httptest.NewRequest(http.MethodGet, "/api/dirs?root=missing", nil))
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func TestMultiRoot_ReadFromSecondRoot(t *testing.T) {
+	t.Parallel()
+	h, _, rooms := setupMultiRootHandler(t)
+	require.NoError(t, os.WriteFile(filepath.Join(rooms, "report.md"), []byte("# report"), 0o644))
+
+	rec := serve(h, httptest.NewRequest(http.MethodGet, "/api/files/report.md?root=rooms", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp handler.FileReadResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	assert.Equal(t, "rooms", resp.Root)
+	assert.Equal(t, "report.md", resp.Path)
+	assert.Equal(t, "# report", resp.Content)
+}
+
+func TestMultiRoot_WriteToSecondRoot(t *testing.T) {
+	t.Parallel()
+	h, _, rooms := setupMultiRootHandler(t)
+
+	body := `{"content": "# new"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/files/new.md?root=rooms", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := serve(h, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	data, err := os.ReadFile(filepath.Join(rooms, "new.md"))
+	require.NoError(t, err)
+	assert.Equal(t, "# new", string(data))
+}
+
+// A path containing ".." into the *sibling* root must still be rejected:
+// safety is enforced per-root, so the resolver for "works" has no way to
+// reach files configured under "rooms".
+func TestMultiRoot_CannotEscapeIntoSiblingRoot(t *testing.T) {
+	t.Parallel()
+	h, _, rooms := setupMultiRootHandler(t)
+	require.NoError(t, os.WriteFile(filepath.Join(rooms, "secret.md"), []byte("SECRET"), 0o644))
+
+	rec := serve(h, httptest.NewRequest(http.MethodGet, "/api/files/../"+filepath.Base(rooms)+"/secret.md?root=works", nil))
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.NotContains(t, rec.Body.String(), "SECRET")
 }

@@ -1,7 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { listDir, type DirListResponse } from "@/api";
+import { useActiveRoot } from "@/hooks/useActiveRoot";
 
-export const dirQueryKey = (path: string) => ["dir", path] as const;
+export const dirQueryKey = (root: string, path: string) =>
+  ["dir", root, path] as const;
 
 /**
  * Interval at which mounted dir queries refetch in the background so the
@@ -15,10 +17,13 @@ export const dirQueryKey = (path: string) => ["dir", path] as const;
 export const DIR_REFETCH_INTERVAL_MS = 30_000;
 
 export function useDir(path: string, opts?: { enabled?: boolean }) {
+  const { active } = useActiveRoot();
   return useQuery<DirListResponse>({
-    queryKey: dirQueryKey(path),
-    queryFn: () => listDir(path),
-    enabled: opts?.enabled ?? true,
+    queryKey: dirQueryKey(active, path),
+    queryFn: () => listDir(path, active),
+    // Wait until /api/config has provided a non-empty root so we don't fire
+    // a default-root request that we'd then immediately abandon.
+    enabled: (opts?.enabled ?? true) && active !== "",
     staleTime: DIR_REFETCH_INTERVAL_MS,
     refetchInterval: DIR_REFETCH_INTERVAL_MS,
     refetchIntervalInBackground: false,

@@ -6,7 +6,7 @@ import { useOpenFiles } from "@/hooks/useOpenFiles";
 describe("App", () => {
   beforeEach(() => {
     localStorage.clear();
-    useOpenFiles.setState({ files: [], activeId: null });
+    useOpenFiles.setState({ files: [], activeIdByRoot: {} });
   });
 
   it("renders the editor at /", async () => {

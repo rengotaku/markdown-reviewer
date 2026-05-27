@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -33,9 +34,17 @@ type Config struct {
 	Port        string `env:"PORT,default=8080"`
 	DatabaseDSN string `env:"DATABASE_DSN,default=app.db"`
 	JWTSecret   string `env:"JWT_SECRET,default=change-me-in-production"`
-	// ReviewRoot is the directory under which the /api/files endpoints
-	// browse, read, and write .md files. Leave empty to disable the files
-	// API (handlers respond with 500); required for normal operation.
+	// ReviewRoots is a JSON array of {name, path} entries describing every
+	// directory the /api/files endpoints will browse. Takes precedence over
+	// the legacy single REVIEW_ROOT when both are set.
+	//
+	//   REVIEW_ROOTS='[{"name":"works","path":"/Users/x/ot/works"},{"name":"rooms","path":"/Users/x/ot/rooms"}]'
+	ReviewRoots string `env:"REVIEW_ROOTS"`
+	// ReviewRoot is the legacy single-directory env var, retained for
+	// backward compatibility. When REVIEW_ROOTS is empty and this is set, a
+	// single-root config is built using filepath.Base(REVIEW_ROOT) as the
+	// tab name. Leave both empty to disable the files API entirely
+	// (handlers respond with 500).
 	ReviewRoot      string        `env:"REVIEW_ROOT"`
 	ShutdownTimeout time.Duration `env:"SHUTDOWN_TIMEOUT,default=10s"`
 	JWTTTL          time.Duration `env:"JWT_TTL,default=24h"`
@@ -76,18 +85,19 @@ func Run(ctx context.Context) error {
 	repo := repository.NewUserRepository(db)
 	svc := service.NewUserService(repo)
 
-	var resolver *files.Resolver
-	if cfg.ReviewRoot != "" {
-		resolver, err = files.NewResolver(cfg.ReviewRoot)
-		if err != nil {
-			return fmt.Errorf("init files resolver: %w", err)
+	roots, err := buildRoots(cfg)
+	if err != nil {
+		return fmt.Errorf("init files roots: %w", err)
+	}
+	if roots != nil {
+		for _, root := range roots.List() {
+			slog.Info("files API enabled", "name", root.Name, "path", root.Resolver.Root())
 		}
-		slog.Info("files API enabled", "review_root", resolver.Root())
 	} else {
-		slog.Warn("REVIEW_ROOT not set; /api/files endpoints will return 500")
+		slog.Warn("neither REVIEW_ROOTS nor REVIEW_ROOT set; /api/files endpoints will return 500")
 	}
 
-	h := handler.NewHandler(svc, resolver)
+	h := handler.NewHandler(svc, roots)
 
 	srv := &http.Server{
 		Addr:         ":" + cfg.Port,
@@ -126,6 +136,25 @@ func Run(ctx context.Context) error {
 	case err := <-errCh:
 		return err
 	}
+}
+
+// buildRoots resolves the configured roots from cfg. REVIEW_ROOTS (JSON
+// array) wins when present; REVIEW_ROOT is the single-root fallback. Both
+// empty → (nil, nil) so the caller can disable the files API entirely.
+func buildRoots(cfg Config) (*files.Roots, error) {
+	if cfg.ReviewRoots != "" {
+		specs, err := files.ParseRootsJSON(cfg.ReviewRoots)
+		if err != nil {
+			return nil, err
+		}
+		return files.NewRoots(specs)
+	}
+	if cfg.ReviewRoot == "" {
+		return nil, nil
+	}
+	return files.NewRoots([]files.RootSpec{
+		{Name: filepath.Base(cfg.ReviewRoot), Path: cfg.ReviewRoot},
+	})
 }
 
 func setupLogger() {

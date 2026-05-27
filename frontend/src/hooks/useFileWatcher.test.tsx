@@ -1,6 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { http, HttpResponse } from "msw";
 import { renderHook, act, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MemoryRouter } from "react-router-dom";
+import { type ReactNode } from "react";
 import { server } from "@/test/mocks/server";
 import { useOpenFiles } from "./useOpenFiles";
 import { useConfirm } from "./useConfirm";
@@ -11,6 +14,8 @@ const API_BASE = "http://localhost:8080";
 // Short interval so tests don't have to wait — uses real timers because
 // react-testing-library's waitFor interacts poorly with vi.useFakeTimers().
 const POLL_MS = 20;
+
+const ROOT = "mock-root";
 
 function seedActiveFile(opts: {
   name: string;
@@ -26,6 +31,7 @@ function seedActiveFile(opts: {
         id,
         name: opts.name,
         path: opts.path,
+        root: ROOT,
         markdown: opts.markdown,
         savedMarkdown: opts.isDirty ? "older" : opts.markdown,
         isDirty: !!opts.isDirty,
@@ -35,15 +41,36 @@ function seedActiveFile(opts: {
         serverCreated: "",
       },
     ],
-    activeId: id,
+    activeIdByRoot: { [ROOT]: id },
   });
   return id;
+}
+
+// useFileWatcher pulls the active root from `useActiveRoot`, which in turn
+// reads from the URL (?tab=) and /api/config. The watcher hook is wrapped
+// in a MemoryRouter + QueryClient so those reads have somewhere to come
+// from. The QueryClient pre-loads a single-root /api/config payload so
+// `active` resolves to ROOT without any network round-trip.
+function wrapper({ children }: { children: ReactNode }) {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  client.setQueryData(["config"], {
+    review_root_name: ROOT,
+    review_root: `/tmp/${ROOT}`,
+    review_roots: [{ name: ROOT, path: `/tmp/${ROOT}` }],
+  });
+  return (
+    <QueryClientProvider client={client}>
+      <MemoryRouter>{children}</MemoryRouter>
+    </QueryClientProvider>
+  );
 }
 
 describe("useFileWatcher", () => {
   beforeEach(() => {
     localStorage.clear();
-    useOpenFiles.setState({ files: [], activeId: null });
+    useOpenFiles.setState({ files: [], activeIdByRoot: {} });
     useConfirm.setState({ pending: null });
     useToast.setState({ toasts: [] });
   });
@@ -69,7 +96,7 @@ describe("useFileWatcher", () => {
       )
     );
 
-    renderHook(() => useFileWatcher(POLL_MS));
+    renderHook(() => useFileWatcher(POLL_MS), { wrapper });
 
     await waitFor(
       () => {
@@ -104,7 +131,7 @@ describe("useFileWatcher", () => {
       )
     );
 
-    renderHook(() => useFileWatcher(POLL_MS));
+    renderHook(() => useFileWatcher(POLL_MS), { wrapper });
 
     await waitFor(() => expect(useConfirm.getState().pending).not.toBeNull(), {
       timeout: 2000,
@@ -136,7 +163,7 @@ describe("useFileWatcher", () => {
       )
     );
 
-    renderHook(() => useFileWatcher(POLL_MS));
+    renderHook(() => useFileWatcher(POLL_MS), { wrapper });
 
     await waitFor(() => expect(useConfirm.getState().pending).not.toBeNull(), {
       timeout: 2000,
@@ -167,7 +194,7 @@ describe("useFileWatcher", () => {
       serverModified: "",
     });
 
-    renderHook(() => useFileWatcher(POLL_MS));
+    renderHook(() => useFileWatcher(POLL_MS), { wrapper });
 
     await new Promise((r) => setTimeout(r, POLL_MS * 5));
     expect(statSpy).not.toHaveBeenCalled();

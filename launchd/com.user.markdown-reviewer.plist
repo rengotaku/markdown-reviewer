@@ -18,6 +18,12 @@
         <string>__HOME__</string>
         <key>PORT</key>
         <string>__PORT__</string>
+        <!-- REVIEW_ROOTS (JSON array) is preferred for multi-root setups.
+             Leave it blank to fall back to the single-directory REVIEW_ROOT
+             below, which install-launchd.sh keeps populated for legacy
+             single-root installs. -->
+        <key>REVIEW_ROOTS</key>
+        <string>__REVIEW_ROOTS__</string>
         <key>REVIEW_ROOT</key>
         <string>__REVIEW_ROOT__</string>
         <!-- markdown-reviewer doesn't actually use the user DB (boilerplate
