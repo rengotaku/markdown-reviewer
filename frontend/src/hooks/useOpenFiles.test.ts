@@ -1,110 +1,122 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { useOpenFiles } from "./useOpenFiles";
+import { useOpenFiles, reattachLegacyFilesToRoot } from "./useOpenFiles";
+import { simpleHash } from "@/utils/hash";
+
+// All tests pin a single root name so they keep exercising the same
+// behaviors that mattered pre-multi-root, just routed through the per-root
+// activeIdByRoot field.
+const ROOT = "default";
+
+function activeId() {
+  return useOpenFiles.getState().activeIdByRoot[ROOT] ?? null;
+}
 
 describe("useOpenFiles", () => {
   beforeEach(() => {
     localStorage.clear();
-    useOpenFiles.setState({ files: [], activeId: null });
+    useOpenFiles.setState({ files: [], activeIdByRoot: {} });
   });
 
   it("starts with no files and no active id when reset", () => {
     const state = useOpenFiles.getState();
     expect(state.files).toEqual([]);
-    expect(state.activeId).toBeNull();
+    expect(activeId()).toBeNull();
   });
 
   it("adds files and activates the first added when none was active", () => {
     useOpenFiles.getState().addFiles([
-      { name: "a.md", markdown: "# A" },
-      { name: "b.md", markdown: "# B" },
+      { name: "a.md", root: ROOT, markdown: "# A" },
+      { name: "b.md", root: ROOT, markdown: "# B" },
     ]);
     const state = useOpenFiles.getState();
     expect(state.files).toHaveLength(2);
     expect(state.files[0].name).toBe("a.md");
-    expect(state.activeId).toBe(state.files[0].id);
+    expect(activeId()).toBe(state.files[0].id);
   });
 
   it("activates the first newly added file when adding more files", () => {
-    useOpenFiles.getState().addFiles([{ name: "a.md", markdown: "# A" }]);
-    useOpenFiles.getState().addFiles([{ name: "b.md", markdown: "# B" }]);
+    useOpenFiles.getState().addFiles([{ name: "a.md", root: ROOT, markdown: "# A" }]);
+    useOpenFiles.getState().addFiles([{ name: "b.md", root: ROOT, markdown: "# B" }]);
     const bId = useOpenFiles.getState().files.find((f) => f.name === "b.md")!.id;
-    expect(useOpenFiles.getState().activeId).toBe(bId);
+    expect(activeId()).toBe(bId);
   });
 
   it("marks active file dirty on content change", () => {
-    useOpenFiles.getState().addFiles([{ name: "a.md", markdown: "# A" }]);
-    useOpenFiles.getState().updateActiveMarkdown("# Changed");
+    useOpenFiles.getState().addFiles([{ name: "a.md", root: ROOT, markdown: "# A" }]);
+    useOpenFiles.getState().updateActiveMarkdown(ROOT, "# Changed");
     const active = useOpenFiles
       .getState()
-      .files.find((f) => f.id === useOpenFiles.getState().activeId);
+      .files.find((f) => f.id === activeId());
     expect(active?.markdown).toBe("# Changed");
     expect(active?.isDirty).toBe(true);
   });
 
   it("does not mark dirty when content is identical", () => {
-    useOpenFiles.getState().addFiles([{ name: "a.md", markdown: "# A" }]);
-    useOpenFiles.getState().updateActiveMarkdown("# A");
+    useOpenFiles.getState().addFiles([{ name: "a.md", root: ROOT, markdown: "# A" }]);
+    useOpenFiles.getState().updateActiveMarkdown(ROOT, "# A");
     const active = useOpenFiles
       .getState()
-      .files.find((f) => f.id === useOpenFiles.getState().activeId);
+      .files.find((f) => f.id === activeId());
     expect(active?.isDirty).toBe(false);
   });
 
   it("switches active file", () => {
     useOpenFiles.getState().addFiles([
-      { name: "a.md", markdown: "# A" },
-      { name: "b.md", markdown: "# B" },
+      { name: "a.md", root: ROOT, markdown: "# A" },
+      { name: "b.md", root: ROOT, markdown: "# B" },
     ]);
     const secondId = useOpenFiles.getState().files[1].id;
-    useOpenFiles.getState().setActive(secondId);
-    expect(useOpenFiles.getState().activeId).toBe(secondId);
+    useOpenFiles.getState().setActive(ROOT, secondId);
+    expect(activeId()).toBe(secondId);
   });
 
   it("closes active file and activates the neighbor", () => {
     useOpenFiles.getState().addFiles([
-      { name: "a.md", markdown: "# A" },
-      { name: "b.md", markdown: "# B" },
-      { name: "c.md", markdown: "# C" },
+      { name: "a.md", root: ROOT, markdown: "# A" },
+      { name: "b.md", root: ROOT, markdown: "# B" },
+      { name: "c.md", root: ROOT, markdown: "# C" },
     ]);
     const [a, b, c] = useOpenFiles.getState().files;
-    useOpenFiles.getState().setActive(b.id);
+    useOpenFiles.getState().setActive(ROOT, b.id);
     useOpenFiles.getState().closeFile(b.id);
     const state = useOpenFiles.getState();
     expect(state.files.map((f) => f.id)).toEqual([a.id, c.id]);
-    expect(state.activeId).toBe(c.id);
+    expect(activeId()).toBe(c.id);
   });
 
   it("closing a non-active file keeps the active id", () => {
     useOpenFiles.getState().addFiles([
-      { name: "a.md", markdown: "# A" },
-      { name: "b.md", markdown: "# B" },
+      { name: "a.md", root: ROOT, markdown: "# A" },
+      { name: "b.md", root: ROOT, markdown: "# B" },
     ]);
     const [a, b] = useOpenFiles.getState().files;
-    useOpenFiles.getState().setActive(a.id);
+    useOpenFiles.getState().setActive(ROOT, a.id);
     useOpenFiles.getState().closeFile(b.id);
     const state = useOpenFiles.getState();
-    expect(state.activeId).toBe(a.id);
+    expect(activeId()).toBe(a.id);
     expect(state.files).toHaveLength(1);
   });
 
   it("closing the last open file leaves the store empty and unselected", () => {
-    useOpenFiles.getState().addFiles([{ name: "a.md", markdown: "# A" }]);
+    useOpenFiles.getState().addFiles([{ name: "a.md", root: ROOT, markdown: "# A" }]);
     const id = useOpenFiles.getState().files[0].id;
     useOpenFiles.getState().closeFile(id);
     const state = useOpenFiles.getState();
     expect(state.files).toEqual([]);
-    expect(state.activeId).toBeNull();
+    expect(activeId()).toBeNull();
   });
 
   it("overwriteFiles replaces markdown by name, resets dirty, bumps reloadToken", () => {
     useOpenFiles.getState().addFiles([
-      { name: "a.md", markdown: "# A" },
-      { name: "b.md", markdown: "# B" },
+      { name: "a.md", root: ROOT, markdown: "# A" },
+      { name: "b.md", root: ROOT, markdown: "# B" },
     ]);
-    useOpenFiles.getState().updateActiveMarkdown("# A edited");
+    useOpenFiles.getState().updateActiveMarkdown(ROOT, "# A edited");
     const before = useOpenFiles.getState().files.find((f) => f.name === "a.md")!;
 
-    useOpenFiles.getState().overwriteFiles([{ name: "a.md", markdown: "# A reloaded" }]);
+    useOpenFiles
+      .getState()
+      .overwriteFiles(ROOT, [{ name: "a.md", root: ROOT, markdown: "# A reloaded" }]);
 
     const after = useOpenFiles.getState().files.find((f) => f.name === "a.md")!;
     expect(after.markdown).toBe("# A reloaded");
@@ -117,33 +129,43 @@ describe("useOpenFiles", () => {
 
   it("overwriteFiles activates the first overwritten file when it was not active", () => {
     useOpenFiles.getState().addFiles([
-      { name: "a.md", markdown: "# A" },
-      { name: "b.md", markdown: "# B" },
+      { name: "a.md", root: ROOT, markdown: "# A" },
+      { name: "b.md", root: ROOT, markdown: "# B" },
     ]);
     const [a, b] = useOpenFiles.getState().files;
-    useOpenFiles.getState().setActive(a.id);
+    useOpenFiles.getState().setActive(ROOT, a.id);
 
-    useOpenFiles.getState().overwriteFiles([{ name: "b.md", markdown: "# B reloaded" }]);
+    useOpenFiles
+      .getState()
+      .overwriteFiles(ROOT, [{ name: "b.md", root: ROOT, markdown: "# B reloaded" }]);
 
-    expect(useOpenFiles.getState().activeId).toBe(b.id);
+    expect(activeId()).toBe(b.id);
   });
 
   it("overwriteFiles keeps the active id when the already-active file is overwritten", () => {
     useOpenFiles.getState().addFiles([
-      { name: "a.md", markdown: "# A" },
-      { name: "b.md", markdown: "# B" },
+      { name: "a.md", root: ROOT, markdown: "# A" },
+      { name: "b.md", root: ROOT, markdown: "# B" },
     ]);
     const [a] = useOpenFiles.getState().files;
-    useOpenFiles.getState().setActive(a.id);
+    useOpenFiles.getState().setActive(ROOT, a.id);
 
-    useOpenFiles.getState().overwriteFiles([{ name: "a.md", markdown: "# A reloaded" }]);
+    useOpenFiles
+      .getState()
+      .overwriteFiles(ROOT, [{ name: "a.md", root: ROOT, markdown: "# A reloaded" }]);
 
-    expect(useOpenFiles.getState().activeId).toBe(a.id);
+    expect(activeId()).toBe(a.id);
   });
 
   it("overwriteFiles ignores names not present in the store", () => {
-    useOpenFiles.getState().addFiles([{ name: "a.md", markdown: "# A" }]);
-    useOpenFiles.getState().overwriteFiles([{ name: "missing.md", markdown: "# X" }]);
+    useOpenFiles
+      .getState()
+      .addFiles([{ name: "a.md", root: ROOT, markdown: "# A" }]);
+    useOpenFiles
+      .getState()
+      .overwriteFiles(ROOT, [
+        { name: "missing.md", root: ROOT, markdown: "# X" },
+      ]);
     const state = useOpenFiles.getState();
     expect(state.files).toHaveLength(1);
     expect(state.files[0].markdown).toBe("# A");
@@ -151,37 +173,22 @@ describe("useOpenFiles", () => {
 
   it("closeAll empties the store and clears the active id", () => {
     useOpenFiles.getState().addFiles([
-      { name: "a.md", markdown: "# A" },
-      { name: "b.md", markdown: "# B" },
+      { name: "a.md", root: ROOT, markdown: "# A" },
+      { name: "b.md", root: ROOT, markdown: "# B" },
     ]);
     useOpenFiles.getState().closeAll();
     const state = useOpenFiles.getState();
     expect(state.files).toEqual([]);
-    expect(state.activeId).toBeNull();
-  });
-
-  it("createUntitled appends untitled.md and activates it", () => {
-    useOpenFiles.getState().createUntitled();
-    const state = useOpenFiles.getState();
-    expect(state.files).toHaveLength(1);
-    expect(state.files[0].name).toBe("untitled.md");
-    expect(state.activeId).toBe(state.files[0].id);
-  });
-
-  it("createUntitled increments the suffix when names collide", () => {
-    useOpenFiles.getState().addFiles([
-      { name: "untitled.md", markdown: "" },
-      { name: "untitled-2.md", markdown: "" },
-    ]);
-    useOpenFiles.getState().createUntitled();
-    const names = useOpenFiles.getState().files.map((f) => f.name);
-    expect(names).toEqual(["untitled.md", "untitled-2.md", "untitled-3.md"]);
+    expect(activeId()).toBeNull();
   });
 
   it("openServerFile adds and activates when path is new", () => {
-    useOpenFiles
-      .getState()
-      .openServerFile({ name: "intro.md", path: "docs/intro.md", markdown: "# Intro" });
+    useOpenFiles.getState().openServerFile({
+      name: "intro.md",
+      path: "docs/intro.md",
+      root: ROOT,
+      markdown: "# Intro",
+    });
     const state = useOpenFiles.getState();
     expect(state.files).toHaveLength(1);
     expect(state.files[0]).toMatchObject({
@@ -190,43 +197,175 @@ describe("useOpenFiles", () => {
       markdown: "# Intro",
       isDirty: false,
     });
-    expect(state.activeId).toBe(state.files[0].id);
+    expect(activeId()).toBe(state.files[0].id);
   });
 
   it("openServerFile activates existing tab when path already open", () => {
     useOpenFiles
       .getState()
-      .openServerFile({ name: "a.md", path: "a.md", markdown: "# A" });
+      .openServerFile({ name: "a.md", path: "a.md", root: ROOT, markdown: "# A" });
     useOpenFiles
       .getState()
-      .openServerFile({ name: "b.md", path: "b.md", markdown: "# B" });
+      .openServerFile({ name: "b.md", path: "b.md", root: ROOT, markdown: "# B" });
     const aId = useOpenFiles.getState().files.find((f) => f.path === "a.md")!.id;
 
     useOpenFiles
       .getState()
-      .openServerFile({ name: "a.md", path: "a.md", markdown: "ignored" });
+      .openServerFile({ name: "a.md", path: "a.md", root: ROOT, markdown: "ignored" });
 
     const state = useOpenFiles.getState();
     expect(state.files).toHaveLength(2);
-    expect(state.activeId).toBe(aId);
-    // markdown was not overwritten
+    expect(activeId()).toBe(aId);
     expect(state.files.find((f) => f.path === "a.md")!.markdown).toBe("# A");
   });
 
   it("markActiveSaved clears the dirty flag on the active file", () => {
-    useOpenFiles.getState().addFiles([{ name: "a.md", markdown: "# A" }]);
-    useOpenFiles.getState().updateActiveMarkdown("# A edited");
+    useOpenFiles.getState().addFiles([{ name: "a.md", root: ROOT, markdown: "# A" }]);
+    useOpenFiles.getState().updateActiveMarkdown(ROOT, "# A edited");
     expect(
       useOpenFiles
         .getState()
-        .files.find((f) => f.id === useOpenFiles.getState().activeId)!.isDirty
+        .files.find((f) => f.id === activeId())!.isDirty
     ).toBe(true);
 
-    useOpenFiles.getState().markActiveSaved();
+    useOpenFiles.getState().markActiveSaved(ROOT);
     expect(
       useOpenFiles
         .getState()
-        .files.find((f) => f.id === useOpenFiles.getState().activeId)!.isDirty
+        .files.find((f) => f.id === activeId())!.isDirty
     ).toBe(false);
+  });
+
+  // --- multi-root ---------------------------------------------------------
+
+  it("tracks active id independently per root", () => {
+    useOpenFiles
+      .getState()
+      .addFiles([{ name: "a.md", root: "works", markdown: "# works/a" }]);
+    useOpenFiles
+      .getState()
+      .addFiles([{ name: "b.md", root: "rooms", markdown: "# rooms/b" }]);
+    const state = useOpenFiles.getState();
+    expect(state.activeIdByRoot.works).toBe(
+      state.files.find((f) => f.root === "works")!.id
+    );
+    expect(state.activeIdByRoot.rooms).toBe(
+      state.files.find((f) => f.root === "rooms")!.id
+    );
+  });
+
+  // --- legacy migration --------------------------------------------------
+
+  it("reattachLegacyFilesToRoot moves rootless files onto the default root", () => {
+    useOpenFiles.setState({
+      files: [
+        {
+          id: "legacy-1",
+          name: "a.md",
+          path: "a.md",
+          root: "",
+          markdown: "# A",
+          savedMarkdown: "# A",
+          isDirty: false,
+          reloadToken: 0,
+          initialHash: simpleHash("# A"),
+          serverModified: "",
+          serverCreated: "",
+        },
+        {
+          id: "fresh-1",
+          name: "b.md",
+          path: "b.md",
+          root: "rooms",
+          markdown: "# B",
+          savedMarkdown: "# B",
+          isDirty: false,
+          reloadToken: 0,
+          initialHash: simpleHash("# B"),
+          serverModified: "",
+          serverCreated: "",
+        },
+      ],
+      activeIdByRoot: { "": "legacy-1", rooms: "fresh-1" },
+    });
+
+    reattachLegacyFilesToRoot("works");
+
+    const state = useOpenFiles.getState();
+    // Legacy file is rehomed; existing rooted file stays put.
+    expect(state.files.find((f) => f.id === "legacy-1")?.root).toBe("works");
+    expect(state.files.find((f) => f.id === "fresh-1")?.root).toBe("rooms");
+    // activeIdByRoot[""] is migrated to activeIdByRoot["works"]; rooms stays.
+    expect(state.activeIdByRoot.works).toBe("legacy-1");
+    expect(state.activeIdByRoot[""]).toBeUndefined();
+    expect(state.activeIdByRoot.rooms).toBe("fresh-1");
+  });
+
+  it("reattachLegacyFilesToRoot is a no-op when nothing legacy is present", () => {
+    useOpenFiles.setState({
+      files: [
+        {
+          id: "x",
+          name: "x.md",
+          path: "x.md",
+          root: "works",
+          markdown: "x",
+          savedMarkdown: "x",
+          isDirty: false,
+          reloadToken: 0,
+          initialHash: simpleHash("x"),
+          serverModified: "",
+          serverCreated: "",
+        },
+      ],
+      activeIdByRoot: { works: "x" },
+    });
+    const before = useOpenFiles.getState();
+    reattachLegacyFilesToRoot("works");
+    const after = useOpenFiles.getState();
+    expect(after.files).toEqual(before.files);
+    expect(after.activeIdByRoot).toEqual(before.activeIdByRoot);
+  });
+
+  it("reattachLegacyFilesToRoot refuses an empty default root", () => {
+    useOpenFiles.setState({
+      files: [
+        {
+          id: "y",
+          name: "y.md",
+          path: "y.md",
+          root: "",
+          markdown: "y",
+          savedMarkdown: "y",
+          isDirty: false,
+          reloadToken: 0,
+          initialHash: simpleHash("y"),
+          serverModified: "",
+          serverCreated: "",
+        },
+      ],
+      activeIdByRoot: { "": "y" },
+    });
+    reattachLegacyFilesToRoot("");
+    // Files are untouched (still rootless) since an empty default would
+    // overwrite them with another invalid value.
+    expect(useOpenFiles.getState().files[0].root).toBe("");
+  });
+
+  it("closeFile only affects its own root's active id", () => {
+    useOpenFiles
+      .getState()
+      .addFiles([{ name: "a.md", root: "works", markdown: "# A" }]);
+    useOpenFiles
+      .getState()
+      .addFiles([{ name: "b.md", root: "rooms", markdown: "# B" }]);
+    const worksId = useOpenFiles.getState().files.find((f) => f.root === "works")!.id;
+    useOpenFiles.getState().closeFile(worksId);
+    const state = useOpenFiles.getState();
+    expect(state.activeIdByRoot.works).toBeNull();
+    // rooms remains untouched.
+    expect(state.activeIdByRoot.rooms).toBeTruthy();
+    expect(state.files).toHaveLength(1);
+    expect(state.files[0].root).toBe("rooms");
   });
 });

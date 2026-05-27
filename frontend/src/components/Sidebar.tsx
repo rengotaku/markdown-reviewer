@@ -19,7 +19,7 @@ import FolderOpen from "@mui/icons-material/FolderOpen";
 import InsertDriveFile from "@mui/icons-material/InsertDriveFile";
 import { useSearchParams } from "react-router-dom";
 import { useDir } from "@/hooks/useDir";
-import { useConfig } from "@/hooks/useConfig";
+import { useActiveRoot } from "@/hooks/useActiveRoot";
 import { useToast } from "@/hooks/useToast";
 import { useUIStore } from "@/hooks/useUIStore";
 import type { DirEntryApi } from "@/api";
@@ -46,8 +46,7 @@ export function Sidebar({ activePath, onSelect }: SidebarProps) {
   );
   const showToast = useToast((s) => s.show);
   const selectedDirPath = useUIStore((s) => s.selectedDirPath);
-  const { data: config } = useConfig();
-  const reviewRoot = config?.review_root ?? "";
+  const { activePath: reviewRoot } = useActiveRoot();
 
   const buildFullPath = (path: string): string => {
     if (!reviewRoot) return path;
