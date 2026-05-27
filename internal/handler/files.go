@@ -30,9 +30,13 @@ type FileEntry struct {
 }
 
 // FileListResponse is the response body for GET /api/files.
+//
+// Field order is GC-scan-friendly: the string (one pointer + length) lives
+// before the slice header (one pointer + length + cap) so govet's
+// fieldalignment doesn't complain.
 type FileListResponse struct {
-	Files []FileEntry `json:"files"`
 	Root  string      `json:"root"`
+	Files []FileEntry `json:"files"`
 }
 
 // DirEntry is one entry in the /api/dirs listing.
@@ -44,9 +48,11 @@ type DirEntry struct {
 }
 
 // DirListResponse is the response body for GET /api/dirs.
+//
+// String before slice for the same reason as FileListResponse.
 type DirListResponse struct {
-	Entries []DirEntry `json:"entries"`
 	Root    string     `json:"root"`
+	Entries []DirEntry `json:"entries"`
 }
 
 // FileReadResponse is the response body for GET /api/files/*path.

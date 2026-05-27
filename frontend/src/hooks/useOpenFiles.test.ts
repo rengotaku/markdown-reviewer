@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { useOpenFiles } from "./useOpenFiles";
+import { useOpenFiles, reattachLegacyFilesToRoot } from "./useOpenFiles";
+import { simpleHash } from "@/utils/hash";
 
 // All tests pin a single root name so they keep exercising the same
 // behaviors that mattered pre-multi-root, just routed through the per-root
@@ -251,6 +252,104 @@ describe("useOpenFiles", () => {
     expect(state.activeIdByRoot.rooms).toBe(
       state.files.find((f) => f.root === "rooms")!.id
     );
+  });
+
+  // --- legacy migration --------------------------------------------------
+
+  it("reattachLegacyFilesToRoot moves rootless files onto the default root", () => {
+    useOpenFiles.setState({
+      files: [
+        {
+          id: "legacy-1",
+          name: "a.md",
+          path: "a.md",
+          root: "",
+          markdown: "# A",
+          savedMarkdown: "# A",
+          isDirty: false,
+          reloadToken: 0,
+          initialHash: simpleHash("# A"),
+          serverModified: "",
+          serverCreated: "",
+        },
+        {
+          id: "fresh-1",
+          name: "b.md",
+          path: "b.md",
+          root: "rooms",
+          markdown: "# B",
+          savedMarkdown: "# B",
+          isDirty: false,
+          reloadToken: 0,
+          initialHash: simpleHash("# B"),
+          serverModified: "",
+          serverCreated: "",
+        },
+      ],
+      activeIdByRoot: { "": "legacy-1", rooms: "fresh-1" },
+    });
+
+    reattachLegacyFilesToRoot("works");
+
+    const state = useOpenFiles.getState();
+    // Legacy file is rehomed; existing rooted file stays put.
+    expect(state.files.find((f) => f.id === "legacy-1")?.root).toBe("works");
+    expect(state.files.find((f) => f.id === "fresh-1")?.root).toBe("rooms");
+    // activeIdByRoot[""] is migrated to activeIdByRoot["works"]; rooms stays.
+    expect(state.activeIdByRoot.works).toBe("legacy-1");
+    expect(state.activeIdByRoot[""]).toBeUndefined();
+    expect(state.activeIdByRoot.rooms).toBe("fresh-1");
+  });
+
+  it("reattachLegacyFilesToRoot is a no-op when nothing legacy is present", () => {
+    useOpenFiles.setState({
+      files: [
+        {
+          id: "x",
+          name: "x.md",
+          path: "x.md",
+          root: "works",
+          markdown: "x",
+          savedMarkdown: "x",
+          isDirty: false,
+          reloadToken: 0,
+          initialHash: simpleHash("x"),
+          serverModified: "",
+          serverCreated: "",
+        },
+      ],
+      activeIdByRoot: { works: "x" },
+    });
+    const before = useOpenFiles.getState();
+    reattachLegacyFilesToRoot("works");
+    const after = useOpenFiles.getState();
+    expect(after.files).toEqual(before.files);
+    expect(after.activeIdByRoot).toEqual(before.activeIdByRoot);
+  });
+
+  it("reattachLegacyFilesToRoot refuses an empty default root", () => {
+    useOpenFiles.setState({
+      files: [
+        {
+          id: "y",
+          name: "y.md",
+          path: "y.md",
+          root: "",
+          markdown: "y",
+          savedMarkdown: "y",
+          isDirty: false,
+          reloadToken: 0,
+          initialHash: simpleHash("y"),
+          serverModified: "",
+          serverCreated: "",
+        },
+      ],
+      activeIdByRoot: { "": "y" },
+    });
+    reattachLegacyFilesToRoot("");
+    // Files are untouched (still rootless) since an empty default would
+    // overwrite them with another invalid value.
+    expect(useOpenFiles.getState().files[0].root).toBe("");
   });
 
   it("closeFile only affects its own root's active id", () => {
