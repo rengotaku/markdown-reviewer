@@ -49,7 +49,7 @@ function Probe({ targetRoot }: { targetRoot?: string }) {
 }
 
 describe("useActiveRoot", () => {
-  it("defaults to the first configured root when no ?tab= is set", () => {
+  it("defaults to the first configured root when no ?root= is set", () => {
     const wrapper = makeWrapper({});
     const { result } = renderHook(() => useActiveRoot(), { wrapper });
     expect(result.current.active).toBe("works");
@@ -57,15 +57,15 @@ describe("useActiveRoot", () => {
     expect(result.current.roots).toHaveLength(2);
   });
 
-  it("honors ?tab=<name> when the name matches a configured root", () => {
-    const wrapper = makeWrapper({ initialEntries: ["/?tab=rooms"] });
+  it("honors ?root=<name> when the name matches a configured root", () => {
+    const wrapper = makeWrapper({ initialEntries: ["/?root=rooms"] });
     const { result } = renderHook(() => useActiveRoot(), { wrapper });
     expect(result.current.active).toBe("rooms");
     expect(result.current.activePath).toBe("/tmp/rooms");
   });
 
-  it("falls back to the default root and scrubs the URL when ?tab= is unknown", async () => {
-    const Wrapper = makeWrapper({ initialEntries: ["/?tab=phantom"] });
+  it("falls back to the default root and scrubs the URL when ?root= is unknown", async () => {
+    const Wrapper = makeWrapper({ initialEntries: ["/?root=phantom"] });
     const { getByTestId } = render(
       <Wrapper>
         <Probe />
@@ -88,11 +88,11 @@ describe("useActiveRoot", () => {
     expect(probe.dataset.active).toBe("works");
     act(() => probe.click());
     expect(probe.dataset.active).toBe("rooms");
-    expect(probe.dataset.search).toBe("?tab=rooms");
+    expect(probe.dataset.search).toBe("?root=rooms");
   });
 
-  it("setActive on the default root removes ?tab= from the URL", () => {
-    const Wrapper = makeWrapper({ initialEntries: ["/?tab=rooms"] });
+  it("setActive on the default root removes ?root= from the URL", () => {
+    const Wrapper = makeWrapper({ initialEntries: ["/?root=rooms"] });
     const { getByTestId } = render(
       <Wrapper>
         <Probe targetRoot="works" />
@@ -100,7 +100,7 @@ describe("useActiveRoot", () => {
     );
     const probe = getByTestId("probe");
     expect(probe.dataset.active).toBe("rooms");
-    expect(probe.dataset.search).toBe("?tab=rooms");
+    expect(probe.dataset.search).toBe("?root=rooms");
     act(() => probe.click());
     expect(probe.dataset.active).toBe("works");
     expect(probe.dataset.search).toBe("");

@@ -47,7 +47,7 @@ function seedActiveFile(opts: {
 }
 
 // useFileWatcher pulls the active root from `useActiveRoot`, which in turn
-// reads from the URL (?tab=) and /api/config. The watcher hook is wrapped
+// reads from the URL (?root=) and /api/config. The watcher hook is wrapped
 // in a MemoryRouter + QueryClient so those reads have somewhere to come
 // from. The QueryClient pre-loads a single-root /api/config payload so
 // `active` resolves to ROOT without any network round-trip.
