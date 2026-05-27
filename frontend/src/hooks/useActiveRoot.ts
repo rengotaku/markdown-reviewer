@@ -5,11 +5,10 @@ import type { ReviewRootEntry } from "@/api";
 
 /**
  * URL search param that selects which configured review root the UI is
- * currently scoped to. Picked instead of the existing `?root=` (which
- * already drives the sidebar's directory filter, issue #16) to avoid a
- * silent name collision.
+ * currently scoped to. Appears in the browser URL as `?root=<name>` so
+ * shared / bookmarked links preserve the active root.
  */
-export const TAB_PARAM = "tab";
+export const TAB_PARAM = "root";
 
 interface UseActiveRootResult {
   /** Name of the active root, or "" while /api/config is still loading. */
@@ -29,10 +28,10 @@ interface UseActiveRootResult {
 /**
  * Tracks "which configured root is the UI currently showing".
  *
- * Source of truth is the URL `?tab=<name>` param so the active root survives
+ * Source of truth is the URL `?root=<name>` param so the active root survives
  * reloads + is shareable. We bounce the value through React Router's
  * `useSearchParams` so navigating with browser back/forward picks up the
- * intended root. When the URL has no `?tab=`, the first declared root in
+ * intended root. When the URL has no `?root=`, the first declared root in
  * /api/config is used as the default — kept implicit (no param written)
  * so the URL stays clean for the common "single root" case.
  */
