@@ -10,6 +10,8 @@ import Box from "@mui/material/Box";
 import FormGroup from "@mui/material/FormGroup";
 import FormControlLabel from "@mui/material/FormControlLabel";
 import Checkbox from "@mui/material/Checkbox";
+import ToggleButton from "@mui/material/ToggleButton";
+import ToggleButtonGroup from "@mui/material/ToggleButtonGroup";
 
 /**
  * The dialog supports four discrete flows; the caller picks which by setting
@@ -21,7 +23,8 @@ import Checkbox from "@mui/material/Checkbox";
  *   - "block"         → wraps an entire block (scope=block).
  *                       Triggered from the drag-handle context menu.
  *   - "global"        → file-wide comment. Body only.
- *   - "cross-section" → bind to a chosen set of H1/H2 headings.
+ *   - "cross-section" → bind to a chosen set of headings (H1..H6; the dialog
+ *                       picker defaults to H1+H2 with a toggle to expand).
  */
 export type CommentDialogMode =
   | "anchored"
@@ -43,7 +46,7 @@ export interface DialogHeading {
 export interface CommentDialogSubmit {
   body: string;
   scope: CommentDialogScope;
-  /** Selected H1/H2 titles when scope = "cross-section". */
+  /** Selected heading titles when scope = "cross-section". */
   sections?: string[];
 }
 
@@ -52,7 +55,7 @@ interface Props {
   mode?: CommentDialogMode;
   targetSnippet: string;
   defaultBody?: string;
-  /** H1/H2 headings of the current document; used only when mode = "cross-section". */
+  /** All headings (H1..H6) of the current document; used only when mode = "cross-section". The picker filters them by the user-controlled max level. */
   headings?: ReadonlyArray<DialogHeading>;
   onClose: () => void;
   onSubmit: (input: CommentDialogSubmit) => void;
@@ -93,29 +96,49 @@ function DialogBody({
   onClose,
   onSubmit,
 }: Props) {
+  // Pin each heading to its original index so rows with duplicate text can
+  // be selected independently (the picker key is the index, not the text).
   const availableHeadings = useMemo(
-    () => (headings ?? []).filter((h) => h.text.length > 0),
+    () =>
+      (headings ?? [])
+        .map((h, idx) => ({ ...h, idx }))
+        .filter((h) => h.text.length > 0),
     [headings]
   );
-  const hasHeadings = availableHeadings.length > 0;
+  const levelCounts = useMemo(() => {
+    const m = new Map<number, number>();
+    for (const h of availableHeadings) {
+      m.set(h.level, (m.get(h.level) ?? 0) + 1);
+    }
+    return m;
+  }, [availableHeadings]);
+  const hasAnyHeadings = availableHeadings.length > 0;
 
   const [body, setBody] = useState(defaultBody ?? "");
-  const [selectedSections, setSelectedSections] = useState<string[]>([]);
+  const [selectedIndices, setSelectedIndices] = useState<number[]>([]);
+  // Default range covers h1+h2. User can extend up to h6 via the toggle group.
+  const [maxLevel, setMaxLevel] = useState<1 | 2 | 3 | 4 | 5 | 6>(2);
+
+  const visibleHeadings = useMemo(
+    () => availableHeadings.filter((h) => h.level <= maxLevel),
+    [availableHeadings, maxLevel]
+  );
+  const hasVisibleHeadings = visibleHeadings.length > 0;
 
   const trimmed = body.trim();
   const isCrossSection = mode === "cross-section";
   const showTarget = mode === "anchored" || mode === "block";
   const canSubmit =
     trimmed.length > 0 &&
-    (!isCrossSection || selectedSections.length > 0);
+    (!isCrossSection || selectedIndices.length > 0);
 
   const snippetPreview = targetSnippet.length
     ? truncate(targetSnippet, SNIPPET_LIMIT)
     : "(対象が指定されていません)";
 
-  const toggleSection = (text: string) => {
-    setSelectedSections((prev) =>
-      prev.includes(text) ? prev.filter((t) => t !== text) : [...prev, text]
+  const toggleSection = (idx: number) => {
+    setSelectedIndices((prev) =>
+      prev.includes(idx) ? prev.filter((i) => i !== idx) : [...prev, idx]
     );
   };
 
@@ -131,13 +154,25 @@ function DialogBody({
       case "global":
         onSubmit({ body: trimmed, scope: "global" });
         return;
-      case "cross-section":
-        onSubmit({
-          body: trimmed,
-          scope: "cross-section",
-          sections: selectedSections,
-        });
+      case "cross-section": {
+        // Storage encodes sections by title (newline-joined). When the user
+        // selects multiple rows with the same title (independent UI checks),
+        // collapse them to a single entry — the on-disk format can't
+        // disambiguate same-named sections anyway.
+        const sortedIndices = [...selectedIndices].sort((a, b) => a - b);
+        const byIdx = new Map(availableHeadings.map((h) => [h.idx, h.text]));
+        const seen = new Set<string>();
+        const sections: string[] = [];
+        for (const i of sortedIndices) {
+          const text = byIdx.get(i);
+          if (text && !seen.has(text)) {
+            seen.add(text);
+            sections.push(text);
+          }
+        }
+        onSubmit({ body: trimmed, scope: "cross-section", sections });
         return;
+      }
     }
   };
 
@@ -168,69 +203,118 @@ function DialogBody({
         )}
         {isCrossSection && (
           <Box sx={{ mb: 2 }} data-testid="comment-sections-picker">
-            <Typography variant="caption" color="text.secondary" sx={{ mb: 0.5 }}>
-              対象の見出し（1 つ以上選んでください）
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              sx={{ mb: 0.5, display: "block" }}
+            >
+              対象の見出し（デフォルトは <code>#</code> / <code>##</code>。下のボタンで <code>######</code> まで広げられます。1 つ以上選んでください）
             </Typography>
-            {hasHeadings ? (
-              <FormGroup
-                sx={{
-                  // MUI FormGroup defaults to flex-wrap: wrap which, combined
-                  // with a constrained height, causes items to wrap into a
-                  // second column instead of scrolling vertically. Force a
-                  // single column and let overflow scroll handle the rest.
-                  flexWrap: "nowrap",
-                  maxHeight: 220,
-                  overflow: "auto",
-                  border: "1px solid",
-                  borderColor: "divider",
-                  borderRadius: 1,
-                  px: 1,
-                  py: 0.5,
+            <Box sx={{ mb: 1 }}>
+              <ToggleButtonGroup
+                value={maxLevel}
+                exclusive
+                size="small"
+                onChange={(_, v) => {
+                  if (v !== null) setMaxLevel(v as 1 | 2 | 3 | 4 | 5 | 6);
                 }}
+                aria-label="表示する見出しの最大レベル"
+                data-testid="comment-max-level"
               >
-                {availableHeadings.map((h, idx) => {
-                  const id = `comment-section-${idx}`;
-                  const checked = selectedSections.includes(h.text);
-                  return (
-                    <FormControlLabel
-                      key={`${h.level}:${h.text}:${idx}`}
-                      sx={{ py: 0 }}
-                      control={
-                        <Checkbox
-                          size="small"
-                          checked={checked}
-                          onChange={() => toggleSection(h.text)}
-                          inputProps={{
-                            "data-testid": id,
-                            "aria-label": h.text,
-                          } as React.InputHTMLAttributes<HTMLInputElement>}
-                        />
-                      }
-                      label={
-                        <Typography
-                          variant="body2"
-                          sx={{
-                            fontFamily: "monospace",
-                            fontSize: "0.8125rem",
-                            fontWeight: h.level === 1 ? 600 : 400,
-                            color:
-                              h.level === 1 ? "text.primary" : "text.secondary",
-                          }}
-                        >
-                          {"#".repeat(h.level)} {h.text}
-                        </Typography>
-                      }
-                    />
-                  );
-                })}
-              </FormGroup>
+                {([1, 2, 3, 4, 5, 6] as const).map((l) => (
+                  <ToggleButton
+                    key={l}
+                    value={l}
+                    sx={{ px: 1.25, py: 0.25, textTransform: "none" }}
+                    data-testid={`comment-max-level-${l}`}
+                  >
+                    <Typography
+                      variant="caption"
+                      sx={{ fontFamily: "monospace", lineHeight: 1.2 }}
+                    >
+                      h{l}
+                      <Box
+                        component="span"
+                        sx={{ ml: 0.5, opacity: 0.6, fontSize: "0.7rem" }}
+                      >
+                        ({levelCounts.get(l) ?? 0})
+                      </Box>
+                    </Typography>
+                  </ToggleButton>
+                ))}
+              </ToggleButtonGroup>
+            </Box>
+            {hasAnyHeadings ? (
+              hasVisibleHeadings ? (
+                <FormGroup
+                  sx={{
+                    // MUI FormGroup defaults to flex-wrap: wrap which, combined
+                    // with a constrained height, causes items to wrap into a
+                    // second column instead of scrolling vertically. Force a
+                    // single column and let overflow scroll handle the rest.
+                    flexWrap: "nowrap",
+                    maxHeight: 220,
+                    overflow: "auto",
+                    border: "1px solid",
+                    borderColor: "divider",
+                    borderRadius: 1,
+                    px: 1,
+                    py: 0.5,
+                  }}
+                >
+                  {visibleHeadings.map((h) => {
+                    const id = `comment-section-${h.idx}`;
+                    const checked = selectedIndices.includes(h.idx);
+                    return (
+                      <FormControlLabel
+                        key={`${h.level}:${h.idx}`}
+                        sx={{ py: 0 }}
+                        control={
+                          <Checkbox
+                            size="small"
+                            checked={checked}
+                            onChange={() => toggleSection(h.idx)}
+                            inputProps={{
+                              "data-testid": id,
+                              "aria-label": h.text,
+                            } as React.InputHTMLAttributes<HTMLInputElement>}
+                          />
+                        }
+                        label={
+                          <Typography
+                            variant="body2"
+                            sx={{
+                              fontFamily: "monospace",
+                              fontSize: "0.8125rem",
+                              fontWeight: h.level === 1 ? 600 : 400,
+                              color:
+                                h.level === 1 ? "text.primary" : "text.secondary",
+                            }}
+                          >
+                            {"#".repeat(h.level)} {h.text}
+                          </Typography>
+                        }
+                      />
+                    );
+                  })}
+                </FormGroup>
+              ) : (
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  data-testid="comment-no-visible-headings-hint"
+                  sx={{ display: "block" }}
+                >
+                  現在の範囲（h1〜h{maxLevel}）に該当する見出しがありません。上のボタンで範囲を広げてください。
+                </Typography>
+              )
             ) : (
               <Typography
                 variant="caption"
                 color="text.secondary"
                 data-testid="comment-no-headings-hint"
               >
-                `# ` または `## ` 見出しが見つかりませんでした。先に見出しを追加してください。
+                見出しが見つかりませんでした。先に見出しを追加してください。
               </Typography>
             )}
           </Box>

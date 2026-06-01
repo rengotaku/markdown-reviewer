@@ -233,6 +233,75 @@ describe("AddCommentDialog", () => {
     });
   });
 
+  it("cross-section mode: rows with duplicate text toggle independently", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    render(
+      <AddCommentDialog
+        open
+        mode="cross-section"
+        targetSnippet=""
+        headings={[
+          { level: 1, text: "Top" },
+          { level: 2, text: "メモ" }, // idx 1
+          { level: 2, text: "Body" },
+          { level: 2, text: "メモ" }, // idx 3 — same text as idx 1
+        ]}
+        onClose={() => {}}
+        onSubmit={onSubmit}
+      />
+    );
+
+    await user.type(screen.getByTestId("comment-body-input"), "dup-test");
+
+    // Check only the first "メモ" row.
+    await user.click(screen.getByTestId("comment-section-1"));
+
+    // The second "メモ" row must remain unchecked (independence).
+    const dupRow = screen.getByTestId("comment-section-3") as HTMLInputElement;
+    expect(dupRow.checked).toBe(false);
+
+    await user.click(screen.getByTestId("comment-submit"));
+
+    // On submit, duplicate texts are coalesced because the storage format
+    // identifies sections by title (newline-joined `target`).
+    expect(onSubmit).toHaveBeenCalledWith({
+      body: "dup-test",
+      scope: "cross-section",
+      sections: ["メモ"],
+    });
+  });
+
+  it("cross-section mode: selecting both duplicate rows still saves a single section", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    render(
+      <AddCommentDialog
+        open
+        mode="cross-section"
+        targetSnippet=""
+        headings={[
+          { level: 1, text: "Top" },
+          { level: 2, text: "メモ" },
+          { level: 2, text: "メモ" },
+        ]}
+        onClose={() => {}}
+        onSubmit={onSubmit}
+      />
+    );
+
+    await user.type(screen.getByTestId("comment-body-input"), "dup-both");
+    await user.click(screen.getByTestId("comment-section-1"));
+    await user.click(screen.getByTestId("comment-section-2"));
+    await user.click(screen.getByTestId("comment-submit"));
+
+    expect(onSubmit).toHaveBeenCalledWith({
+      body: "dup-both",
+      scope: "cross-section",
+      sections: ["メモ"],
+    });
+  });
+
   it("prefills the body input with defaultBody", () => {
     render(
       <AddCommentDialog
