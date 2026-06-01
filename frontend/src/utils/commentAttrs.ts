@@ -102,6 +102,13 @@ export function buildCommentAttrs(attrs: {
   date: string;
   body: string;
   scope?: string;
+  /**
+   * Optional group identifier shared by all anchored markers that originated
+   * from a single cross-section action. Emitted as `group_id="..."` only when
+   * non-empty so existing block comments without grouping round-trip
+   * byte-for-byte.
+   */
+  groupId?: string;
 }): string {
   const parts = [
     `id="${escapeCommentAttr(attrs.id)}"`,
@@ -109,6 +116,10 @@ export function buildCommentAttrs(attrs: {
     `date="${escapeCommentAttr(attrs.date)}"`,
     `body="${escapeCommentAttr(attrs.body)}"`,
   ];
+  const groupId = attrs.groupId ?? "";
+  if (groupId) {
+    parts.push(`group_id="${escapeCommentAttr(groupId)}"`);
+  }
   const scope = attrs.scope ?? "";
   if (scope && scope !== DEFAULT_COMMENT_SCOPE) {
     parts.push(`scope="${escapeCommentAttr(scope)}"`);
