@@ -76,6 +76,9 @@ function wrapBetween(
   // time (see collectComments.ts); no need to round-trip a redundant copy.
   span.setAttribute("data-comment-body", attrs.body ?? "");
   span.setAttribute("data-comment-scope", normalizeScope(attrs.scope));
+  if (attrs.group_id) {
+    span.setAttribute("data-comment-group-id", attrs.group_id);
+  }
   span.className = "comment-mark";
 
   const between: Node[] = [];

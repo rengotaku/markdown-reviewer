@@ -41,13 +41,30 @@ export type CommentDialogScope =
 export interface DialogHeading {
   level: 1 | 2 | 3 | 4 | 5 | 6;
   text: string;
+  /**
+   * Document position of the heading node (the value yielded by
+   * `editor.state.doc.descendants` for the heading itself). Used by the
+   * caller to anchor cross-section markers to specific section positions
+   * so duplicate-named headings stay distinguishable.
+   */
+  pos?: number;
+}
+
+export interface CommentDialogSelectedHeading {
+  level: 1 | 2 | 3 | 4 | 5 | 6;
+  text: string;
+  pos: number;
 }
 
 export interface CommentDialogSubmit {
   body: string;
   scope: CommentDialogScope;
-  /** Selected heading titles when scope = "cross-section". */
-  sections?: string[];
+  /**
+   * Headings selected in the cross-section picker, in document order.
+   * Only present when scope = "cross-section". Carries the heading position
+   * so the caller can anchor one block-scope marker per heading.
+   */
+  selectedHeadings?: ReadonlyArray<CommentDialogSelectedHeading>;
 }
 
 interface Props {
@@ -155,22 +172,22 @@ function DialogBody({
         onSubmit({ body: trimmed, scope: "global" });
         return;
       case "cross-section": {
-        // Storage encodes sections by title (newline-joined). When the user
-        // selects multiple rows with the same title (independent UI checks),
-        // collapse them to a single entry — the on-disk format can't
-        // disambiguate same-named sections anyway.
+        // Return the selected headings (with their doc positions) in document
+        // order. The caller anchors one block-scope marker per heading using
+        // these positions — that's how same-named sections stay distinguishable.
         const sortedIndices = [...selectedIndices].sort((a, b) => a - b);
-        const byIdx = new Map(availableHeadings.map((h) => [h.idx, h.text]));
-        const seen = new Set<string>();
-        const sections: string[] = [];
+        const byIdx = new Map(availableHeadings.map((h) => [h.idx, h]));
+        const selectedHeadings: CommentDialogSelectedHeading[] = [];
         for (const i of sortedIndices) {
-          const text = byIdx.get(i);
-          if (text && !seen.has(text)) {
-            seen.add(text);
-            sections.push(text);
-          }
+          const h = byIdx.get(i);
+          if (!h || typeof h.pos !== "number") continue;
+          selectedHeadings.push({ level: h.level, text: h.text, pos: h.pos });
         }
-        onSubmit({ body: trimmed, scope: "cross-section", sections });
+        onSubmit({
+          body: trimmed,
+          scope: "cross-section",
+          selectedHeadings,
+        });
         return;
       }
     }

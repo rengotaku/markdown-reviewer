@@ -197,7 +197,7 @@ describe("AddCommentDialog", () => {
     expect(screen.getByTestId("comment-no-headings-hint")).toBeInTheDocument();
   });
 
-  it("cross-section mode: requires ≥1 section and submits sections[]", async () => {
+  it("cross-section mode: requires ≥1 section and submits selectedHeadings", async () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn();
     render(
@@ -206,10 +206,10 @@ describe("AddCommentDialog", () => {
         mode="cross-section"
         targetSnippet=""
         headings={[
-          { level: 1, text: "Top" },
-          { level: 2, text: "Problem" },
-          { level: 2, text: "Try" },
-          { level: 2, text: "Action" },
+          { level: 1, text: "Top", pos: 0 },
+          { level: 2, text: "Problem", pos: 10 },
+          { level: 2, text: "Try", pos: 20 },
+          { level: 2, text: "Action", pos: 30 },
         ]}
         onClose={() => {}}
         onSubmit={onSubmit}
@@ -229,7 +229,10 @@ describe("AddCommentDialog", () => {
     expect(onSubmit).toHaveBeenCalledWith({
       body: "cross note",
       scope: "cross-section",
-      sections: ["Problem", "Try"],
+      selectedHeadings: [
+        { level: 2, text: "Problem", pos: 10 },
+        { level: 2, text: "Try", pos: 20 },
+      ],
     });
   });
 
@@ -242,10 +245,10 @@ describe("AddCommentDialog", () => {
         mode="cross-section"
         targetSnippet=""
         headings={[
-          { level: 1, text: "Top" },
-          { level: 2, text: "メモ" }, // idx 1
-          { level: 2, text: "Body" },
-          { level: 2, text: "メモ" }, // idx 3 — same text as idx 1
+          { level: 1, text: "Top", pos: 0 },
+          { level: 2, text: "メモ", pos: 10 }, // idx 1
+          { level: 2, text: "Body", pos: 20 },
+          { level: 2, text: "メモ", pos: 30 }, // idx 3 — same text as idx 1
         ]}
         onClose={() => {}}
         onSubmit={onSubmit}
@@ -263,16 +266,16 @@ describe("AddCommentDialog", () => {
 
     await user.click(screen.getByTestId("comment-submit"));
 
-    // On submit, duplicate texts are coalesced because the storage format
-    // identifies sections by title (newline-joined `target`).
+    // Each row carries its own pos; selecting one of the duplicates submits
+    // only that occurrence — anchoring is positional, not by name.
     expect(onSubmit).toHaveBeenCalledWith({
       body: "dup-test",
       scope: "cross-section",
-      sections: ["メモ"],
+      selectedHeadings: [{ level: 2, text: "メモ", pos: 10 }],
     });
   });
 
-  it("cross-section mode: selecting both duplicate rows still saves a single section", async () => {
+  it("cross-section mode: selecting both duplicate rows submits both positions", async () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn();
     render(
@@ -281,9 +284,9 @@ describe("AddCommentDialog", () => {
         mode="cross-section"
         targetSnippet=""
         headings={[
-          { level: 1, text: "Top" },
-          { level: 2, text: "メモ" },
-          { level: 2, text: "メモ" },
+          { level: 1, text: "Top", pos: 0 },
+          { level: 2, text: "メモ", pos: 10 },
+          { level: 2, text: "メモ", pos: 20 },
         ]}
         onClose={() => {}}
         onSubmit={onSubmit}
@@ -298,7 +301,10 @@ describe("AddCommentDialog", () => {
     expect(onSubmit).toHaveBeenCalledWith({
       body: "dup-both",
       scope: "cross-section",
-      sections: ["メモ"],
+      selectedHeadings: [
+        { level: 2, text: "メモ", pos: 10 },
+        { level: 2, text: "メモ", pos: 20 },
+      ],
     });
   });
 

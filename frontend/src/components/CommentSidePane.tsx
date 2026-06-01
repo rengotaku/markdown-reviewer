@@ -32,8 +32,72 @@ const EMPTY_SNAPSHOT: CommentSnapshot = { comments: [], fingerprint: "" };
 
 function fingerprintOf(comments: CollectedComment[]): string {
   return comments
-    .map((c) => `${c.id}|${c.from}|${c.to}|${c.body}|${c.target}|${c.scope}`)
+    .map(
+      (c) =>
+        `${c.id}|${c.from}|${c.to}|${c.body}|${c.target}|${c.scope}|${c.groupId}`
+    )
     .join("\n");
+}
+
+/**
+ * One row in the side pane. For comments that share a `groupId`, the row
+ * represents the whole group: `memberIds` lists every anchored marker in
+ * doc order, and `target` is the newline-joined list of anchored heading
+ * texts (so the existing decodeSections rendering keeps working).
+ */
+interface DisplayComment {
+  id: string;
+  memberIds: string[];
+  author: string;
+  date: string;
+  body: string;
+  scope: string;
+  groupId: string;
+  target: string;
+  from: number;
+  to: number;
+}
+
+function buildDisplayComments(
+  comments: ReadonlyArray<CollectedComment>
+): DisplayComment[] {
+  const seenGroup = new Set<string>();
+  const out: DisplayComment[] = [];
+  for (const c of comments) {
+    if (c.groupId) {
+      if (seenGroup.has(c.groupId)) continue;
+      seenGroup.add(c.groupId);
+      const members = comments.filter((m) => m.groupId === c.groupId);
+      out.push({
+        id: members[0].id,
+        memberIds: members.map((m) => m.id),
+        author: members[0].author,
+        date: members[0].date,
+        body: members[0].body,
+        // Surface grouped comments as "cross-section" in the UI even though
+        // each underlying marker carries scope="block" on disk.
+        scope: "cross-section",
+        groupId: c.groupId,
+        target: members.map((m) => m.target).filter(Boolean).join("\n"),
+        from: members[0].from,
+        to: members[0].to,
+      });
+      continue;
+    }
+    out.push({
+      id: c.id,
+      memberIds: [c.id],
+      author: c.author,
+      date: c.date,
+      body: c.body,
+      scope: c.scope,
+      groupId: "",
+      target: c.target,
+      from: c.from,
+      to: c.to,
+    });
+  }
+  return out;
 }
 
 function useEditorComments(editor: Editor | null): CollectedComment[] {
@@ -72,16 +136,17 @@ function useEditorComments(editor: Editor | null): CollectedComment[] {
 
 export function CommentSidePane({ editor, onDelete, onClose, activeId }: Props) {
   const comments = useEditorComments(editor);
+  const displayComments = useMemo(() => buildDisplayComments(comments), [comments]);
 
-  const flashMark = (id: string) => {
-    if (!id) return;
+  const flashMarks = (ids: ReadonlyArray<string>) => {
     const root = editor?.view?.dom;
     if (!root) return;
-    // Match both inline marks (.comment-mark) and standalone nodes
-    // (.standalone-comment) via their shared data-comment-id attribute.
-    const nodes = root.querySelectorAll<HTMLElement>(
-      `[data-comment-id="${CSS.escape(id)}"]`
-    );
+    const selector = ids
+      .filter((id) => id.length > 0)
+      .map((id) => `[data-comment-id="${CSS.escape(id)}"]`)
+      .join(",");
+    if (!selector) return;
+    const nodes = root.querySelectorAll<HTMLElement>(selector);
     if (nodes.length === 0) return;
     nodes[0].scrollIntoView({ behavior: "smooth", block: "center" });
     nodes.forEach((el) => {
@@ -96,9 +161,15 @@ export function CommentSidePane({ editor, onDelete, onClose, activeId }: Props) 
   };
 
   // Click in the side pane: just flash (no text selection / no focus jump).
-  // For multi-block comments every <span data-comment-id="..."> blinks.
-  const handleJump = (c: CollectedComment) => {
-    flashMark(c.id);
+  // For grouped (cross-section) comments every anchored marker blinks.
+  const handleJump = (d: DisplayComment) => {
+    flashMarks(d.memberIds);
+  };
+
+  const handleDelete = (d: DisplayComment) => {
+    for (const id of d.memberIds) {
+      onDelete(id);
+    }
   };
 
   return (
@@ -126,7 +197,7 @@ export function CommentSidePane({ editor, onDelete, onClose, activeId }: Props) 
         }}
       >
         <Typography variant="subtitle2" sx={{ flexGrow: 1 }}>
-          Comments ({comments.length})
+          Comments ({displayComments.length})
         </Typography>
         {onClose && (
           <Tooltip title="コメントペインを閉じる">
@@ -142,33 +213,37 @@ export function CommentSidePane({ editor, onDelete, onClose, activeId }: Props) 
         )}
       </Box>
       <Box sx={{ flex: 1, overflow: "auto" }}>
-        {comments.length === 0 ? (
+        {displayComments.length === 0 ? (
           <Box sx={{ p: 2 }}>
             <Typography variant="body2" color="text.secondary">
               コメントはまだありません。テキストを選択して「コメント」を押すと追加できます。
             </Typography>
           </Box>
         ) : (
-          comments.map((c) => (
+          displayComments.map((d) => (
             <Box
-              key={c.id || `${c.from}-${c.to}`}
+              key={d.id || `${d.from}-${d.to}`}
               role="button"
               tabIndex={0}
-              onClick={() => handleJump(c)}
+              onClick={() => handleJump(d)}
               onKeyDown={(e) => {
                 if (e.key === "Enter" || e.key === " ") {
                   e.preventDefault();
-                  handleJump(c);
+                  handleJump(d);
                 }
               }}
               data-testid="comment-item"
-              data-comment-id={c.id}
+              data-comment-id={d.id}
+              data-comment-group-id={d.groupId || undefined}
               sx={{
                 p: 1.5,
                 borderBottom: "1px solid",
                 borderColor: "divider",
                 cursor: "pointer",
-                bgcolor: activeId === c.id ? "action.selected" : "transparent",
+                bgcolor:
+                  activeId && d.memberIds.includes(activeId)
+                    ? "action.selected"
+                    : "transparent",
                 "&:hover": { bgcolor: "action.hover" },
               }}
             >
@@ -180,28 +255,32 @@ export function CommentSidePane({ editor, onDelete, onClose, activeId }: Props) 
                   mb: 0.5,
                 }}
               >
-                {SCOPE_BADGE[c.scope] && (
+                {SCOPE_BADGE[d.scope] && (
                   <Chip
-                    label={SCOPE_BADGE[c.scope].label}
+                    label={
+                      d.scope === "cross-section" && d.memberIds.length > 1
+                        ? `${SCOPE_BADGE[d.scope].label} (${d.memberIds.length})`
+                        : SCOPE_BADGE[d.scope].label
+                    }
                     size="small"
                     sx={{
                       height: 18,
                       fontSize: "0.65rem",
-                      bgcolor: SCOPE_BADGE[c.scope].color,
+                      bgcolor: SCOPE_BADGE[d.scope].color,
                       "& .MuiChip-label": { px: 0.75 },
                     }}
-                    data-testid={`comment-scope-${c.scope}`}
+                    data-testid={`comment-scope-${d.scope}`}
                   />
                 )}
                 <Typography variant="caption" color="text.secondary" sx={{ flexGrow: 1 }}>
-                  {c.date || "?"}
+                  {d.date || "?"}
                 </Typography>
                 <Tooltip title="コメントを削除">
                   <IconButton
                     size="small"
                     onClick={(e) => {
                       e.stopPropagation();
-                      onDelete(c.id);
+                      handleDelete(d);
                     }}
                     aria-label="delete comment"
                     data-testid="comment-delete"
@@ -210,7 +289,7 @@ export function CommentSidePane({ editor, onDelete, onClose, activeId }: Props) 
                   </IconButton>
                 </Tooltip>
               </Box>
-              {c.target && c.scope === "cross-section" ? (
+              {d.target && d.scope === "cross-section" ? (
                 <Typography
                   variant="caption"
                   color="text.secondary"
@@ -219,11 +298,11 @@ export function CommentSidePane({ editor, onDelete, onClose, activeId }: Props) 
                     fontStyle: "italic",
                     wordBreak: "break-word",
                   }}
-                  data-testid={`comment-sections-${c.id}`}
+                  data-testid={`comment-sections-${d.id}`}
                 >
-                  対象: {decodeSections(c.target).join(" / ")}
+                  対象: {decodeSections(d.target).join(" ・ ")}
                 </Typography>
-              ) : c.target ? (
+              ) : d.target ? (
                 <Typography
                   variant="caption"
                   color="text.secondary"
@@ -235,7 +314,7 @@ export function CommentSidePane({ editor, onDelete, onClose, activeId }: Props) 
                     whiteSpace: "nowrap",
                   }}
                 >
-                  対象: {c.target}
+                  対象: {d.target}
                 </Typography>
               ) : null}
               <Typography
@@ -246,7 +325,7 @@ export function CommentSidePane({ editor, onDelete, onClose, activeId }: Props) 
                   wordBreak: "break-word",
                 }}
               >
-                {c.body}
+                {d.body}
               </Typography>
             </Box>
           ))
