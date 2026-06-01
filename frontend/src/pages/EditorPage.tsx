@@ -52,6 +52,7 @@ import { listDir } from "@/api";
 import { generateCommentId } from "@/utils/commentId";
 import { nextVersionedPath } from "@/utils/versionedPath";
 import { collectHeadings } from "@/utils/headings";
+import { computeCrossSectionRanges } from "@/utils/crossSectionRanges";
 
 function basename(path: string): string {
   const idx = path.lastIndexOf("/");
@@ -537,16 +538,17 @@ export function EditorPage() {
       }
       const groupId = id; // reuse the freshly-minted id as the shared group key
       // Resolve heading ranges first, then mutate the doc in reverse document
-      // order so positions captured earlier don't shift under us.
-      const ranges: Array<{ from: number; to: number; id: string }> = [];
-      for (const h of selectedHeadings) {
-        const node = editor.state.doc.nodeAt(h.pos);
-        if (!node || node.type.name !== "heading") continue;
-        const from = h.pos + 1;
-        const to = h.pos + node.nodeSize - 1;
-        if (to <= from) continue;
-        ranges.push({ from, to, id: generateCommentId() });
-      }
+      // order so positions captured earlier don't shift under us. The range
+      // computation is extracted to a pure helper for unit testing — see
+      // utils/crossSectionRanges.ts.
+      const ranges = computeCrossSectionRanges(
+        selectedHeadings,
+        (pos) => {
+          const node = editor.state.doc.nodeAt(pos);
+          return node ? { name: node.type.name, nodeSize: node.nodeSize } : null;
+        },
+        generateCommentId
+      );
       if (ranges.length === 0) {
         closeCommentDialog();
         return;
