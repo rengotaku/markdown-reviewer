@@ -52,6 +52,7 @@ const sampleComment = (
   target: "selected text",
   body: `body of ${id}`,
   scope: "inline",
+  groupId: "",
   from: 1,
   to: 10,
   ...overrides,
@@ -198,7 +199,7 @@ describe("CommentSidePane", () => {
     ]);
     render(<CommentSidePane editor={asEditor(editor)} onDelete={() => {}} />);
     expect(screen.getByTestId("comment-sections-x1")).toHaveTextContent(
-      "対象: Problem / Try / Action"
+      "対象: Problem ・ Try ・ Action"
     );
   });
 
@@ -233,5 +234,61 @@ describe("CommentSidePane", () => {
     const items = screen.getAllByTestId("comment-item");
     expect(items[0].getAttribute("data-comment-id")).toBe("c1");
     expect(items[1].getAttribute("data-comment-id")).toBe("c2");
+  });
+
+  it("folds block comments sharing a groupId into a single cross-section entry", () => {
+    const editor = makeFakeEditor([
+      sampleComment("m1", {
+        scope: "block",
+        groupId: "g-cs-1",
+        target: "メモ",
+        body: "ここを統一して",
+      }),
+      sampleComment("m2", {
+        scope: "block",
+        groupId: "g-cs-1",
+        target: "Body",
+        body: "ここを統一して",
+      }),
+      sampleComment("plain", {
+        scope: "block",
+        target: "別件",
+        body: "独立した block コメント",
+      }),
+    ]);
+    render(<CommentSidePane editor={asEditor(editor)} onDelete={() => {}} />);
+
+    // 3 underlying comments collapse into 2 displayed rows (group + plain).
+    const items = screen.getAllByTestId("comment-item");
+    expect(items).toHaveLength(2);
+
+    // The grouped row carries the cross-section scope label with a (2) count.
+    expect(items[0]).toHaveAttribute("data-comment-group-id", "g-cs-1");
+    expect(screen.getByTestId("comment-scope-cross-section")).toHaveTextContent(
+      /横断/
+    );
+    // Anchored heading texts are joined with ・ for readability.
+    expect(screen.getByTestId("comment-sections-m1")).toHaveTextContent(
+      "対象: メモ ・ Body"
+    );
+
+    // Header count reflects the displayed (grouped) total.
+    expect(screen.getByText(/Comments \(2\)/)).toBeInTheDocument();
+  });
+
+  it("delete on a grouped row removes every member id", async () => {
+    const user = userEvent.setup();
+    const onDelete = vi.fn();
+    const editor = makeFakeEditor([
+      sampleComment("m1", { scope: "block", groupId: "g-cs-2", target: "A" }),
+      sampleComment("m2", { scope: "block", groupId: "g-cs-2", target: "B" }),
+      sampleComment("m3", { scope: "block", groupId: "g-cs-2", target: "C" }),
+    ]);
+    render(<CommentSidePane editor={asEditor(editor)} onDelete={onDelete} />);
+
+    await user.click(screen.getByTestId("comment-delete"));
+
+    expect(onDelete).toHaveBeenCalledTimes(3);
+    expect(onDelete.mock.calls.map((c) => c[0])).toEqual(["m1", "m2", "m3"]);
   });
 });
