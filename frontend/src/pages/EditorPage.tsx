@@ -51,7 +51,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import { listDir } from "@/api";
 import { generateCommentId } from "@/utils/commentId";
 import { nextVersionedPath } from "@/utils/versionedPath";
-import { collectHeadings, encodeSections } from "@/utils/headings";
+import { collectHeadings } from "@/utils/headings";
+import { computeCrossSectionRanges } from "@/utils/crossSectionRanges";
 
 function basename(path: string): string {
   const idx = path.lastIndexOf("/");
@@ -188,7 +189,11 @@ export function EditorPage() {
      * is invoked so it survives the dialog focus dance.
      */
     blockRange?: { from: number; to: number };
-    headings: ReadonlyArray<{ level: 1 | 2 | 3 | 4 | 5 | 6; text: string }>;
+    headings: ReadonlyArray<{
+      level: 1 | 2 | 3 | 4 | 5 | 6;
+      text: string;
+      pos: number;
+    }>;
   }>({ open: false, mode: "anchored", snippet: "", headings: [] });
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(
     null
@@ -455,10 +460,10 @@ export function EditorPage() {
 
   const handleAddCrossSectionClick = () => {
     if (!editor) return;
-    const headings = collectHeadings(editor, [1, 2]);
+    const headings = collectHeadings(editor, [1, 2, 3, 4, 5, 6]);
     if (headings.length === 0) {
       showToast(
-        "横断コメントを付ける見出し（# / ##）が見つかりません。先に見出しを追加してください。",
+        "横断コメントを付ける見出しが見つかりません。先に見出しを追加してください。",
         "info"
       );
       return;
@@ -489,11 +494,15 @@ export function EditorPage() {
   const handleCommentSubmit = ({
     body,
     scope,
-    sections,
+    selectedHeadings,
   }: {
     body: string;
     scope: "inline" | "block" | "cross-section" | "global";
-    sections?: string[];
+    selectedHeadings?: ReadonlyArray<{
+      level: 1 | 2 | 3 | 4 | 5 | 6;
+      text: string;
+      pos: number;
+    }>;
   }) => {
     if (!editor) {
       closeCommentDialog();
@@ -503,15 +512,62 @@ export function EditorPage() {
     const date = todayISO();
     const blockRange = commentDialog.blockRange;
 
-    if (scope === "cross-section" || scope === "global") {
+    if (scope === "global") {
       // Standalone — not anchored to text; appended as a block node.
-      const target =
-        scope === "cross-section" && sections ? encodeSections(sections) : "";
       editor
         .chain()
         .focus()
-        .addStandaloneComment({ id, author, date, target, body, scope })
+        .addStandaloneComment({
+          id,
+          author,
+          date,
+          target: "",
+          body,
+          scope: "global",
+        })
         .run();
+    } else if (scope === "cross-section") {
+      // For each selected heading, anchor a block-scope marker around the
+      // heading's text. All markers share one `groupId` so the side pane can
+      // fold them back into a single logical comment, while on-disk each
+      // section gets a self-contained block comment that an AI reviewer can
+      // read without following references.
+      if (!selectedHeadings || selectedHeadings.length === 0) {
+        closeCommentDialog();
+        return;
+      }
+      const groupId = id; // reuse the freshly-minted id as the shared group key
+      // Resolve heading ranges first, then mutate the doc in reverse document
+      // order so positions captured earlier don't shift under us. The range
+      // computation is extracted to a pure helper for unit testing — see
+      // utils/crossSectionRanges.ts.
+      const ranges = computeCrossSectionRanges(
+        selectedHeadings,
+        (pos) => {
+          const node = editor.state.doc.nodeAt(pos);
+          return node ? { name: node.type.name, nodeSize: node.nodeSize } : null;
+        },
+        generateCommentId
+      );
+      if (ranges.length === 0) {
+        closeCommentDialog();
+        return;
+      }
+      let chain = editor.chain().focus();
+      for (let i = ranges.length - 1; i >= 0; i--) {
+        const r = ranges[i];
+        chain = chain
+          .setTextSelection({ from: r.from, to: r.to })
+          .setComment({
+            id: r.id,
+            author,
+            date,
+            body,
+            scope: "block",
+            groupId,
+          });
+      }
+      chain.run();
     } else if (scope === "block" && blockRange) {
       // Block-scope wrap: apply the comment mark to the entire block's text
       // range captured when the drag-handle menu was opened. The selection

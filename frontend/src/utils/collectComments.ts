@@ -9,6 +9,11 @@ export interface CollectedComment {
   body: string;
   /** "inline" | "block" | "cross-section" | "global" */
   scope: string;
+  /**
+   * Group identifier shared by every block-scope marker created in one
+   * cross-section action. Empty for non-grouped comments.
+   */
+  groupId: string;
   /** Position of the first text node / standalone block carrying this comment. */
   from: number;
   /** Position right after the first range carrying this comment. */
@@ -47,6 +52,7 @@ export function collectComments(editor: Editor | null): CollectedComment[] {
         target: (node.attrs.target as string | null) ?? "",
         body: (node.attrs.body as string | null) ?? "",
         scope: normalizeScope(node.attrs.scope as string | null),
+        groupId: (node.attrs.groupId as string | null) ?? "",
         from: pos,
         to: pos + node.nodeSize,
       };
@@ -77,6 +83,7 @@ export function collectComments(editor: Editor | null): CollectedComment[] {
       scope: normalizeScope(
         (mark.attrs.scope as string | null) ?? DEFAULT_COMMENT_SCOPE
       ),
+      groupId: (mark.attrs.groupId as string | null) ?? "",
       from: pos,
       to: pos + node.nodeSize,
     };

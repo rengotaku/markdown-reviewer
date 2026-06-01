@@ -17,6 +17,12 @@ export interface CommentAttributes {
    * nodes (see StandaloneCommentNode).
    */
   scope?: string;
+  /**
+   * Group identifier shared by every block-scope marker created in one
+   * cross-section action. Lets the side pane fold N markers back into one
+   * logical comment. Empty / null for plain (non-grouped) block comments.
+   */
+  groupId?: string;
 }
 
 declare module "@tiptap/core" {
@@ -42,6 +48,7 @@ export const CommentMark = Mark.create({
       date: { default: null },
       body: { default: null },
       scope: { default: DEFAULT_COMMENT_SCOPE },
+      groupId: { default: null },
     };
   },
 
@@ -57,6 +64,7 @@ export const CommentMark = Mark.create({
             date: el.getAttribute("data-comment-date"),
             body: el.getAttribute("data-comment-body"),
             scope: normalizeScope(el.getAttribute("data-comment-scope")),
+            groupId: el.getAttribute("data-comment-group-id") || null,
           };
         },
       },
@@ -64,17 +72,21 @@ export const CommentMark = Mark.create({
   },
 
   renderHTML({ HTMLAttributes }) {
+    const attrs: Record<string, string> = {
+      "data-comment-id": HTMLAttributes.id ?? "",
+      "data-comment-author": HTMLAttributes.author ?? "",
+      "data-comment-date": HTMLAttributes.date ?? "",
+      "data-comment-body": HTMLAttributes.body ?? "",
+      "data-comment-scope": HTMLAttributes.scope ?? DEFAULT_COMMENT_SCOPE,
+      class: "comment-mark",
+    };
+    if (HTMLAttributes.groupId) {
+      attrs["data-comment-group-id"] = HTMLAttributes.groupId;
+    }
     return [
       "span",
       mergeAttributes(
-        {
-          "data-comment-id": HTMLAttributes.id ?? "",
-          "data-comment-author": HTMLAttributes.author ?? "",
-          "data-comment-date": HTMLAttributes.date ?? "",
-          "data-comment-body": HTMLAttributes.body ?? "",
-          "data-comment-scope": HTMLAttributes.scope ?? DEFAULT_COMMENT_SCOPE,
-          class: "comment-mark",
-        },
+        attrs,
         // Drop bare attribute keys — only the data-* form is rendered.
         {}
       ),
@@ -93,6 +105,7 @@ export const CommentMark = Mark.create({
               date: mark.attrs.date ?? "",
               body: mark.attrs.body ?? "",
               scope: mark.attrs.scope ?? "",
+              groupId: mark.attrs.groupId ?? "",
             });
             return `<!-- @comment ${attrs} -->`;
           },

@@ -129,6 +129,21 @@ describe("buildCommentAttrs scope emission", () => {
       'scope="global"'
     );
   });
+
+  it("emits group_id only when non-empty and round-trips through parse", () => {
+    // Empty / unset → no group_id token in the serialized attrs.
+    expect(buildCommentAttrs({ ...base })).not.toContain("group_id=");
+    expect(buildCommentAttrs({ ...base, groupId: "" })).not.toContain(
+      "group_id="
+    );
+    const built = buildCommentAttrs({
+      ...base,
+      scope: "block",
+      groupId: "g-abc-123",
+    });
+    expect(built).toContain('group_id="g-abc-123"');
+    expect(parseCommentAttrs(built).group_id).toBe("g-abc-123");
+  });
 });
 
 describe("buildStandaloneCommentAttrs", () => {
