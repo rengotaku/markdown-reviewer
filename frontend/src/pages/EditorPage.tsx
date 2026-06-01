@@ -455,10 +455,10 @@ export function EditorPage() {
 
   const handleAddCrossSectionClick = () => {
     if (!editor) return;
-    const headings = collectHeadings(editor, [1, 2]);
+    const headings = collectHeadings(editor, [1, 2, 3, 4, 5, 6]);
     if (headings.length === 0) {
       showToast(
-        "横断コメントを付ける見出し（# / ##）が見つかりません。先に見出しを追加してください。",
+        "横断コメントを付ける見出しが見つかりません。先に見出しを追加してください。",
         "info"
       );
       return;
