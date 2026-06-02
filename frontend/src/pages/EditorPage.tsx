@@ -514,9 +514,12 @@ export function EditorPage() {
 
     if (scope === "global") {
       // Standalone — not anchored to text; appended as a block node.
+      // `scrollIntoView: false` keeps the viewport pinned where the user was
+      // reading; otherwise focus() would scroll to wherever the cursor ends
+      // up after the chain (e.g. appended global → bottom of doc).
       editor
         .chain()
-        .focus()
+        .focus(null, { scrollIntoView: false })
         .addStandaloneComment({
           id,
           author,
@@ -553,7 +556,7 @@ export function EditorPage() {
         closeCommentDialog();
         return;
       }
-      let chain = editor.chain().focus();
+      let chain = editor.chain().focus(null, { scrollIntoView: false });
       for (let i = ranges.length - 1; i >= 0; i--) {
         const r = ranges[i];
         chain = chain
@@ -574,7 +577,7 @@ export function EditorPage() {
       // may have moved while the dialog was up, so set it explicitly.
       editor
         .chain()
-        .focus()
+        .focus(null, { scrollIntoView: false })
         .setTextSelection({ from: blockRange.from, to: blockRange.to })
         .setComment({ id, author, date, body, scope: "block" })
         .run();
@@ -582,7 +585,7 @@ export function EditorPage() {
       // Anchored inline — wraps the current selection.
       editor
         .chain()
-        .focus()
+        .focus(null, { scrollIntoView: false })
         .setComment({ id, author, date, body, scope: "inline" })
         .run();
     }
