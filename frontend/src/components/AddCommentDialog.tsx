@@ -82,7 +82,18 @@ const SNIPPET_LIMIT = 80;
 
 export function AddCommentDialog(props: Props) {
   return (
-    <Dialog open={props.open} onClose={props.onClose} fullWidth maxWidth="sm">
+    <Dialog
+      open={props.open}
+      onClose={props.onClose}
+      fullWidth
+      maxWidth="sm"
+      // MUI Dialog restores focus to the trigger element (the editor's
+      // contenteditable) on close. The browser then scrolls the caret into
+      // view — and the caret may still be at doc start if the user opened
+      // the file but never clicked into the editor — yanking the viewport
+      // to the top. Suppress the restore to keep the view stable.
+      disableRestoreFocus
+    >
       {props.open ? <DialogBody {...props} /> : null}
     </Dialog>
   );
