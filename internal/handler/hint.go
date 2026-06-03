@@ -36,7 +36,10 @@ func buildAIHint(baseURL, relPath, rootName string) string {
 
 	var b strings.Builder
 	b.WriteString("<!-- markdown-reviewer\n")
-	b.WriteString("このファイルには `<!-- @comment ... -->` レビューマーカーが含まれる可能性があります。\n")
+	// Note: the literal `<!-- @comment ... -->` example is intentionally
+	// avoided here. Quoting it inside the hint would create a self-matching
+	// false positive for any naive @comment scanner reading the file.
+	b.WriteString("このファイルには @comment レビューマーカーが含まれる可能性があります。\n")
 	b.WriteString("構造化コメント取得: GET ")
 	b.WriteString(commentsURL)
 	b.WriteString("\n")
