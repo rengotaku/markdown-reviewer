@@ -231,6 +231,31 @@ func TestParse_SameIDAcrossBlocks_MergedIntoMembers(t *testing.T) {
 	}
 }
 
+func TestParse_IgnoresMarkersWithoutID(t *testing.T) {
+	t.Parallel()
+	// A literal `<!-- @comment ... -->` quoted inside documentation (e.g.
+	// the AI-hint header) lacks an id attribute. It must not surface as a
+	// real review note in the API output.
+	src := `<!-- markdown-reviewer
+docs that mention <!-- @comment ... --> as an example.
+-->
+
+# Real doc
+
+Hello <!-- @comment id="real" author="k" date="2026-05-20" body="x" -->w<!-- /@comment -->.
+`
+	got, sum := Parse(src)
+	if len(got) != 1 {
+		t.Fatalf("want exactly 1 real comment, got %d (%+v)", len(got), got)
+	}
+	if got[0].ID != "real" {
+		t.Errorf("real comment must be the one with id, got id=%q", got[0].ID)
+	}
+	if sum.Total != 1 {
+		t.Errorf("summary total: %d", sum.Total)
+	}
+}
+
 func TestParse_HeadingStack_PopsOnNewSection(t *testing.T) {
 	t.Parallel()
 	src := `# Top

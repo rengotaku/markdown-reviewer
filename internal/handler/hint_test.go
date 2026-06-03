@@ -17,6 +17,12 @@ func TestBuildAIHint_ShapeAndURLs(t *testing.T) {
 	if !strings.HasSuffix(got, "-->\n\n") {
 		t.Errorf("missing trailing blank line after marker: %q", got)
 	}
+	// Hint must NOT quote a literal `<!-- @comment ... -->` example, or
+	// the comment parser would see it as a real (id-less) marker and
+	// emit a phantom entry.
+	if strings.Contains(got, "<!-- @comment") {
+		t.Errorf("hint must not contain a literal <!-- @comment example: %q", got)
+	}
 	wantURL := "http://localhost:15174/api/comments/phases/phase7/diff.v2.md?root=works"
 	if !strings.Contains(got, wantURL) {
 		t.Errorf("comments URL missing: got %q", got)

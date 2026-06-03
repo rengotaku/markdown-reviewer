@@ -167,6 +167,13 @@ func pairMarkers(content string, markers []marker) []rawComment {
 			// is mid-edit; surfacing it would be more noise than help.
 			continue
 		}
+		// Real comments always carry an id. Markers that happen to look
+		// like @comment but have none — e.g. a literal `<!-- @comment ... -->`
+		// quoted inside the AI-hint header or some other documentation
+		// snippet — are not review notes and must not show up in the API.
+		if m.attrs["id"] == "" {
+			continue
+		}
 		scope := m.attrs["scope"]
 		raw := rawComment{
 			id:        m.attrs["id"],
