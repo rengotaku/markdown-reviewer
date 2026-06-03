@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import Dialog from "@mui/material/Dialog";
 import DialogTitle from "@mui/material/DialogTitle";
 import DialogContent from "@mui/material/DialogContent";
@@ -56,12 +56,10 @@ function DialogBody({
   onClose,
   onSubmit,
 }: Props) {
+  // DialogBody only mounts while `open === true`; the parent unmounts the
+  // body on close, so useState seeding from defaultBody is enough — no need
+  // to sync on prop change.
   const [body, setBody] = useState(defaultBody);
-
-  // Sync when the caller swaps the comment under us without closing.
-  useEffect(() => {
-    setBody(defaultBody);
-  }, [defaultBody]);
 
   const trimmed = body.trim();
   const canSubmit = trimmed.length > 0 && trimmed !== defaultBody.trim();
