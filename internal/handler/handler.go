@@ -42,6 +42,7 @@ func (h *Handler) Routes(staticHandler http.Handler) http.Handler {
 	// parent issue (#1) specified the API surface.
 	api := r.Group("/api")
 	{
+		api.GET("/help", h.Help)
 		api.GET("/config", h.Config)
 		api.GET("/dirs", h.ListDir)
 		api.GET("/files", h.ListFiles)

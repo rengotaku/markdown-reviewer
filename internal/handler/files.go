@@ -336,7 +336,13 @@ func (h *Handler) WriteFile(c *gin.Context) {
 		return
 	}
 
-	if err := atomicWrite(full, []byte(req.Content)); err != nil {
+	// Force-inject the AI hint comment so AI clients reading this file
+	// can self-discover the comment-extraction API. Replacing instead of
+	// appending keeps the block unique across save cycles.
+	hint := buildAIHint(deriveBaseURL(c.Request), rel, name)
+	content := injectAIHint(req.Content, hint)
+
+	if err := atomicWrite(full, []byte(content)); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "parent directory does not exist"})
 			return
@@ -351,7 +357,7 @@ func (h *Handler) WriteFile(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, FileReadResponse{
 		Path:     rel,
-		Content:  req.Content,
+		Content:  content,
 		Modified: modified,
 		Created:  created,
 		Root:     name,
