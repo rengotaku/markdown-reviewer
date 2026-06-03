@@ -327,4 +327,29 @@ describe("StandaloneCommentNode", () => {
     // Inline-scope (default) must not gain a scope attribute on round-trip.
     expect(out).not.toMatch(/id="c1"[^>]*scope="inline"/);
   });
+
+  it("updateStandaloneCommentBodyById rewrites the body in place, leaving other attrs intact", () => {
+    const md =
+      'Intro paragraph.\n\n<!-- @comment id="g1" author="k" date="2026-06-02" body="old body" scope="global" -->';
+    editor = createEditor(md);
+    const changed = editor.commands.updateStandaloneCommentBodyById(
+      "g1",
+      "new body"
+    );
+    expect(changed).toBe(true);
+    const out = getMarkdown(editor);
+    expect(out).toContain('id="g1"');
+    expect(out).toContain('body="new body"');
+    expect(out).not.toContain('body="old body"');
+    expect(out).toContain('scope="global"');
+  });
+
+  it("updateStandaloneCommentBodyById is a no-op (returns false) when the id is not found", () => {
+    editor = createEditor("plain paragraph.");
+    const changed = editor.commands.updateStandaloneCommentBodyById(
+      "missing",
+      "anything"
+    );
+    expect(changed).toBe(false);
+  });
 });

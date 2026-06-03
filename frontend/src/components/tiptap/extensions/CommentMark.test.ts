@@ -193,4 +193,83 @@ describe("CommentMark", () => {
     });
     expect(nestedSeen).toBe(0);
   });
+
+  it("updateCommentBodyById rewrites the body in place, leaving other attrs and other comments intact", () => {
+    const md =
+      '<!-- @comment id="c1" author="k" date="2026-06-02" body="old" -->one<!-- /@comment --> and <!-- @comment id="c2" author="k" date="2026-06-02" body="keep" -->two<!-- /@comment -->.';
+    editor = createEditor(md);
+    const changed = editor.commands.updateCommentBodyById("c1", "fresh body");
+    expect(changed).toBe(true);
+    const out = getMarkdown(editor);
+    expect(out).toContain('id="c1"');
+    expect(out).toContain('body="fresh body"');
+    expect(out).not.toContain('body="old"');
+    // c2 untouched
+    expect(out).toContain('id="c2"');
+    expect(out).toContain('body="keep"');
+  });
+
+  it("updateCommentBodyById sweeps every member sharing a groupId in one call", () => {
+    // Two block-scope markers grouped into a single logical cross-section
+    // comment. Editing via any member id must rewrite both bodies.
+    const md =
+      [
+        '# First',
+        '',
+        '<!-- @comment id="m1" author="k" date="2026-06-02" body="grouped old" group_id="g1" scope="block" -->First<!-- /@comment -->',
+        '',
+        '# Second',
+        '',
+        '<!-- @comment id="m2" author="k" date="2026-06-02" body="grouped old" group_id="g1" scope="block" -->Second<!-- /@comment -->',
+      ].join('\n');
+    editor = createEditor(md);
+    const changed = editor.commands.updateCommentBodyById("m2", "grouped new");
+    expect(changed).toBe(true);
+    const out = getMarkdown(editor);
+    expect(out).not.toContain('body="grouped old"');
+    // Both members carry the new body.
+    const newCount = (out.match(/body="grouped new"/g) ?? []).length;
+    expect(newCount).toBe(2);
+  });
+
+  it("updateCommentBodyById is a no-op (returns false) when no mark matches the id", () => {
+    editor = createEditor("plain");
+    const changed = editor.commands.updateCommentBodyById("nope", "x");
+    expect(changed).toBe(false);
+  });
+
+  it("unsetComment (no id) clears the comment mark over the current selection", () => {
+    const md =
+      '<!-- @comment id="x" author="k" date="2026-06-02" body="b" -->word<!-- /@comment -->';
+    editor = createEditor(md);
+    editor
+      .chain()
+      .setTextSelection({ from: 1, to: 5 })
+      .unsetComment()
+      .run();
+    const out = getMarkdown(editor);
+    expect(out).not.toContain("@comment");
+    expect(out).toContain("word");
+  });
+
+  it("does not fragment the comment across bold marks (mixable: true)", () => {
+    // Wraps the entire paragraph in a comment. Bold sits inside the comment
+    // range; the serializer must keep a single open/close pair, not break
+    // around the **bold** boundary.
+    editor = createEditor("hello **world** rest");
+    editor
+      .chain()
+      .setTextSelection({ from: 1, to: editor.state.doc.content.size - 1 })
+      .setComment({
+        id: "wrap1",
+        author: "k",
+        date: "2026-06-02",
+        body: "b",
+      })
+      .run();
+    const out = getMarkdown(editor);
+    const openCount = (out.match(/<!-- @comment id="wrap1"/g) ?? []).length;
+    expect(openCount).toBe(1);
+    expect(out).toContain("**world**");
+  });
 });
