@@ -31,6 +31,7 @@ declare module "@tiptap/core" {
       setComment: (attrs: CommentAttributes) => ReturnType;
       unsetComment: () => ReturnType;
       unsetCommentById: (id: string) => ReturnType;
+      updateCommentBodyById: (id: string, body: string) => ReturnType;
     };
   }
 }
@@ -112,7 +113,14 @@ export const CommentMark = Mark.create({
           close() {
             return "<!-- /@comment -->";
           },
-          mixable: false,
+          // mixable: true → let prosemirror-markdown reorder this mark
+          // relative to other inline marks (bold/italic/etc.) instead of
+          // hard-closing and reopening at each format boundary. Without
+          // this, a comment wrapping `text **bold** more` serializes as
+          // six fragmented `<!-- @comment -->` pairs. Code marks remain
+          // a forced boundary (markdown's backtick spans can't contain
+          // other marks), but that's far less common.
+          mixable: true,
           expelEnclosingWhitespace: false,
         },
         parse: {
@@ -147,6 +155,41 @@ export const CommentMark = Mark.create({
             );
             if (!mark) return;
             tr.removeMark(pos, pos + node.nodeSize, mark);
+            changed = true;
+          });
+          if (changed && dispatch) dispatch(tr);
+          return changed;
+        },
+      // Edit just the body of an existing comment mark, leaving every other
+      // attribute (id / author / date / scope / groupId) intact. Works for
+      // grouped (cross-section) comments too — pass any member id and every
+      // text node sharing the same groupId is rewritten.
+      updateCommentBodyById:
+        (id: string, body: string) =>
+        ({ tr, state, dispatch }) => {
+          const markType = state.schema.marks[this.name];
+          if (!markType) return false;
+          // First find the canonical groupId so we can sweep grouped members.
+          let groupId: string | null = null;
+          state.doc.descendants((node) => {
+            if (groupId !== null || !node.isText) return;
+            const m = node.marks.find(
+              (mk) => mk.type === markType && mk.attrs.id === id
+            );
+            if (m) groupId = (m.attrs.groupId as string | null) ?? "";
+          });
+          let changed = false;
+          state.doc.descendants((node, pos) => {
+            if (!node.isText) return;
+            const mark = node.marks.find((m) => {
+              if (m.type !== markType) return false;
+              if (groupId) return m.attrs.groupId === groupId;
+              return m.attrs.id === id;
+            });
+            if (!mark) return;
+            const nextMark = markType.create({ ...mark.attrs, body });
+            tr.removeMark(pos, pos + node.nodeSize, mark);
+            tr.addMark(pos, pos + node.nodeSize, nextMark);
             changed = true;
           });
           if (changed && dispatch) dispatch(tr);

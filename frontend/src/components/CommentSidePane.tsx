@@ -5,6 +5,7 @@ import Typography from "@mui/material/Typography";
 import IconButton from "@mui/material/IconButton";
 import Tooltip from "@mui/material/Tooltip";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
+import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import CommentsDisabledIcon from "@mui/icons-material/CommentsDisabled";
 import Chip from "@mui/material/Chip";
 import { collectComments, type CollectedComment } from "@/utils/collectComments";
@@ -16,9 +17,17 @@ const SCOPE_BADGE: Record<string, { label: string; color: string }> = {
   global: { label: "全体", color: "#e0f2fe" },
 };
 
+interface EditableComment {
+  id: string;
+  scope: string;
+  target: string;
+  body: string;
+}
+
 interface Props {
   editor: Editor | null;
   onDelete: (id: string) => void;
+  onEdit?: (comment: EditableComment) => void;
   onClose?: () => void;
   activeId?: string | null;
 }
@@ -134,7 +143,13 @@ function useEditorComments(editor: Editor | null): CollectedComment[] {
   return useSyncExternalStore(subscribe, getSnapshot, () => EMPTY_SNAPSHOT.comments);
 }
 
-export function CommentSidePane({ editor, onDelete, onClose, activeId }: Props) {
+export function CommentSidePane({
+  editor,
+  onDelete,
+  onEdit,
+  onClose,
+  activeId,
+}: Props) {
   const comments = useEditorComments(editor);
   const displayComments = useMemo(() => buildDisplayComments(comments), [comments]);
 
@@ -171,6 +186,18 @@ export function CommentSidePane({ editor, onDelete, onClose, activeId }: Props) 
       onDelete(id);
     }
   };
+
+  const handleEdit = (d: DisplayComment) => {
+    if (!onEdit) return;
+    // Pass any member id; the update commands sweep all grouped members.
+    onEdit({
+      id: d.memberIds[0] ?? d.id,
+      scope: d.scope,
+      target: d.target,
+      body: d.body,
+    });
+  };
+
 
   return (
     <Box
@@ -275,6 +302,21 @@ export function CommentSidePane({ editor, onDelete, onClose, activeId }: Props) 
                 <Typography variant="caption" color="text.secondary" sx={{ flexGrow: 1 }}>
                   {d.date || "?"}
                 </Typography>
+                {onEdit && (
+                  <Tooltip title="コメントを編集">
+                    <IconButton
+                      size="small"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleEdit(d);
+                      }}
+                      aria-label="edit comment"
+                      data-testid="comment-edit"
+                    >
+                      <EditOutlinedIcon fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
+                )}
                 <Tooltip title="コメントを削除">
                   <IconButton
                     size="small"
