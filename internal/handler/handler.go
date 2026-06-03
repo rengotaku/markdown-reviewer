@@ -42,12 +42,14 @@ func (h *Handler) Routes(staticHandler http.Handler) http.Handler {
 	// parent issue (#1) specified the API surface.
 	api := r.Group("/api")
 	{
+		api.GET("/help", h.Help)
 		api.GET("/config", h.Config)
 		api.GET("/dirs", h.ListDir)
 		api.GET("/files", h.ListFiles)
 		api.GET("/files/*path", h.ReadFile)
 		api.PUT("/files/*path", h.WriteFile)
 		api.GET("/stat/*path", h.StatFile)
+		api.GET("/comments/*path", h.ListComments)
 	}
 
 	r.NoRoute(gin.WrapH(staticHandler))
