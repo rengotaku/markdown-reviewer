@@ -25,6 +25,7 @@ declare module "@tiptap/core" {
     standaloneComment: {
       addStandaloneComment: (attrs: StandaloneCommentAttributes) => ReturnType;
       removeStandaloneCommentById: (id: string) => ReturnType;
+      updateStandaloneCommentBodyById: (id: string, body: string) => ReturnType;
     };
   }
 }
@@ -244,6 +245,19 @@ export const StandaloneCommentNode = Node.create({
           }
           if (removed && dispatch) dispatch(tr);
           return removed;
+        },
+      updateStandaloneCommentBodyById:
+        (id: string, body: string) =>
+        ({ tr, state, dispatch }) => {
+          let changed = false;
+          state.doc.descendants((node, pos) => {
+            if (node.type.name !== this.name) return;
+            if (node.attrs.id !== id) return;
+            tr.setNodeMarkup(pos, undefined, { ...node.attrs, body });
+            changed = true;
+          });
+          if (changed && dispatch) dispatch(tr);
+          return changed;
         },
     };
   },
