@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -190,7 +191,10 @@ func TestFiles_Write_CreatesNewFile(t *testing.T) {
 
 	data, err := os.ReadFile(filepath.Join(root, "new.md"))
 	require.NoError(t, err)
-	assert.Equal(t, "# new file", string(data))
+	// Server force-injects an AI hint comment; assert the user content
+	// survives intact at the tail.
+	assert.Contains(t, string(data), "<!-- markdown-reviewer")
+	assert.True(t, strings.HasSuffix(string(data), "# new file"))
 }
 
 func TestFiles_Write_OverwritesAtomically(t *testing.T) {
@@ -206,7 +210,7 @@ func TestFiles_Write_OverwritesAtomically(t *testing.T) {
 
 	data, err := os.ReadFile(target)
 	require.NoError(t, err)
-	assert.Equal(t, "new content", string(data))
+	assert.True(t, strings.HasSuffix(string(data), "new content"))
 
 	// Atomic-write residue check: no leftover temp file next to the target.
 	entries, err := os.ReadDir(root)
@@ -637,7 +641,7 @@ func TestMultiRoot_WriteToSecondRoot(t *testing.T) {
 
 	data, err := os.ReadFile(filepath.Join(rooms, "new.md"))
 	require.NoError(t, err)
-	assert.Equal(t, "# new", string(data))
+	assert.True(t, strings.HasSuffix(string(data), "# new"))
 }
 
 // A path containing ".." into the *sibling* root must still be rejected:
