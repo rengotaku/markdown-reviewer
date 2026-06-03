@@ -19,6 +19,8 @@ import MenuIcon from "@mui/icons-material/Menu";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import AddCommentIcon from "@mui/icons-material/AddComment";
 import CommentIcon from "@mui/icons-material/Comment";
+import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
+import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import PublicIcon from "@mui/icons-material/Public";
 import HubIcon from "@mui/icons-material/Hub";
 import FormatAlignCenterIcon from "@mui/icons-material/FormatAlignCenter";
@@ -30,6 +32,7 @@ import {
   ToastViewport,
   ConfirmDialog,
   AddCommentDialog,
+  EditCommentDialog,
   CommentSidePane,
 } from "@/components";
 import {
@@ -52,6 +55,7 @@ import { listDir } from "@/api";
 import { generateCommentId } from "@/utils/commentId";
 import { nextVersionedPath } from "@/utils/versionedPath";
 import { collectHeadings } from "@/utils/headings";
+import { collectComments } from "@/utils/collectComments";
 import { computeCrossSectionRanges } from "@/utils/crossSectionRanges";
 
 function basename(path: string): string {
@@ -204,6 +208,19 @@ export function EditorPage() {
     pos: number;
     size: number;
   } | null>(null);
+  const [editDialog, setEditDialog] = useState<{
+    open: boolean;
+    id: string;
+    scope: string;
+    target: string;
+    body: string;
+  }>({ open: false, id: "", scope: "", target: "", body: "" });
+  // Right-click on an existing comment range surfaces this menu.
+  const [commentMenu, setCommentMenu] = useState<{
+    x: number;
+    y: number;
+    id: string;
+  } | null>(null);
 
   // Re-render the toolbar Add-Comment button when selection / doc changes.
   const [, setSelectionTick] = useState(0);
@@ -238,10 +255,15 @@ export function EditorPage() {
       window.removeEventListener("mdr:block-context-menu", onBlockMenu);
   }, []);
 
-  // Right-click on a non-empty selection (outside an existing comment) opens
-  // our custom mini menu with "コメント追加". The editor `view` may not be
-  // mounted at the moment the editor object lands in the store, so we attach
-  // lazily and retry on the "create" event if needed.
+  // Right-click handling: two distinct menus share one listener.
+  //   1. On an existing comment range → 編集 / 削除 menu (commentMenu state).
+  //      Detected via `[data-comment-id]` closest() lookup so it catches both
+  //      wrapping marks (inline / block) and standalone nodes (global /
+  //      cross-section).
+  //   2. On a non-empty selection that isn't on a comment → コメント追加 menu
+  //      (contextMenu state).
+  // The editor `view` may not be mounted at the moment the editor object
+  // lands in the store, so we attach lazily and retry on the "create" event.
   useEffect(() => {
     if (!editor || editor.isDestroyed) return;
 
@@ -249,14 +271,23 @@ export function EditorPage() {
 
     const tryAttach = () => {
       if (detach) return;
-      let dom: Element;
+      let dom: HTMLElement;
       try {
-        dom = editor.view.dom;
+        dom = editor.view.dom as HTMLElement;
       } catch {
         return; // view not ready yet
       }
       const handler = (e: Event) => {
         const ev = e as MouseEvent;
+        const target = (ev.target as HTMLElement | null)?.closest?.(
+          "[data-comment-id]"
+        ) as HTMLElement | null;
+        const commentId = target?.getAttribute("data-comment-id") ?? "";
+        if (commentId) {
+          ev.preventDefault();
+          setCommentMenu({ x: ev.clientX, y: ev.clientY, id: commentId });
+          return;
+        }
         const sel = editor.state.selection;
         if (sel.empty || sel.from === sel.to) return;
         if (editor.isActive("comment")) return;
@@ -512,14 +543,20 @@ export function EditorPage() {
     const date = todayISO();
     const blockRange = commentDialog.blockRange;
 
+    // Capture the cursor position to restore (collapsed) once the chain
+    // finishes, so the user isn't left with a highlighted selection after
+    // submitting.
+    const collapseAt = editor.state.selection.from;
+
+    // Note on focus(): we intentionally don't call .focus() in these chains.
+    // Combined with `disableRestoreFocus` on the dialog, this keeps the
+    // contenteditable element from receiving DOM focus on submit — the
+    // browser scrolls the caret into view on focus, which can yank the
+    // viewport to the top if the caret was at doc start.
     if (scope === "global") {
       // Standalone — not anchored to text; appended as a block node.
-      // `scrollIntoView: false` keeps the viewport pinned where the user was
-      // reading; otherwise focus() would scroll to wherever the cursor ends
-      // up after the chain (e.g. appended global → bottom of doc).
       editor
         .chain()
-        .focus(null, { scrollIntoView: false })
         .addStandaloneComment({
           id,
           author,
@@ -528,6 +565,7 @@ export function EditorPage() {
           body,
           scope: "global",
         })
+        .setTextSelection(collapseAt)
         .run();
     } else if (scope === "cross-section") {
       // For each selected heading, anchor a block-scope marker around the
@@ -556,7 +594,7 @@ export function EditorPage() {
         closeCommentDialog();
         return;
       }
-      let chain = editor.chain().focus(null, { scrollIntoView: false });
+      let chain = editor.chain();
       for (let i = ranges.length - 1; i >= 0; i--) {
         const r = ranges[i];
         chain = chain
@@ -570,23 +608,25 @@ export function EditorPage() {
             groupId,
           });
       }
-      chain.run();
+      // Collapse to the start of the first heading range so the document
+      // doesn't end with a multi-section highlighted band.
+      chain.setTextSelection(ranges[0].from).run();
     } else if (scope === "block" && blockRange) {
       // Block-scope wrap: apply the comment mark to the entire block's text
       // range captured when the drag-handle menu was opened. The selection
       // may have moved while the dialog was up, so set it explicitly.
       editor
         .chain()
-        .focus(null, { scrollIntoView: false })
         .setTextSelection({ from: blockRange.from, to: blockRange.to })
         .setComment({ id, author, date, body, scope: "block" })
+        .setTextSelection(blockRange.to)
         .run();
     } else {
       // Anchored inline — wraps the current selection.
       editor
         .chain()
-        .focus(null, { scrollIntoView: false })
         .setComment({ id, author, date, body, scope: "inline" })
+        .setTextSelection(collapseAt)
         .run();
     }
 
@@ -597,11 +637,112 @@ export function EditorPage() {
     if (!editor) return;
     // Try the wrapping-mark removal first; standalone comments share the same
     // id space, so fall back to node removal if no mark was touched.
-    const removed = editor.chain().focus().unsetCommentById(id).run();
+    // Same rationale as handleEditCommentSubmit: skip .focus() so the browser
+    // doesn't scroll the caret back into view when the dialog/menu closes.
+    const removed = editor.chain().unsetCommentById(id).run();
     if (!removed) {
-      editor.chain().focus().removeStandaloneCommentById(id).run();
+      editor.chain().removeStandaloneCommentById(id).run();
     }
   };
+
+  const handleEditComment = (c: {
+    id: string;
+    scope: string;
+    target: string;
+    body: string;
+  }) => {
+    setEditDialog({
+      open: true,
+      id: c.id,
+      scope: c.scope,
+      target: c.target,
+      body: c.body,
+    });
+  };
+
+  const closeCommentMenu = () => setCommentMenu(null);
+
+  // Resolve the right-clicked comment to its current (id, scope, target, body)
+  // by walking the doc. Done lazily on menu-action click so we always see the
+  // freshest body — the user may have edited it via the side pane in between.
+  const lookupComment = (id: string) => {
+    if (!editor) return null;
+    const all = collectComments(editor);
+    // For grouped (cross-section) comments any member id maps back to the
+    // same logical row in the side pane; aggregate target across members so
+    // the edit dialog shows the full heading list, not just the clicked one.
+    const hit = all.find((c) => c.id === id);
+    if (!hit) return null;
+    if (hit.groupId) {
+      const members = all.filter((c) => c.groupId === hit.groupId);
+      return {
+        id: members[0].id,
+        scope: "cross-section",
+        target: members.map((m) => m.target).filter(Boolean).join("\n"),
+        body: members[0].body,
+      };
+    }
+    return {
+      id: hit.id,
+      scope: hit.scope,
+      target: hit.target,
+      body: hit.body,
+    };
+  };
+
+  const handleCommentMenuEdit = () => {
+    if (!commentMenu) return;
+    const c = lookupComment(commentMenu.id);
+    closeCommentMenu();
+    if (!c) return;
+    handleEditComment(c);
+  };
+
+  const handleCommentMenuDelete = () => {
+    if (!commentMenu || !editor) {
+      closeCommentMenu();
+      return;
+    }
+    const all = collectComments(editor);
+    const hit = all.find((c) => c.id === commentMenu.id);
+    closeCommentMenu();
+    if (!hit) return;
+    // Sweep every grouped member; non-grouped comments collapse to a single id.
+    const memberIds = hit.groupId
+      ? all.filter((c) => c.groupId === hit.groupId).map((c) => c.id)
+      : [hit.id];
+    for (const id of memberIds) {
+      handleDeleteComment(id);
+    }
+  };
+
+  const closeEditDialog = () =>
+    setEditDialog({ open: false, id: "", scope: "", target: "", body: "" });
+
+  const handleEditCommentSubmit = (body: string) => {
+    if (!editor) {
+      closeEditDialog();
+      return;
+    }
+    // Deliberately do NOT call .focus() here. TipTap's `scrollIntoView: false`
+    // only suppresses ProseMirror's own tr.scrollIntoView(); the underlying
+    // view.focus() still moves DOM focus into the contenteditable, and the
+    // browser independently scrolls the caret into view. Editing a comment
+    // doesn't need editor focus (the doc isn't being typed into), so we just
+    // dispatch the mark/node update.
+    const updated = editor
+      .chain()
+      .updateCommentBodyById(editDialog.id, body)
+      .run();
+    if (!updated) {
+      editor
+        .chain()
+        .updateStandaloneCommentBodyById(editDialog.id, body)
+        .run();
+    }
+    closeEditDialog();
+  };
+
 
   const canSave = Boolean(activeFile);
   const isSaving = writeFile.isPending;
@@ -968,6 +1109,7 @@ export function EditorPage() {
           <CommentSidePane
             editor={editor}
             onDelete={handleDeleteComment}
+            onEdit={handleEditComment}
             onClose={toggleCommentPane}
           />
         </Box>
@@ -1043,6 +1185,39 @@ export function EditorPage() {
         </MenuItem>
       </Menu>
 
+      <Menu
+        open={!!commentMenu}
+        onClose={closeCommentMenu}
+        anchorReference="anchorPosition"
+        anchorPosition={
+          commentMenu ? { top: commentMenu.y, left: commentMenu.x } : undefined
+        }
+        slotProps={{
+          root: {
+            "data-testid": "editor-comment-context-menu",
+          } as Record<string, unknown>,
+        }}
+      >
+        <MenuItem
+          onClick={handleCommentMenuEdit}
+          data-testid="ctx-edit-comment"
+        >
+          <ListItemIcon>
+            <EditOutlinedIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText>コメントを編集</ListItemText>
+        </MenuItem>
+        <MenuItem
+          onClick={handleCommentMenuDelete}
+          data-testid="ctx-delete-comment"
+        >
+          <ListItemIcon>
+            <DeleteOutlineIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText>コメントを削除</ListItemText>
+        </MenuItem>
+      </Menu>
+
       <AddCommentDialog
         open={commentDialog.open}
         mode={commentDialog.mode}
@@ -1050,6 +1225,15 @@ export function EditorPage() {
         headings={commentDialog.headings}
         onClose={closeCommentDialog}
         onSubmit={handleCommentSubmit}
+      />
+
+      <EditCommentDialog
+        open={editDialog.open}
+        scope={editDialog.scope}
+        target={editDialog.target}
+        defaultBody={editDialog.body}
+        onClose={closeEditDialog}
+        onSubmit={handleEditCommentSubmit}
       />
 
       <ConfirmDialog />
