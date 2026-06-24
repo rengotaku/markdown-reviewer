@@ -10,14 +10,13 @@ import { TableCell } from "@tiptap/extension-table-cell";
 import { TableHeader } from "@tiptap/extension-table-header";
 import { TaskList } from "@tiptap/extension-task-list";
 import { TaskItem } from "@tiptap/extension-task-item";
-import { DragHandle } from "@tiptap/extension-drag-handle-react";
-import { offset } from "@floating-ui/dom";
-import DragIndicatorIcon from "@mui/icons-material/DragIndicator";
 import { Markdown } from "tiptap-markdown";
 import { useOpenFiles } from "@/hooks/useOpenFiles";
 import { useActiveRoot } from "@/hooks/useActiveRoot";
 import { useEditorInstance } from "@/hooks/useEditorInstance";
 import { useEditorPrefs } from "@/hooks/useEditorPrefs";
+import { splitPreamble, parseFrontmatter } from "@/utils/frontmatter";
+import { FrontmatterTable } from "./FrontmatterTable";
 import { TableMenu } from "./toolbar/TableMenu";
 import { SlashCommand } from "./extensions/SlashCommand";
 import { MermaidBlock } from "./extensions/MermaidBlock";
@@ -47,6 +46,15 @@ export function TiptapEditor() {
     return file ? file.reloadToken : 0;
   });
   const updateActiveMarkdown = useOpenFiles((s) => s.updateActiveMarkdown);
+  const activeMarkdown = useOpenFiles((s) => {
+    const id = activeRoot ? s.activeIdByRoot[activeRoot] : null;
+    const file = id ? s.files.find((f) => f.id === id) : undefined;
+    return file ? file.markdown : "";
+  });
+  const frontmatter = useMemo(
+    () => parseFrontmatter(splitPreamble(activeMarkdown).frontmatterYaml),
+    [activeMarkdown]
+  );
   const lastLoadedKeyRef = useRef<string | null>(null);
   // Track the editor instance that recorded `lastLoadedKeyRef`. If TipTap
   // hands us a fresh editor (StrictMode dev unmount-remount, HMR, etc.) the
@@ -54,7 +62,13 @@ export function TiptapEditor() {
   // user would see an empty editor until they switched tabs. Reset the
   // tracking ref when the editor identity changes.
   const lastLoadedEditorRef = useRef<unknown>(null);
-  const dragHandleBlockRef = useRef<{ pos: number; size: number } | null>(null);
+  /**
+   * The active file's non-editable preamble (AI hint + YAML frontmatter). It is
+   * stripped before the body is loaded into the editor, then re-prepended to
+   * the editor's markdown output so saving never drops or reorders it. Kept in
+   * a ref so onUpdate can read the latest value without re-subscribing.
+   */
+  const preambleRef = useRef("");
   /**
    * Timestamp (ms) until which onUpdate should be ignored. setContent's
    * `emitUpdate: false` only suppresses the direct dispatch; extensions like
@@ -95,19 +109,11 @@ export function TiptapEditor() {
       // Drop updates fired by post-setContent extension transactions
       // (e.g. autolink) so an untouched file isn't flagged dirty.
       if (Date.now() < settleUntilRef.current) return;
-      updateActiveMarkdown(activeRoot, getEditorMarkdown(ed));
+      // Re-attach the stripped preamble (AI hint + frontmatter) so the saved
+      // markdown matches what was loaded and frontmatter is never lost.
+      updateActiveMarkdown(activeRoot, preambleRef.current + getEditorMarkdown(ed));
     },
   });
-
-  const dragHandleNested = useMemo(() => ({ edgeDetection: "none" as const }), []);
-  const dragHandlePosition = useMemo(
-    () => ({
-      placement: "left-start" as const,
-      strategy: "absolute" as const,
-      middleware: [offset(16)],
-    }),
-    []
-  );
 
   useEffect(() => {
     useEditorInstance.getState().setEditor(editor ?? null);
@@ -133,11 +139,17 @@ export function TiptapEditor() {
     const state = useOpenFiles.getState();
     const file = state.files.find((f) => f.id === activeId);
     if (file) {
+      // Keep the non-editable preamble (AI hint + YAML frontmatter) out of the
+      // editor — it has no schema for frontmatter and mangles `---` on
+      // roundtrip. The preamble is surfaced as a read-only table instead and
+      // re-prepended on save (see onUpdate).
+      const { preamble, body } = splitPreamble(file.markdown);
+      preambleRef.current = preamble;
       // emitUpdate: false → don't fire onUpdate for the programmatic load.
       // TipTap's Markdown roundtrip can produce a slightly normalized string
       // (e.g. trailing newline tweaks) which would otherwise set isDirty=true
       // immediately after opening a freshly-loaded file. See issue #20.
-      editor.commands.setContent(file.markdown, { emitUpdate: false });
+      editor.commands.setContent(body, { emitUpdate: false });
       // Open a settle window so post-setContent extension transactions
       // (autolink, etc.) don't slip past the suppression above.
       settleUntilRef.current = Date.now() + 250;
@@ -163,41 +175,7 @@ export function TiptapEditor() {
       }}
     >
       {editor && <TableMenu editor={editor} />}
-      {editor && (
-        <DragHandle
-          editor={editor}
-          className="drag-handle"
-          nested={dragHandleNested}
-          computePositionConfig={dragHandlePosition}
-          onNodeChange={({ node, pos }) => {
-            dragHandleBlockRef.current = node
-              ? { pos, size: node.nodeSize }
-              : null;
-          }}
-        >
-          <Box
-            component="span"
-            sx={{ display: "inline-flex", cursor: "grab" }}
-            onContextMenu={(e) => {
-              e.preventDefault();
-              const info = dragHandleBlockRef.current;
-              if (!info) return;
-              const customEvent = new CustomEvent("mdr:block-context-menu", {
-                detail: {
-                  x: e.clientX,
-                  y: e.clientY,
-                  pos: info.pos,
-                  size: info.size,
-                },
-                bubbles: true,
-              });
-              window.dispatchEvent(customEvent);
-            }}
-          >
-            <DragIndicatorIcon fontSize="small" />
-          </Box>
-        </DragHandle>
-      )}
+      <FrontmatterTable entries={frontmatter} />
       <EditorContent editor={editor} />
     </Box>
   );

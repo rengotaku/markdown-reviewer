@@ -182,36 +182,15 @@
   text-decoration: line-through;
 }
 
-.drag-handle {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 28px;
-  color: #6c757d;
-  cursor: grab;
-  border-radius: 4px;
-  transition: background-color 120ms ease;
-  z-index: 10;
+/* Frontmatter panel — read-only YAML frontmatter surfaced above the editor. */
+.frontmatter-panel {
+  padding: 24px 48px 0;
+  box-sizing: border-box;
 }
 
-.drag-handle::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 100%;
-  width: 16px;
-}
-
-.drag-handle:hover {
-  background-color: rgba(55, 53, 47, 0.08);
-  color: #212529;
-}
-
-.drag-handle:active {
-  cursor: grabbing;
-  background-color: rgba(55, 53, 47, 0.12);
+.editor-centered .frontmatter-panel {
+  max-width: 720px;
+  margin: 0 auto;
 }
 
 .ProseMirror-dropcursor,

@@ -202,12 +202,6 @@ export function EditorPage() {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(
     null
   );
-  const [dragMenu, setDragMenu] = useState<{
-    x: number;
-    y: number;
-    pos: number;
-    size: number;
-  } | null>(null);
   const [editDialog, setEditDialog] = useState<{
     open: boolean;
     id: string;
@@ -234,26 +228,6 @@ export function EditorPage() {
       editor.off("transaction", tick);
     };
   }, [editor]);
-
-  // Drag handle right-click → block context menu. The TiptapEditor dispatches
-  // a custom "mdr:block-context-menu" event on window with pos/size of the
-  // currently hovered block; we capture it here to open the menu near the
-  // pointer.
-  useEffect(() => {
-    const onBlockMenu = (e: Event) => {
-      const detail = (e as CustomEvent).detail as {
-        x: number;
-        y: number;
-        pos: number;
-        size: number;
-      };
-      if (!detail) return;
-      setDragMenu(detail);
-    };
-    window.addEventListener("mdr:block-context-menu", onBlockMenu);
-    return () =>
-      window.removeEventListener("mdr:block-context-menu", onBlockMenu);
-  }, []);
 
   // Right-click handling: two distinct menus share one listener.
   //   1. On an existing comment range → 編集 / 削除 menu (commentMenu state).
@@ -442,39 +416,6 @@ export function EditorPage() {
       open: true,
       mode: "anchored",
       snippet: buildTargetSnippet(selectedText),
-      headings: [],
-    });
-  };
-
-  const closeDragMenu = () => setDragMenu(null);
-
-  const handleAddBlockCommentFromDragMenu = () => {
-    if (!editor || !dragMenu) {
-      closeDragMenu();
-      return;
-    }
-    const { pos, size } = dragMenu;
-    const node = editor.state.doc.nodeAt(pos);
-    closeDragMenu();
-    if (!node) return;
-    // Atom blocks (mermaid, standalone comments, etc.) have no inner text to
-    // wrap; refuse rather than producing an empty-target block comment.
-    if (node.isAtom) {
-      showToast("このブロックにはコメントを付けられません", "info");
-      return;
-    }
-    const from = pos + 1;
-    const to = pos + size - 1;
-    if (to <= from) {
-      showToast("空のブロックにはコメントを付けられません", "info");
-      return;
-    }
-    const blockText = editor.state.doc.textBetween(from, to, " ");
-    setCommentDialog({
-      open: true,
-      mode: "block",
-      snippet: buildTargetSnippet(blockText),
-      blockRange: { from, to },
       headings: [],
     });
   };
@@ -1158,30 +1099,6 @@ export function EditorPage() {
             <AddCommentIcon fontSize="small" />
           </ListItemIcon>
           <ListItemText>コメント追加</ListItemText>
-        </MenuItem>
-      </Menu>
-
-      <Menu
-        open={!!dragMenu}
-        onClose={closeDragMenu}
-        anchorReference="anchorPosition"
-        anchorPosition={
-          dragMenu ? { top: dragMenu.y, left: dragMenu.x } : undefined
-        }
-        slotProps={{
-          root: {
-            "data-testid": "editor-block-context-menu",
-          } as Record<string, unknown>,
-        }}
-      >
-        <MenuItem
-          onClick={handleAddBlockCommentFromDragMenu}
-          data-testid="ctx-add-block-comment"
-        >
-          <ListItemIcon>
-            <AddCommentIcon fontSize="small" />
-          </ListItemIcon>
-          <ListItemText>ブロックにコメント追加</ListItemText>
         </MenuItem>
       </Menu>
 
