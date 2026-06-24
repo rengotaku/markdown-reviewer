@@ -13,7 +13,8 @@ describe("FrontmatterTable", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("renders scalar, array, empty, null and object values", () => {
+  it("renders scalar, array, empty, null and object values", async () => {
+    const user = userEvent.setup();
     render(
       <FrontmatterTable
         entries={[
@@ -25,7 +26,9 @@ describe("FrontmatterTable", () => {
         ]}
       />
     );
-    expect(screen.getByText("date")).toBeInTheDocument();
+    // Collapsed by default — expand to assert the rendered values.
+    await user.click(screen.getByTestId("frontmatter-toggle"));
+    expect(await screen.findByText("date")).toBeInTheDocument();
     expect(screen.getByText("2026-06-24")).toBeInTheDocument();
     // array items become chips
     expect(screen.getByText("infra")).toBeInTheDocument();
@@ -40,11 +43,15 @@ describe("FrontmatterTable", () => {
     const user = userEvent.setup();
     render(<FrontmatterTable entries={[{ key: "date", value: "2026-06-24" }]} />);
 
-    // visible by default (unmountOnExit removes it from the DOM when collapsed)
-    expect(screen.getByTestId("frontmatter-table")).toBeInTheDocument();
+    // collapsed by default (unmountOnExit keeps it out of the DOM until opened)
+    expect(screen.queryByTestId("frontmatter-table")).not.toBeInTheDocument();
 
     const toggle = screen.getByTestId("frontmatter-toggle");
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+
+    await user.click(toggle);
     expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(await screen.findByTestId("frontmatter-table")).toBeInTheDocument();
 
     await user.click(toggle);
     expect(toggle).toHaveAttribute("aria-expanded", "false");
@@ -52,9 +59,5 @@ describe("FrontmatterTable", () => {
     await waitForElementToBeRemoved(() =>
       screen.queryByTestId("frontmatter-table")
     );
-
-    await user.click(toggle);
-    expect(toggle).toHaveAttribute("aria-expanded", "true");
-    expect(await screen.findByTestId("frontmatter-table")).toBeInTheDocument();
   });
 });

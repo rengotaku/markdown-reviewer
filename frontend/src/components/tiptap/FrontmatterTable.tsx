@@ -71,7 +71,9 @@ interface FrontmatterTableProps {
  * source frontmatter is round-tripped verbatim on save.
  */
 export function FrontmatterTable({ entries }: FrontmatterTableProps) {
-  const [open, setOpen] = useState(true);
+  // Collapsed by default — frontmatter is reference metadata, kept out of the
+  // way until the reviewer expands it.
+  const [open, setOpen] = useState(false);
 
   if (entries.length === 0) return null;
 
