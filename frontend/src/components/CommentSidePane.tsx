@@ -3,10 +3,14 @@ import type { Editor } from "@tiptap/react";
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
 import IconButton from "@mui/material/IconButton";
+import Button from "@mui/material/Button";
 import Tooltip from "@mui/material/Tooltip";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import CommentsDisabledIcon from "@mui/icons-material/CommentsDisabled";
+import AddCommentIcon from "@mui/icons-material/AddComment";
+import PublicIcon from "@mui/icons-material/Public";
+import HubIcon from "@mui/icons-material/Hub";
 import Chip from "@mui/material/Chip";
 import { collectComments, type CollectedComment } from "@/utils/collectComments";
 import { decodeSections } from "@/utils/headings";
@@ -30,6 +34,14 @@ interface Props {
   onEdit?: (comment: EditableComment) => void;
   onClose?: () => void;
   activeId?: string | null;
+  /** Whether the current editor selection can take an anchored comment. */
+  canAddComment?: boolean;
+  /** Add an anchored comment on the current selection. */
+  onAddComment?: () => void;
+  /** Add a file-wide (global) comment. */
+  onAddGlobal?: () => void;
+  /** Add a cross-section comment spanning multiple headings. */
+  onAddCrossSection?: () => void;
 }
 
 interface CommentSnapshot {
@@ -149,6 +161,10 @@ export function CommentSidePane({
   onEdit,
   onClose,
   activeId,
+  canAddComment = false,
+  onAddComment,
+  onAddGlobal,
+  onAddCrossSection,
 }: Props) {
   const comments = useEditorComments(editor);
   const displayComments = useMemo(() => buildDisplayComments(comments), [comments]);
@@ -239,6 +255,69 @@ export function CommentSidePane({
           </Tooltip>
         )}
       </Box>
+      {(onAddComment || onAddGlobal || onAddCrossSection) && (
+        <Box
+          sx={{
+            px: 1.5,
+            py: 1,
+            borderBottom: "1px solid",
+            borderColor: "divider",
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 0.75,
+          }}
+          data-testid="comment-add-toolbar"
+        >
+          {onAddComment && (
+            <Tooltip title="選択範囲にコメントを追加">
+              <span>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  startIcon={<AddCommentIcon />}
+                  disabled={!canAddComment}
+                  onClick={onAddComment}
+                  data-testid="editor-add-comment"
+                >
+                  コメント
+                </Button>
+              </span>
+            </Tooltip>
+          )}
+          {onAddGlobal && (
+            <Tooltip title="ファイル全体に向けたコメントを追加（選択不要）">
+              <span>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  startIcon={<PublicIcon />}
+                  disabled={!editor}
+                  onClick={onAddGlobal}
+                  data-testid="editor-add-global-comment"
+                >
+                  全体
+                </Button>
+              </span>
+            </Tooltip>
+          )}
+          {onAddCrossSection && (
+            <Tooltip title="複数の見出しに紐付ける横断コメントを追加">
+              <span>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  startIcon={<HubIcon />}
+                  disabled={!editor}
+                  onClick={onAddCrossSection}
+                  data-testid="editor-add-cross-section-comment"
+                >
+                  横断
+                </Button>
+              </span>
+            </Tooltip>
+          )}
+        </Box>
+      )}
       <Box sx={{ flex: 1, overflow: "auto" }}>
         {displayComments.length === 0 ? (
           <Box sx={{ p: 2 }}>

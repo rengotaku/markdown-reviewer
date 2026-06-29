@@ -21,12 +21,9 @@ import AddCommentIcon from "@mui/icons-material/AddComment";
 import CommentIcon from "@mui/icons-material/Comment";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
-import PublicIcon from "@mui/icons-material/Public";
-import HubIcon from "@mui/icons-material/Hub";
 import FormatAlignCenterIcon from "@mui/icons-material/FormatAlignCenter";
 import UnfoldMoreIcon from "@mui/icons-material/UnfoldMore";
 import Chip from "@mui/material/Chip";
-import Select from "@mui/material/Select";
 import RateReviewIcon from "@mui/icons-material/RateReview";
 import CompareArrowsIcon from "@mui/icons-material/CompareArrows";
 import { TiptapEditor } from "@/components/tiptap/TiptapEditor";
@@ -66,6 +63,7 @@ import {
   type RevisionMeta,
 } from "@/api";
 import { stripHint } from "@/utils/stripHint";
+import { formatLocalTimestamp } from "@/utils/formatTimestamp";
 import { generateCommentId } from "@/utils/commentId";
 import { nextVersionedPath } from "@/utils/versionedPath";
 import { collectHeadings } from "@/utils/headings";
@@ -92,20 +90,6 @@ function buildTargetSnippet(raw: string): string {
   const cleaned = raw.replace(/\s+/g, " ").trim();
   if (cleaned.length <= TARGET_SNIPPET_LENGTH) return cleaned;
   return `${cleaned.slice(0, TARGET_SNIPPET_LENGTH)}…`;
-}
-
-// Render an RFC3339 timestamp as local-time "YYYY/MM/DD HH:mm" for the
-// header. Empty input → empty string so the caller can elide the label.
-function formatLocalTimestamp(iso: string): string {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  const hh = String(d.getHours()).padStart(2, "0");
-  const mm = String(d.getMinutes()).padStart(2, "0");
-  return `${y}/${m}/${day} ${hh}:${mm}`;
 }
 
 export function EditorPage() {
@@ -259,7 +243,6 @@ export function EditorPage() {
     () => (activeFile ? stripHint(activeFile.markdown) : ""),
     [activeFile]
   );
-  const selectedRevMeta = revisions.find((r) => r.id === selectedRevId);
 
   // Migrate any persisted legacy single-root files onto the default root
   // the first time we learn which root that is. Idempotent — subsequent
@@ -1023,68 +1006,8 @@ export function EditorPage() {
                   </Button>
                 </span>
               </Tooltip>
-              {diffMode && revisions.length > 0 && (
-                <Select
-                  size="small"
-                  value={selectedRevId ?? ""}
-                  onChange={(e) => void loadRevision(e.target.value as string)}
-                  data-testid="editor-revision-picker"
-                  sx={{
-                    minWidth: 170,
-                    "& .MuiSelect-select": { py: 0.5, fontSize: 13 },
-                  }}
-                >
-                  {revisions.map((r) => (
-                    <MenuItem key={r.id} value={r.id}>
-                      {r.id} · {formatLocalTimestamp(r.ts)}
-                    </MenuItem>
-                  ))}
-                </Select>
-              )}
             </>
           )}
-          <Tooltip title="選択範囲にコメントを追加">
-            <span>
-              <Button
-                variant="outlined"
-                size="small"
-                startIcon={<AddCommentIcon />}
-                disabled={!canAddComment}
-                onClick={handleAddCommentClick}
-                data-testid="editor-add-comment"
-              >
-                コメント
-              </Button>
-            </span>
-          </Tooltip>
-          <Tooltip title="ファイル全体に向けたコメントを追加（選択不要）">
-            <span>
-              <Button
-                variant="outlined"
-                size="small"
-                startIcon={<PublicIcon />}
-                disabled={!editor}
-                onClick={handleAddGlobalClick}
-                data-testid="editor-add-global-comment"
-              >
-                全体
-              </Button>
-            </span>
-          </Tooltip>
-          <Tooltip title="複数の見出しに紐付ける横断コメントを追加">
-            <span>
-              <Button
-                variant="outlined"
-                size="small"
-                startIcon={<HubIcon />}
-                disabled={!editor}
-                onClick={handleAddCrossSectionClick}
-                data-testid="editor-add-cross-section-comment"
-              >
-                横断
-              </Button>
-            </span>
-          </Tooltip>
           <Tooltip title={centered ? "全幅表示に切替" : "中央寄せに切替"}>
             <IconButton
               size="small"
@@ -1209,11 +1132,9 @@ export function EditorPage() {
             <DiffView
               oldText={diffBaseText}
               newText={diffLatestText}
-              baseLabel={
-                selectedRevMeta
-                  ? `${selectedRevMeta.id}（${formatLocalTimestamp(selectedRevMeta.ts)}）`
-                  : undefined
-              }
+              revisions={revisions}
+              selectedRevId={selectedRevId}
+              onSelectRevision={(id) => void loadRevision(id)}
             />
           ) : activeFile ? (
             <TiptapEditor />
@@ -1253,6 +1174,10 @@ export function EditorPage() {
             onDelete={handleDeleteComment}
             onEdit={handleEditComment}
             onClose={toggleCommentPane}
+            canAddComment={canAddComment}
+            onAddComment={handleAddCommentClick}
+            onAddGlobal={handleAddGlobalClick}
+            onAddCrossSection={handleAddCrossSectionClick}
           />
         </Box>
       ) : (
