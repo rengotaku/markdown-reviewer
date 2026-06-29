@@ -142,10 +142,26 @@ export function EditorPage() {
   const [diffMode, setDiffMode] = useState(false);
   const [selectedRevId, setSelectedRevId] = useState<string | null>(null);
   const [diffBaseText, setDiffBaseText] = useState<string>("");
+  // Files known to be in "review" state, by `${root}:${path}` — drives the
+  // per-tab review badge. Populated as files are visited / ingested (there is
+  // no batch state endpoint, so unvisited tabs stay unmarked until activated).
+  const [reviewFiles, setReviewFiles] = useState<Set<string>>(new Set());
 
   const activePath = activeFile?.path;
   const activeFileRoot = activeFile?.root;
-  const fileKey = activePath ? `${activeFileRoot ?? ""}:${activePath}` : "";
+  const keyOf = (root: string | undefined, path: string) => `${root ?? ""}:${path}`;
+  const fileKey = activePath ? keyOf(activeFileRoot, activePath) : "";
+
+  // Record/clear a file's review membership for the tab badge.
+  const markReviewFile = (key: string, inReview: boolean) => {
+    setReviewFiles((prev) => {
+      if (inReview === prev.has(key)) return prev;
+      const next = new Set(prev);
+      if (inReview) next.add(key);
+      else next.delete(key);
+      return next;
+    });
+  };
 
   // Reset all review/diff view-state the instant the active file changes —
   // done during render (React's recommended pattern over an effect) so the
@@ -174,6 +190,7 @@ export function EditorPage() {
         if (cancelled) return;
         const state = stat.state ?? "draft";
         setReviewState(state);
+        markReviewFile(keyOf(activeFileRoot, activePath), state === "review");
         if (state === "review") {
           const rl = await listRevisions(activePath, activeFileRoot);
           if (!cancelled) setRevisions(rl.revisions);
@@ -211,6 +228,7 @@ export function EditorPage() {
     try {
       const res = await ingestFile(activeFile.path, activeFile.root);
       setReviewState(res.state);
+      markReviewFile(keyOf(activeFile.root, activeFile.path), res.state === "review");
       setReviewRefresh((n) => n + 1);
       showToast(`「${activeFile.name}」をレビュー対象に取り込みました`, "success");
     } catch (err) {
@@ -1091,6 +1109,14 @@ export function EditorPage() {
                     minWidth: 0,
                   }}
                 >
+                  {reviewFiles.has(keyOf(f.root, f.path)) && (
+                    <Tooltip title="レビュー中">
+                      <RateReviewIcon
+                        sx={{ fontSize: 14, color: "success.main", flexShrink: 0 }}
+                        data-testid={`editor-tab-review-${f.path}`}
+                      />
+                    </Tooltip>
+                  )}
                   <Box
                     component="span"
                     sx={{
