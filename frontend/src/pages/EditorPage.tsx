@@ -230,9 +230,9 @@ export function EditorPage() {
       showToast("比較できる過去リビジョンがまだありません", "info");
       return;
     }
-    // Default comparison: latest 正典 ⇔ most recent revision.
-    const target = selectedRevId ?? revisions[0].id;
-    await loadRevision(target);
+    // Always (re)open against the most recent revision so the picker starts on
+    // "最新", regardless of any earlier selection.
+    await loadRevision(revisions[0].id);
     setDiffMode(true);
   };
 
