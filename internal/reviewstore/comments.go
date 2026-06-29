@@ -28,6 +28,11 @@ var ErrNotIngested = errors.New("reviewstore: file not ingested")
 // ErrCommentNotFound is returned when an id does not match any comment.
 var ErrCommentNotFound = errors.New("reviewstore: comment not found")
 
+// ErrCommentResolved is returned when a mutation (reply / body edit) targets a
+// resolved comment. Resolved comments are read-only except for reopening; the
+// caller must set status back to open first.
+var ErrCommentResolved = errors.New("reviewstore: comment is resolved")
+
 // Anchor locates a comment inside the clean canonical markdown by content,
 // not by position — the canonical file carries no review markers (#50). On
 // load the snippet is searched under heading_path; the occurrence index
@@ -143,23 +148,33 @@ func AddComment(root, relPath string, c Comment) (Comment, error) {
 // UpdateCommentStatus sets a comment's status (e.g. resolved). Returns the
 // updated comment, or ErrCommentNotFound.
 func UpdateCommentStatus(root, relPath, id, status string) (Comment, error) {
-	return mutateComment(root, relPath, id, func(c *Comment) {
+	return mutateComment(root, relPath, id, func(c *Comment) error {
 		c.Status = status
+		return nil
 	})
 }
 
-// UpdateCommentBody replaces a comment's body text. Returns the updated
-// comment, or ErrCommentNotFound.
+// UpdateCommentBody replaces a comment's body text. A resolved comment is
+// read-only: ErrCommentResolved is returned until it is reopened.
 func UpdateCommentBody(root, relPath, id, body string) (Comment, error) {
-	return mutateComment(root, relPath, id, func(c *Comment) {
+	return mutateComment(root, relPath, id, func(c *Comment) error {
+		if c.Status == StatusResolved {
+			return ErrCommentResolved
+		}
 		c.Body = body
+		return nil
 	})
 }
 
-// AddReply appends a threaded reply to a comment.
+// AddReply appends a threaded reply to a comment. A resolved comment is
+// read-only: ErrCommentResolved is returned until it is reopened.
 func AddReply(root, relPath, id string, reply Reply) (Comment, error) {
-	return mutateComment(root, relPath, id, func(c *Comment) {
+	return mutateComment(root, relPath, id, func(c *Comment) error {
+		if c.Status == StatusResolved {
+			return ErrCommentResolved
+		}
 		c.Replies = append(c.Replies, reply)
+		return nil
 	})
 }
 
@@ -188,8 +203,10 @@ func DeleteComment(root, relPath, id string) error {
 	return saveReview(root, relPath, r)
 }
 
-// mutateComment applies fn to the comment with the given id and persists.
-func mutateComment(root, relPath, id string, fn func(*Comment)) (Comment, error) {
+// mutateComment applies fn to the comment with the given id and persists. If fn
+// returns an error the change is not saved and the error is propagated (used to
+// reject edits to resolved comments).
+func mutateComment(root, relPath, id string, fn func(*Comment) error) (Comment, error) {
 	if !HasEntry(root, relPath) {
 		return Comment{}, ErrNotIngested
 	}
@@ -199,7 +216,9 @@ func mutateComment(root, relPath, id string, fn func(*Comment)) (Comment, error)
 	}
 	for i := range r.Comments {
 		if r.Comments[i].ID == id {
-			fn(&r.Comments[i])
+			if ferr := fn(&r.Comments[i]); ferr != nil {
+				return Comment{}, ferr
+			}
 			if err := saveReview(root, relPath, r); err != nil {
 				return Comment{}, err
 			}

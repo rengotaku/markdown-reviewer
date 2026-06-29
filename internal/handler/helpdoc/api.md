@@ -79,6 +79,7 @@ status / body を更新する。ボディは `{ "status": "resolved" }`（`open`
 ## POST /api/replies/*path?id=<id>
 
 コメントにスレッド返信を追加する。ボディ: `{ body, author?, date? }`。
+resolved なコメントには追加できない（409。先に `?status=open` で reopen する）。
 
 ## GET /api/review/*path
 
@@ -91,7 +92,7 @@ open コメントを **AI 向けに整形した Markdown** で返す（`?status=
 |--------|------|
 | 400 | path が `.md` 以外 / traversal / 未知 root / 必須項目欠落 |
 | 404 | ファイル無し / コメント id 無し |
-| 409 | 未取り込み（draft）への作成・更新 |
+| 409 | 未取り込み（draft）への作成・更新 / resolved コメントへの返信・本文編集（先に reopen が必要） |
 | 500 | files API 未設定 |
 
 ---

@@ -81,29 +81,36 @@ func TestComments_CRUDLifecycle(t *testing.T) {
 	assert.Equal(t, [2]int{5, 5}, created.Context.LineRange)
 	assert.False(t, created.Orphan)
 
-	// Reply + resolve.
+	// Reply + edit the body while still open.
 	require.Equal(t, http.StatusOK, postJSON(t, h, http.MethodPost, "/api/replies/doc.md?id=c-001",
 		handler.ReplyRequest{Author: "ai", Body: "直しました"}).Code)
-	require.Equal(t, http.StatusOK, postJSON(t, h, http.MethodPatch, "/api/comments/doc.md?id=c-001",
-		handler.UpdateRequest{Status: "resolved"}).Code)
-
-	// List reflects status + reply.
-	rec = serve(h, httptest.NewRequest(http.MethodGet, "/api/comments/doc.md", nil))
-	var list handler.CommentsResponse
-	require.NoError(t, json.NewDecoder(rec.Body).Decode(&list))
-	require.Len(t, list.Comments, 1)
-	assert.Equal(t, "resolved", list.Comments[0].Status)
-	require.Len(t, list.Comments[0].Replies, 1)
-	assert.Equal(t, 1, list.Summary.ByStatus["resolved"])
-
-	// Edit the body (status untouched).
 	rec = postJSON(t, h, http.MethodPatch, "/api/comments/doc.md?id=c-001",
 		handler.UpdateRequest{Body: "やっぱり 48 時間では？"})
 	require.Equal(t, http.StatusOK, rec.Code)
 	var edited handler.CommentJSON
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&edited))
 	assert.Equal(t, "やっぱり 48 時間では？", edited.Body)
-	assert.Equal(t, "resolved", edited.Status, "editing body must not change status")
+
+	// Resolve, then reply / edit must be rejected (409) until reopened.
+	require.Equal(t, http.StatusOK, postJSON(t, h, http.MethodPatch, "/api/comments/doc.md?id=c-001",
+		handler.UpdateRequest{Status: "resolved"}).Code)
+	assert.Equal(t, http.StatusConflict, postJSON(t, h, http.MethodPost, "/api/replies/doc.md?id=c-001",
+		handler.ReplyRequest{Author: "ai", Body: "追記"}).Code)
+	assert.Equal(t, http.StatusConflict, postJSON(t, h, http.MethodPatch, "/api/comments/doc.md?id=c-001",
+		handler.UpdateRequest{Body: "編集してみる"}).Code)
+
+	// Reopen re-enables editing.
+	require.Equal(t, http.StatusOK, postJSON(t, h, http.MethodPatch, "/api/comments/doc.md?id=c-001",
+		handler.UpdateRequest{Status: "open"}).Code)
+	require.Equal(t, http.StatusOK, postJSON(t, h, http.MethodPatch, "/api/comments/doc.md?id=c-001",
+		handler.UpdateRequest{Body: "再編集 OK"}).Code)
+
+	// List reflects status + reply.
+	rec = serve(h, httptest.NewRequest(http.MethodGet, "/api/comments/doc.md", nil))
+	var list handler.CommentsResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&list))
+	require.Len(t, list.Comments, 1)
+	require.Len(t, list.Comments[0].Replies, 1)
 
 	// Delete.
 	rec = serve(h, httptest.NewRequest(http.MethodDelete, "/api/comments/doc.md?id=c-001", nil))

@@ -286,6 +286,8 @@ func (h *Handler) writeCommentErr(c *gin.Context, err error) {
 		c.JSON(http.StatusConflict, gin.H{"error": "file is not under review; ingest it first"})
 	case errors.Is(err, reviewstore.ErrCommentNotFound):
 		c.JSON(http.StatusNotFound, gin.H{"error": "comment not found"})
+	case errors.Is(err, reviewstore.ErrCommentResolved):
+		c.JSON(http.StatusConflict, gin.H{"error": "comment is resolved; reopen it first"})
 	default:
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "comment operation failed"})
 	}
