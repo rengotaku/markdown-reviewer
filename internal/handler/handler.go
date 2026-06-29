@@ -50,6 +50,13 @@ func (h *Handler) Routes(staticHandler http.Handler) http.Handler {
 		api.PUT("/files/*path", h.WriteFile)
 		api.GET("/stat/*path", h.StatFile)
 		api.GET("/comments/*path", h.ListComments)
+		api.POST("/comments/*path", h.CreateComment)
+		api.PATCH("/comments/*path", h.UpdateComment)
+		api.DELETE("/comments/*path", h.DeleteComment)
+		api.POST("/replies/*path", h.AddReply)
+		api.GET("/review/*path", h.ReviewMarkdown)
+		api.POST("/ingest/*path", h.IngestFile)
+		api.GET("/revisions/*path", h.Revisions)
 	}
 
 	r.NoRoute(gin.WrapH(staticHandler))

@@ -31,17 +31,3 @@ export function collectHeadings(
   });
   return out;
 }
-
-/** Encode a list of section titles into the `target` attribute value. */
-export function encodeSections(sections: ReadonlyArray<string>): string {
-  return sections.map((s) => s.trim()).filter((s) => s.length > 0).join("\n");
-}
-
-/** Decode a `target` attribute value (saved by encodeSections) back to a list. */
-export function decodeSections(target: string): string[] {
-  if (!target) return [];
-  return target
-    .split("\n")
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
-}

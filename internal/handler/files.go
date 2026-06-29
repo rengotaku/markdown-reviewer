@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"markdown-reviewer/internal/files"
+	"markdown-reviewer/internal/reviewstore"
 )
 
 const markdownExt = ".md"
@@ -66,6 +68,9 @@ type FileReadResponse struct {
 	Modified string `json:"modified"`
 	Created  string `json:"created"`
 	Root     string `json:"root"`
+	// State is the managed-review lifecycle state: "draft" (not ingested) or
+	// "review" (ingested — has an entry under ~/.config/reviewer).
+	State string `json:"state"`
 }
 
 // FileStatResponse is the response body for GET /api/stat/*path. Returned
@@ -76,6 +81,7 @@ type FileStatResponse struct {
 	Modified string `json:"modified"`
 	Created  string `json:"created"`
 	Root     string `json:"root"`
+	State    string `json:"state"`
 }
 
 // fileTimes returns the RFC3339-UTC mtime and (best-effort) birth time
@@ -292,6 +298,7 @@ func (h *Handler) ReadFile(c *gin.Context) {
 		Modified: modified,
 		Created:  created,
 		Root:     name,
+		State:    reviewState(name, rel),
 	})
 }
 
@@ -318,6 +325,7 @@ func (h *Handler) StatFile(c *gin.Context) {
 		Modified: modified,
 		Created:  created,
 		Root:     name,
+		State:    reviewState(name, rel),
 	})
 }
 
@@ -334,6 +342,18 @@ func (h *Handler) WriteFile(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
 		return
+	}
+
+	// Snapshot the about-to-be-overwritten content into revision history
+	// before the atomic rename destroys it. Strip the AI hint first so the
+	// per-save hint churn never pollutes a diff. AppendRevision no-ops for
+	// draft (un-ingested) files, so only managed files accrue history. A
+	// snapshot failure must never block the save — log and continue.
+	if old, rerr := os.ReadFile(full); rerr == nil {
+		snap := stripAIHint(string(old))
+		if _, _, aerr := reviewstore.AppendRevision(name, rel, c.Query("author"), snap); aerr != nil {
+			slog.Warn("revision snapshot failed", "root", name, "path", rel, "err", aerr)
+		}
 	}
 
 	// Force-inject the AI hint comment so AI clients reading this file
@@ -361,6 +381,7 @@ func (h *Handler) WriteFile(c *gin.Context) {
 		Modified: modified,
 		Created:  created,
 		Root:     name,
+		State:    reviewState(name, rel),
 	})
 }
 

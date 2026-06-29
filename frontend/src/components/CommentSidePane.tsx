@@ -1,203 +1,118 @@
-import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
-import type { Editor } from "@tiptap/react";
+import { useMemo, useState } from "react";
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
 import IconButton from "@mui/material/IconButton";
+import Button from "@mui/material/Button";
+import TextField from "@mui/material/TextField";
 import Tooltip from "@mui/material/Tooltip";
+import Chip from "@mui/material/Chip";
+import Divider from "@mui/material/Divider";
+import ToggleButton from "@mui/material/ToggleButton";
+import ToggleButtonGroup from "@mui/material/ToggleButtonGroup";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import CommentsDisabledIcon from "@mui/icons-material/CommentsDisabled";
-import Chip from "@mui/material/Chip";
-import { collectComments, type CollectedComment } from "@/utils/collectComments";
-import { decodeSections } from "@/utils/headings";
+import AddCommentIcon from "@mui/icons-material/AddComment";
+import PublicIcon from "@mui/icons-material/Public";
+import HubIcon from "@mui/icons-material/Hub";
+import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutline";
+import ReplayIcon from "@mui/icons-material/Replay";
+import ReplyIcon from "@mui/icons-material/Reply";
+import type { CommentJSON } from "@/api";
 
 const SCOPE_BADGE: Record<string, { label: string; color: string }> = {
+  inline: { label: "inline", color: "#fff8c5" },
   block: { label: "block", color: "#fff8c5" },
-  "cross-section": { label: "横断", color: "#fef3c7" },
+  cross_section: { label: "横断", color: "#fef3c7" },
   global: { label: "全体", color: "#e0f2fe" },
 };
 
-interface EditableComment {
-  id: string;
-  scope: string;
-  target: string;
-  body: string;
-}
-
 interface Props {
-  editor: Editor | null;
-  onDelete: (id: string) => void;
-  onEdit?: (comment: EditableComment) => void;
+  comments: ReadonlyArray<CommentJSON>;
+  /** The active file is under review (draft files cannot take comments). */
+  reviewActive: boolean;
   onClose?: () => void;
-  activeId?: string | null;
+  /** Whether the current editor selection can take an anchored comment. */
+  canAddComment: boolean;
+  onAddComment: () => void;
+  onAddGlobal: () => void;
+  onAddCrossSection: () => void;
+  onDelete: (id: string) => void;
+  onResolveToggle: (id: string, next: "open" | "resolved") => void;
+  onReply: (id: string, body: string) => void;
+  onEdit: (id: string, body: string) => void;
+  /** Scroll to + flash the comment's highlight in the editor. */
+  onJump: (id: string) => void;
 }
 
-interface CommentSnapshot {
-  comments: CollectedComment[];
-  fingerprint: string;
-}
-
-const EMPTY_SNAPSHOT: CommentSnapshot = { comments: [], fingerprint: "" };
-
-function fingerprintOf(comments: CollectedComment[]): string {
-  return comments
-    .map(
-      (c) =>
-        `${c.id}|${c.from}|${c.to}|${c.body}|${c.target}|${c.scope}|${c.groupId}`
-    )
-    .join("\n");
-}
-
-/**
- * One row in the side pane. For comments that share a `groupId`, the row
- * represents the whole group: `memberIds` lists every anchored marker in
- * doc order, and `target` is the newline-joined list of anchored heading
- * texts (so the existing decodeSections rendering keeps working).
- */
-interface DisplayComment {
-  id: string;
-  memberIds: string[];
-  author: string;
-  date: string;
-  body: string;
-  scope: string;
-  groupId: string;
-  target: string;
-  from: number;
-  to: number;
-}
-
-function buildDisplayComments(
-  comments: ReadonlyArray<CollectedComment>
-): DisplayComment[] {
-  const seenGroup = new Set<string>();
-  const out: DisplayComment[] = [];
-  for (const c of comments) {
-    if (c.groupId) {
-      if (seenGroup.has(c.groupId)) continue;
-      seenGroup.add(c.groupId);
-      const members = comments.filter((m) => m.groupId === c.groupId);
-      out.push({
-        id: members[0].id,
-        memberIds: members.map((m) => m.id),
-        author: members[0].author,
-        date: members[0].date,
-        body: members[0].body,
-        // Surface grouped comments as "cross-section" in the UI even though
-        // each underlying marker carries scope="block" on disk.
-        scope: "cross-section",
-        groupId: c.groupId,
-        target: members.map((m) => m.target).filter(Boolean).join("\n"),
-        from: members[0].from,
-        to: members[0].to,
-      });
-      continue;
-    }
-    out.push({
-      id: c.id,
-      memberIds: [c.id],
-      author: c.author,
-      date: c.date,
-      body: c.body,
-      scope: c.scope,
-      groupId: "",
-      target: c.target,
-      from: c.from,
-      to: c.to,
-    });
-  }
-  return out;
-}
-
-function useEditorComments(editor: Editor | null): CollectedComment[] {
-  const cacheRef = useRef<CommentSnapshot>(EMPTY_SNAPSHOT);
-
-  // Reset cache when the editor instance changes.
-  useEffect(() => {
-    cacheRef.current = EMPTY_SNAPSHOT;
-  }, [editor]);
-
-  const subscribe = useMemo(
-    () => (cb: () => void) => {
-      if (!editor) return () => undefined;
-      editor.on("update", cb);
-      editor.on("transaction", cb);
-      return () => {
-        editor.off("update", cb);
-        editor.off("transaction", cb);
-      };
-    },
-    [editor]
-  );
-
-  const getSnapshot = () => {
-    const next = collectComments(editor);
-    const fingerprint = fingerprintOf(next);
-    if (fingerprint === cacheRef.current.fingerprint) {
-      return cacheRef.current.comments;
-    }
-    cacheRef.current = { comments: next, fingerprint };
-    return next;
+/** The text/section a comment was originally anchored to, from its stored
+ *  anchor(s). Used to show what an orphaned comment pointed at, even after the
+ *  canonical body changed and the live position can no longer be resolved. */
+function originalTarget(c: CommentJSON): string {
+  const fmt = (heading: string[], snippet: string) => {
+    const head = heading[heading.length - 1];
+    return head ? `${head} › ${snippet}` : snippet;
   };
-
-  return useSyncExternalStore(subscribe, getSnapshot, () => EMPTY_SNAPSHOT.comments);
+  if (c.anchors && c.anchors.length > 0) {
+    return c.anchors.map((a) => fmt(a.heading_path, a.snippet)).join(" / ");
+  }
+  if (c.anchor) return fmt(c.anchor.heading_path, c.anchor.snippet);
+  return "";
 }
+
+function contextLabel(c: CommentJSON): string | null {
+  if (c.scope === "global") return null;
+  if (c.orphan) {
+    const orig = originalTarget(c);
+    return orig
+      ? `${orig}（現在の本文には見つかりません）`
+      : "位置不明 (orphan)";
+  }
+  if (c.anchors && c.anchors.length > 0) {
+    return c.anchors
+      .map((a) => a.heading_path[a.heading_path.length - 1] ?? a.snippet)
+      .filter(Boolean)
+      .join(" ・ ");
+  }
+  if (c.context) {
+    const head = c.context.heading_path[c.context.heading_path.length - 1];
+    const [s, e] = c.context.line_range;
+    const lines = s === e ? `L${s}` : `L${s}–${e}`;
+    return head ? `${head} (${lines})` : lines;
+  }
+  if (c.anchor) return c.anchor.snippet;
+  return null;
+}
+
+type StatusFilter = "all" | "open" | "resolved";
 
 export function CommentSidePane({
-  editor,
-  onDelete,
-  onEdit,
+  comments,
+  reviewActive,
   onClose,
-  activeId,
+  canAddComment,
+  onAddComment,
+  onAddGlobal,
+  onAddCrossSection,
+  onDelete,
+  onResolveToggle,
+  onReply,
+  onEdit,
+  onJump,
 }: Props) {
-  const comments = useEditorComments(editor);
-  const displayComments = useMemo(() => buildDisplayComments(comments), [comments]);
-
-  const flashMarks = (ids: ReadonlyArray<string>) => {
-    const root = editor?.view?.dom;
-    if (!root) return;
-    const selector = ids
-      .filter((id) => id.length > 0)
-      .map((id) => `[data-comment-id="${CSS.escape(id)}"]`)
-      .join(",");
-    if (!selector) return;
-    const nodes = root.querySelectorAll<HTMLElement>(selector);
-    if (nodes.length === 0) return;
-    nodes[0].scrollIntoView({ behavior: "smooth", block: "center" });
-    nodes.forEach((el) => {
-      el.classList.remove("is-flash");
-      // Force reflow so re-adding the class restarts the animation.
-      void el.offsetWidth;
-      el.classList.add("is-flash");
-    });
-    window.setTimeout(() => {
-      nodes.forEach((el) => el.classList.remove("is-flash"));
-    }, 1600);
-  };
-
-  // Click in the side pane: just flash (no text selection / no focus jump).
-  // For grouped (cross-section) comments every anchored marker blinks.
-  const handleJump = (d: DisplayComment) => {
-    flashMarks(d.memberIds);
-  };
-
-  const handleDelete = (d: DisplayComment) => {
-    for (const id of d.memberIds) {
-      onDelete(id);
-    }
-  };
-
-  const handleEdit = (d: DisplayComment) => {
-    if (!onEdit) return;
-    // Pass any member id; the update commands sweep all grouped members.
-    onEdit({
-      id: d.memberIds[0] ?? d.id,
-      scope: d.scope,
-      target: d.target,
-      body: d.body,
-    });
-  };
-
+  const [filter, setFilter] = useState<StatusFilter>("all");
+  const openCount = useMemo(
+    () => comments.filter((c) => c.status === "open").length,
+    [comments]
+  );
+  const resolvedCount = comments.length - openCount;
+  const visible = useMemo(
+    () =>
+      filter === "all"
+        ? comments
+        : comments.filter((c) => c.status === filter),
+    [comments, filter]
+  );
 
   return (
     <Box
@@ -224,7 +139,7 @@ export function CommentSidePane({
         }}
       >
         <Typography variant="subtitle2" sx={{ flexGrow: 1 }}>
-          Comments ({displayComments.length})
+          Comments ({openCount}/{comments.length})
         </Typography>
         {onClose && (
           <Tooltip title="コメントペインを閉じる">
@@ -239,139 +154,392 @@ export function CommentSidePane({
           </Tooltip>
         )}
       </Box>
+
+      <Box
+        sx={{
+          px: 1.5,
+          py: 0.75,
+          borderBottom: "1px solid",
+          borderColor: "divider",
+        }}
+      >
+        <ToggleButtonGroup
+          value={filter}
+          exclusive
+          size="small"
+          fullWidth
+          onChange={(_, v) => {
+            if (v !== null) setFilter(v as StatusFilter);
+          }}
+          aria-label="コメントの表示フィルタ"
+          data-testid="comment-status-filter"
+        >
+          <ToggleButton value="all" sx={{ textTransform: "none", py: 0.25 }} data-testid="comment-filter-all">
+            すべて ({comments.length})
+          </ToggleButton>
+          <ToggleButton value="open" sx={{ textTransform: "none", py: 0.25 }} data-testid="comment-filter-open">
+            未解決 ({openCount})
+          </ToggleButton>
+          <ToggleButton value="resolved" sx={{ textTransform: "none", py: 0.25 }} data-testid="comment-filter-resolved">
+            解決済 ({resolvedCount})
+          </ToggleButton>
+        </ToggleButtonGroup>
+      </Box>
+
+      <Box
+        sx={{
+          px: 1.5,
+          py: 1,
+          borderBottom: "1px solid",
+          borderColor: "divider",
+          display: "flex",
+          flexWrap: "wrap",
+          gap: 0.75,
+        }}
+        data-testid="comment-add-toolbar"
+      >
+        <Tooltip title="選択範囲にコメントを追加">
+          <span>
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={<AddCommentIcon />}
+              disabled={!reviewActive || !canAddComment}
+              onClick={onAddComment}
+              data-testid="editor-add-comment"
+            >
+              コメント
+            </Button>
+          </span>
+        </Tooltip>
+        <Tooltip title="ファイル全体に向けたコメントを追加（選択不要）">
+          <span>
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={<PublicIcon />}
+              disabled={!reviewActive}
+              onClick={onAddGlobal}
+              data-testid="editor-add-global-comment"
+            >
+              全体
+            </Button>
+          </span>
+        </Tooltip>
+        <Tooltip title="複数の見出しに紐付ける横断コメントを追加">
+          <span>
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={<HubIcon />}
+              disabled={!reviewActive}
+              onClick={onAddCrossSection}
+              data-testid="editor-add-cross-section-comment"
+            >
+              横断
+            </Button>
+          </span>
+        </Tooltip>
+      </Box>
+
       <Box sx={{ flex: 1, overflow: "auto" }}>
-        {displayComments.length === 0 ? (
+        {!reviewActive ? (
+          <Box sx={{ p: 2 }}>
+            <Typography variant="body2" color="text.secondary">
+              このファイルはまだレビュー対象ではありません。ヘッダーの「取り込む」でレビューを開始するとコメントを追加できます。
+            </Typography>
+          </Box>
+        ) : comments.length === 0 ? (
           <Box sx={{ p: 2 }}>
             <Typography variant="body2" color="text.secondary">
               コメントはまだありません。テキストを選択して「コメント」を押すと追加できます。
             </Typography>
           </Box>
+        ) : visible.length === 0 ? (
+          <Box sx={{ p: 2 }}>
+            <Typography variant="body2" color="text.secondary">
+              {filter === "open"
+                ? "未解決のコメントはありません。"
+                : "解決済みのコメントはありません。"}
+            </Typography>
+          </Box>
         ) : (
-          displayComments.map((d) => (
-            <Box
-              key={d.id || `${d.from}-${d.to}`}
-              role="button"
-              tabIndex={0}
-              onClick={() => handleJump(d)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  handleJump(d);
-                }
-              }}
-              data-testid="comment-item"
-              data-comment-id={d.id}
-              data-comment-group-id={d.groupId || undefined}
-              sx={{
-                p: 1.5,
-                borderBottom: "1px solid",
-                borderColor: "divider",
-                cursor: "pointer",
-                bgcolor:
-                  activeId && d.memberIds.includes(activeId)
-                    ? "action.selected"
-                    : "transparent",
-                "&:hover": { bgcolor: "action.hover" },
-              }}
-            >
-              <Box
-                sx={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 1,
-                  mb: 0.5,
-                }}
-              >
-                {SCOPE_BADGE[d.scope] && (
-                  <Chip
-                    label={
-                      d.scope === "cross-section" && d.memberIds.length > 1
-                        ? `${SCOPE_BADGE[d.scope].label} (${d.memberIds.length})`
-                        : SCOPE_BADGE[d.scope].label
-                    }
-                    size="small"
-                    sx={{
-                      height: 18,
-                      fontSize: "0.65rem",
-                      bgcolor: SCOPE_BADGE[d.scope].color,
-                      "& .MuiChip-label": { px: 0.75 },
-                    }}
-                    data-testid={`comment-scope-${d.scope}`}
-                  />
-                )}
-                <Typography variant="caption" color="text.secondary" sx={{ flexGrow: 1 }}>
-                  {d.date || "?"}
-                </Typography>
-                {onEdit && (
-                  <Tooltip title="コメントを編集">
-                    <IconButton
-                      size="small"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleEdit(d);
-                      }}
-                      aria-label="edit comment"
-                      data-testid="comment-edit"
-                    >
-                      <EditOutlinedIcon fontSize="small" />
-                    </IconButton>
-                  </Tooltip>
-                )}
-                <Tooltip title="コメントを削除">
-                  <IconButton
-                    size="small"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleDelete(d);
-                    }}
-                    aria-label="delete comment"
-                    data-testid="comment-delete"
-                  >
-                    <DeleteOutlineIcon fontSize="small" />
-                  </IconButton>
-                </Tooltip>
-              </Box>
-              {d.target && d.scope === "cross-section" ? (
-                <Typography
-                  variant="caption"
-                  color="text.secondary"
-                  sx={{
-                    display: "block",
-                    fontStyle: "italic",
-                    wordBreak: "break-word",
-                  }}
-                  data-testid={`comment-sections-${d.id}`}
-                >
-                  対象: {decodeSections(d.target).join(" ・ ")}
-                </Typography>
-              ) : d.target ? (
-                <Typography
-                  variant="caption"
-                  color="text.secondary"
-                  sx={{
-                    display: "block",
-                    fontStyle: "italic",
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  対象: {d.target}
-                </Typography>
-              ) : null}
-              <Typography
-                variant="body2"
-                sx={{
-                  mt: 0.5,
-                  whiteSpace: "pre-wrap",
-                  wordBreak: "break-word",
-                }}
-              >
-                {d.body}
-              </Typography>
-            </Box>
+          visible.map((c) => (
+            <CommentRow
+              key={c.id}
+              comment={c}
+              onDelete={onDelete}
+              onResolveToggle={onResolveToggle}
+              onReply={onReply}
+              onEdit={onEdit}
+              onJump={onJump}
+            />
           ))
         )}
+      </Box>
+    </Box>
+  );
+}
+
+interface RowProps {
+  comment: CommentJSON;
+  onDelete: (id: string) => void;
+  onResolveToggle: (id: string, next: "open" | "resolved") => void;
+  onReply: (id: string, body: string) => void;
+  onEdit: (id: string, body: string) => void;
+  onJump: (id: string) => void;
+}
+
+function CommentRow({
+  comment: c,
+  onDelete,
+  onResolveToggle,
+  onReply,
+  onEdit,
+  onJump,
+}: RowProps) {
+  const [replyOpen, setReplyOpen] = useState(false);
+  const [replyBody, setReplyBody] = useState("");
+  const [editOpen, setEditOpen] = useState(false);
+  const [editBody, setEditBody] = useState(c.body);
+  const ctx = contextLabel(c);
+  const badge = SCOPE_BADGE[c.scope];
+  const resolved = c.status === "resolved";
+  const canJump = c.scope !== "global" && !c.orphan;
+
+  const submitReply = () => {
+    const body = replyBody.trim();
+    if (!body) return;
+    onReply(c.id, body);
+    setReplyBody("");
+    setReplyOpen(false);
+  };
+
+  const startEdit = () => {
+    setEditBody(c.body);
+    setEditOpen(true);
+  };
+
+  const submitEdit = () => {
+    const body = editBody.trim();
+    if (!body || body === c.body) {
+      setEditOpen(false);
+      return;
+    }
+    onEdit(c.id, body);
+    setEditOpen(false);
+  };
+
+  return (
+    <Box
+      data-testid="comment-item"
+      data-comment-id={c.id}
+      data-comment-status={c.status}
+      sx={{
+        p: 1.5,
+        borderBottom: "1px solid",
+        borderColor: "divider",
+        opacity: resolved ? 0.6 : 1,
+      }}
+    >
+      <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 0.5 }}>
+        {badge && (
+          <Chip
+            label={badge.label}
+            size="small"
+            sx={{
+              height: 18,
+              fontSize: "0.65rem",
+              bgcolor: badge.color,
+              "& .MuiChip-label": { px: 0.75 },
+            }}
+            data-testid={`comment-scope-${c.scope}`}
+          />
+        )}
+        {resolved && (
+          <Chip
+            label="resolved"
+            size="small"
+            color="success"
+            variant="outlined"
+            sx={{ height: 18, fontSize: "0.65rem", "& .MuiChip-label": { px: 0.75 } }}
+            data-testid="comment-status-resolved"
+          />
+        )}
+        {c.orphan && (
+          <Chip
+            label="orphan"
+            size="small"
+            color="warning"
+            variant="outlined"
+            sx={{ height: 18, fontSize: "0.65rem", "& .MuiChip-label": { px: 0.75 } }}
+            data-testid="comment-orphan"
+          />
+        )}
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          sx={{ flexGrow: 1, textAlign: "right" }}
+        >
+          {c.author || "?"} {c.date ? `· ${c.date}` : ""}
+        </Typography>
+      </Box>
+
+      {ctx && (
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          onClick={canJump ? () => onJump(c.id) : undefined}
+          data-testid={`comment-context-${c.id}`}
+          sx={{
+            display: "block",
+            fontStyle: "italic",
+            wordBreak: "break-word",
+            cursor: canJump ? "pointer" : "default",
+            "&:hover": canJump ? { textDecoration: "underline" } : undefined,
+          }}
+        >
+          対象: {ctx}
+        </Typography>
+      )}
+
+      {editOpen && !resolved ? (
+        <Box sx={{ mt: 0.5 }}>
+          <TextField
+            value={editBody}
+            onChange={(e) => setEditBody(e.target.value)}
+            multiline
+            minRows={2}
+            fullWidth
+            size="small"
+            autoFocus
+            inputProps={{ "data-testid": "comment-edit-input" }}
+          />
+          <Box sx={{ display: "flex", justifyContent: "flex-end", gap: 0.5, mt: 0.5 }}>
+            <Button size="small" onClick={() => setEditOpen(false)}>
+              キャンセル
+            </Button>
+            <Button
+              size="small"
+              variant="contained"
+              onClick={submitEdit}
+              disabled={!editBody.trim()}
+              data-testid="comment-edit-submit"
+            >
+              更新
+            </Button>
+          </Box>
+        </Box>
+      ) : (
+        <Typography
+          variant="body2"
+          sx={{ mt: 0.5, whiteSpace: "pre-wrap", wordBreak: "break-word" }}
+        >
+          {c.body}
+        </Typography>
+      )}
+
+      {c.replies && c.replies.length > 0 && (
+        <Box sx={{ mt: 1, pl: 1, borderLeft: "2px solid", borderColor: "divider" }}>
+          {c.replies.map((r, i) => (
+            <Box key={i} sx={{ mb: 0.5 }} data-testid="comment-reply">
+              <Typography variant="caption" color="text.secondary">
+                {r.author || "?"} {r.date ? `· ${r.date}` : ""}
+              </Typography>
+              <Typography
+                variant="body2"
+                sx={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}
+              >
+                {r.body}
+              </Typography>
+            </Box>
+          ))}
+        </Box>
+      )}
+
+      {replyOpen && !resolved && (
+        <Box sx={{ mt: 1 }}>
+          <TextField
+            value={replyBody}
+            onChange={(e) => setReplyBody(e.target.value)}
+            placeholder="返信を入力"
+            multiline
+            minRows={2}
+            fullWidth
+            size="small"
+            autoFocus
+            inputProps={{ "data-testid": "comment-reply-input" }}
+          />
+          <Box sx={{ display: "flex", justifyContent: "flex-end", gap: 0.5, mt: 0.5 }}>
+            <Button size="small" onClick={() => setReplyOpen(false)}>
+              キャンセル
+            </Button>
+            <Button
+              size="small"
+              variant="contained"
+              onClick={submitReply}
+              disabled={!replyBody.trim()}
+              data-testid="comment-reply-submit"
+            >
+              返信
+            </Button>
+          </Box>
+        </Box>
+      )}
+
+      <Divider sx={{ my: 1 }} />
+      <Box sx={{ display: "flex", gap: 0.5 }}>
+        <Tooltip title={resolved ? "解決済みのため返信できません" : "返信を追加"}>
+          <span>
+            <IconButton
+              size="small"
+              disabled={resolved}
+              onClick={() => setReplyOpen((v) => !v)}
+              aria-label="reply to comment"
+              data-testid="comment-reply-toggle"
+            >
+              <ReplyIcon fontSize="small" />
+            </IconButton>
+          </span>
+        </Tooltip>
+        <Tooltip title={resolved ? "解決済みのため編集できません" : "コメントを編集"}>
+          <span>
+            <IconButton
+              size="small"
+              disabled={resolved}
+              onClick={startEdit}
+              aria-label="edit comment"
+              data-testid="comment-edit"
+            >
+              <EditOutlinedIcon fontSize="small" />
+            </IconButton>
+          </span>
+        </Tooltip>
+        <Tooltip title={resolved ? "未解決に戻す" : "解決済みにする"}>
+          <IconButton
+            size="small"
+            onClick={() => onResolveToggle(c.id, resolved ? "open" : "resolved")}
+            aria-label={resolved ? "reopen comment" : "resolve comment"}
+            data-testid="comment-resolve-toggle"
+          >
+            {resolved ? (
+              <ReplayIcon fontSize="small" />
+            ) : (
+              <CheckCircleOutlineIcon fontSize="small" />
+            )}
+          </IconButton>
+        </Tooltip>
+        <Box sx={{ flexGrow: 1 }} />
+        <Tooltip title="コメントを削除">
+          <IconButton
+            size="small"
+            onClick={() => onDelete(c.id)}
+            aria-label="delete comment"
+            data-testid="comment-delete"
+          >
+            <DeleteOutlineIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
       </Box>
     </Box>
   );

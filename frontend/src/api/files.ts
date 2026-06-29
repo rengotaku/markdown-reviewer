@@ -11,6 +11,9 @@ export interface FileListResponse {
   root: string;
 }
 
+/** Managed-review lifecycle state of a file. */
+export type ReviewState = "draft" | "review";
+
 export interface FileReadResponse {
   path: string;
   content: string;
@@ -18,6 +21,8 @@ export interface FileReadResponse {
   /** RFC3339 birth time when the OS records one (darwin); "" otherwise. */
   created: string;
   root: string;
+  /** "draft" until ingested, then "review". Older servers omit it. */
+  state?: ReviewState;
 }
 
 export interface FileStatResponse {
@@ -26,6 +31,33 @@ export interface FileStatResponse {
   /** RFC3339 birth time when the OS records one (darwin); "" otherwise. */
   created: string;
   root: string;
+  state?: ReviewState;
+}
+
+export interface IngestResponse {
+  path: string;
+  root: string;
+  state: ReviewState;
+}
+
+/** One revision's metadata (content omitted) from the revisions listing. */
+export interface RevisionMeta {
+  id: string;
+  ts: string;
+  author: string;
+}
+
+export interface RevisionListResponse {
+  path: string;
+  root: string;
+  revisions: RevisionMeta[];
+}
+
+export interface RevisionResponse {
+  id: string;
+  ts: string;
+  author: string;
+  content: string;
 }
 
 function encodePath(path: string): string {
@@ -115,4 +147,41 @@ export async function statFile(
   return apiClient
     .get(`api/stat/${encodePath(path)}${rootQuery(root, "?")}`)
     .json<FileStatResponse>();
+}
+
+/**
+ * ingestFile puts a draft file under managed review (creates its entry under
+ * ~/.config/reviewer). Idempotent — re-ingesting returns state="review".
+ */
+export async function ingestFile(
+  path: string,
+  root?: string
+): Promise<IngestResponse> {
+  return apiClient
+    .post(`api/ingest/${encodePath(path)}${rootQuery(root, "?")}`)
+    .json<IngestResponse>();
+}
+
+/** listRevisions returns the file's saved snapshots, newest first. */
+export async function listRevisions(
+  path: string,
+  root?: string
+): Promise<RevisionListResponse> {
+  return apiClient
+    .get(`api/revisions/${encodePath(path)}${rootQuery(root, "?")}`)
+    .json<RevisionListResponse>();
+}
+
+/** getRevision returns one snapshot's (AI-hint-stripped) content. */
+export async function getRevision(
+  path: string,
+  id: string,
+  root?: string
+): Promise<RevisionResponse> {
+  const sep = root ? "&" : "?";
+  return apiClient
+    .get(
+      `api/revisions/${encodePath(path)}${rootQuery(root, "?")}${sep}id=${encodeURIComponent(id)}`
+    )
+    .json<RevisionResponse>();
 }

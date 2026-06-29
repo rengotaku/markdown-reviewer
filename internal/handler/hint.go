@@ -28,22 +28,26 @@ var hintBlockRe = regexp.MustCompile(`(?s)\A<!--\s*markdown-reviewer\b.*?-->\s*\
 // by hintBlockRe on the next save.
 func buildAIHint(baseURL, relPath, rootName string) string {
 	base := strings.TrimSuffix(baseURL, "/")
-	commentsURL := base + "/api/comments/" + escapePath(relPath)
+	rootQuery := ""
 	if rootName != "" {
-		commentsURL += "?root=" + url.QueryEscape(rootName)
+		rootQuery = "?root=" + url.QueryEscape(rootName)
 	}
+	commentsURL := base + "/api/comments/" + escapePath(relPath) + rootQuery
+	reviewURL := base + "/api/review/" + escapePath(relPath) + rootQuery
 	helpURL := base + "/api/help"
 
 	var b strings.Builder
 	b.WriteString("<!-- markdown-reviewer\n")
-	// Note: the literal `<!-- @comment ... -->` example is intentionally
-	// avoided here. Quoting it inside the hint would create a self-matching
-	// false positive for any naive @comment scanner reading the file.
-	b.WriteString("このファイルには @comment レビューマーカーが含まれる可能性があります。\n")
-	b.WriteString("構造化コメント取得: GET ")
+	// The canonical file is clean: review comments live in a sidecar, not in
+	// the body. This hint just points an AI at the review API.
+	b.WriteString("本文はクリーンです。レビューコメントは別管理(sidecar)で、以下から取得します。\n")
+	b.WriteString("レビュー(open, 整形済): GET ")
+	b.WriteString(reviewURL)
+	b.WriteString("\n")
+	b.WriteString("コメント(JSON):         GET ")
 	b.WriteString(commentsURL)
 	b.WriteString("\n")
-	b.WriteString("API 全仕様:        GET ")
+	b.WriteString("API 全仕様:             GET ")
 	b.WriteString(helpURL)
 	b.WriteString("\n")
 	b.WriteString("-->\n\n")
@@ -60,6 +64,15 @@ func injectAIHint(content, hint string) string {
 	// already starts with one.
 	body = strings.TrimLeft(body, "\n")
 	return hint + body
+}
+
+// stripAIHint removes the leading markdown-reviewer hint block (if any) so
+// revision snapshots and the diffs computed from them are free of the
+// per-save hint churn — the hint's embedded URLs change every save and would
+// otherwise dominate the diff.
+func stripAIHint(content string) string {
+	body := hintBlockRe.ReplaceAllString(content, "")
+	return strings.TrimLeft(body, "\n")
 }
 
 // deriveBaseURL picks the base URL to embed in the hint. Precedence:
