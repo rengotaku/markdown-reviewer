@@ -62,6 +62,15 @@ func injectAIHint(content, hint string) string {
 	return hint + body
 }
 
+// stripAIHint removes the leading markdown-reviewer hint block (if any) so
+// revision snapshots and the diffs computed from them are free of the
+// per-save hint churn — the hint's embedded URLs change every save and would
+// otherwise dominate the diff.
+func stripAIHint(content string) string {
+	body := hintBlockRe.ReplaceAllString(content, "")
+	return strings.TrimLeft(body, "\n")
+}
+
 // deriveBaseURL picks the base URL to embed in the hint. Precedence:
 //  1. explicit MARKDOWN_REVIEWER_BASE_URL — covers reverse-proxy and
 //     hostname-rewrite cases where the Host header is wrong.

@@ -5,3 +5,4 @@ export { ConfirmDialog } from "./ConfirmDialog";
 export { AddCommentDialog } from "./AddCommentDialog";
 export { EditCommentDialog } from "./EditCommentDialog";
 export { CommentSidePane } from "./CommentSidePane";
+export { DiffView } from "./DiffView";

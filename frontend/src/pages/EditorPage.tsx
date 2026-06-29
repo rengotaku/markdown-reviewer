@@ -25,6 +25,10 @@ import PublicIcon from "@mui/icons-material/Public";
 import HubIcon from "@mui/icons-material/Hub";
 import FormatAlignCenterIcon from "@mui/icons-material/FormatAlignCenter";
 import UnfoldMoreIcon from "@mui/icons-material/UnfoldMore";
+import Chip from "@mui/material/Chip";
+import Select from "@mui/material/Select";
+import RateReviewIcon from "@mui/icons-material/RateReview";
+import CompareArrowsIcon from "@mui/icons-material/CompareArrows";
 import { TiptapEditor } from "@/components/tiptap/TiptapEditor";
 import {
   Sidebar,
@@ -34,6 +38,7 @@ import {
   AddCommentDialog,
   EditCommentDialog,
   CommentSidePane,
+  DiffView,
 } from "@/components";
 import {
   useOpenFiles,
@@ -51,7 +56,16 @@ import { useCommentAuthor } from "@/hooks/useCommentAuthor";
 import { useActiveRoot } from "@/hooks/useActiveRoot";
 import { dirQueryKey } from "@/hooks/useDir";
 import { useQueryClient } from "@tanstack/react-query";
-import { listDir } from "@/api";
+import {
+  listDir,
+  statFile,
+  ingestFile,
+  listRevisions,
+  getRevision,
+  type ReviewState,
+  type RevisionMeta,
+} from "@/api";
+import { stripHint } from "@/utils/stripHint";
 import { generateCommentId } from "@/utils/commentId";
 import { nextVersionedPath } from "@/utils/versionedPath";
 import { collectHeadings } from "@/utils/headings";
@@ -133,6 +147,119 @@ export function EditorPage() {
   const { author } = useCommentAuthor();
   const queryClient = useQueryClient();
   const reviewRootName = activeRoot || "Files";
+
+  // --- Managed-review session state (ingest / revision diff) ---------------
+  // Kept local to the editor rather than in the open-files store: it is a view
+  // concern derived from the server, refetched whenever the active file or a
+  // save/ingest changes it. `reviewRefresh` is bumped to force a refetch.
+  const [reviewState, setReviewState] = useState<ReviewState | undefined>(undefined);
+  const [revisions, setRevisions] = useState<RevisionMeta[]>([]);
+  const [reviewRefresh, setReviewRefresh] = useState(0);
+  const [diffMode, setDiffMode] = useState(false);
+  const [selectedRevId, setSelectedRevId] = useState<string | null>(null);
+  const [diffBaseText, setDiffBaseText] = useState<string>("");
+
+  const activePath = activeFile?.path;
+  const activeFileRoot = activeFile?.root;
+  const fileKey = activePath ? `${activeFileRoot ?? ""}:${activePath}` : "";
+
+  // Reset all review/diff view-state the instant the active file changes —
+  // done during render (React's recommended pattern over an effect) so the
+  // next file never opens stuck in a stale diff. prevFileKey is the guard that
+  // makes this run once per change instead of every render.
+  const [prevFileKey, setPrevFileKey] = useState(fileKey);
+  if (fileKey !== prevFileKey) {
+    setPrevFileKey(fileKey);
+    setDiffMode(false);
+    setSelectedRevId(null);
+    setDiffBaseText("");
+    setReviewState(undefined);
+    setRevisions([]);
+  }
+
+  // Fetch review state + revision list for the active file. Degrades to
+  // "draft" with no history on any error so the editor stays usable offline /
+  // against an older server. setState only happens after an await, so it does
+  // not trigger the synchronous-setState-in-effect lint.
+  useEffect(() => {
+    if (!activePath) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const stat = await statFile(activePath, activeFileRoot);
+        if (cancelled) return;
+        const state = stat.state ?? "draft";
+        setReviewState(state);
+        if (state === "review") {
+          const rl = await listRevisions(activePath, activeFileRoot);
+          if (!cancelled) setRevisions(rl.revisions);
+        } else {
+          setRevisions([]);
+        }
+      } catch {
+        if (!cancelled) {
+          setReviewState("draft");
+          setRevisions([]);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activePath, activeFileRoot, reviewRefresh]);
+
+  const loadRevision = async (id: string) => {
+    if (!activePath) return;
+    try {
+      const rev = await getRevision(activePath, id, activeFileRoot);
+      setSelectedRevId(id);
+      setDiffBaseText(rev.content);
+    } catch (err) {
+      showToast(
+        `リビジョンの取得に失敗しました: ${(err as Error).message ?? "unknown error"}`,
+        "error"
+      );
+    }
+  };
+
+  const handleIngest = async () => {
+    if (!activeFile) return;
+    try {
+      const res = await ingestFile(activeFile.path, activeFile.root);
+      setReviewState(res.state);
+      setReviewRefresh((n) => n + 1);
+      showToast(`「${activeFile.name}」をレビュー対象に取り込みました`, "success");
+    } catch (err) {
+      showToast(
+        `取り込みに失敗しました: ${(err as Error).message ?? "unknown error"}`,
+        "error"
+      );
+    }
+  };
+
+  const handleToggleDiff = async () => {
+    if (diffMode) {
+      setDiffMode(false);
+      return;
+    }
+    if (revisions.length === 0) {
+      showToast("比較できる過去リビジョンがまだありません", "info");
+      return;
+    }
+    // Default comparison: latest 正典 ⇔ most recent revision.
+    const target = selectedRevId ?? revisions[0].id;
+    await loadRevision(target);
+    setDiffMode(true);
+  };
+
+  // The "latest 正典" side of the diff is the live editor content, with the
+  // server-injected AI hint stripped so it lines up with the hint-stripped
+  // snapshots.
+  const diffLatestText = useMemo(
+    () => (activeFile ? stripHint(activeFile.markdown) : ""),
+    [activeFile]
+  );
+  const selectedRevMeta = revisions.find((r) => r.id === selectedRevId);
 
   // Migrate any persisted legacy single-root files onto the default root
   // the first time we learn which root that is. Idempotent — subsequent
@@ -351,6 +478,9 @@ export function EditorPage() {
         root: activeFile.root,
       });
       markActiveSaved(activeFile.root, res.modified, res.created);
+      // A save snapshots the previous content into history (review state only),
+      // so refresh the revision list backing the diff picker.
+      setReviewRefresh((n) => n + 1);
       showToast(`「${activeFile.name}」を保存しました`, "success");
     } catch (err) {
       showToast(
@@ -852,6 +982,67 @@ export function EditorPage() {
               </Typography>
             )}
           </Box>
+          {activeFile && reviewState === "draft" && (
+            <Tooltip title="このファイルをレビュー対象に取り込む（履歴・コメント管理を開始）">
+              <span>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  startIcon={<RateReviewIcon />}
+                  onClick={handleIngest}
+                  data-testid="editor-ingest"
+                >
+                  取り込む
+                </Button>
+              </span>
+            </Tooltip>
+          )}
+          {activeFile && reviewState === "review" && (
+            <>
+              <Chip
+                size="small"
+                color="success"
+                variant="outlined"
+                icon={<RateReviewIcon />}
+                label="review 中"
+                data-testid="editor-review-indicator"
+              />
+              <Tooltip
+                title={diffMode ? "差分表示を閉じる" : "前回保存との差分を表示"}
+              >
+                <span>
+                  <Button
+                    variant={diffMode ? "contained" : "outlined"}
+                    size="small"
+                    startIcon={<CompareArrowsIcon />}
+                    disabled={revisions.length === 0}
+                    onClick={handleToggleDiff}
+                    data-testid="editor-diff-toggle"
+                  >
+                    差分
+                  </Button>
+                </span>
+              </Tooltip>
+              {diffMode && revisions.length > 0 && (
+                <Select
+                  size="small"
+                  value={selectedRevId ?? ""}
+                  onChange={(e) => void loadRevision(e.target.value as string)}
+                  data-testid="editor-revision-picker"
+                  sx={{
+                    minWidth: 170,
+                    "& .MuiSelect-select": { py: 0.5, fontSize: 13 },
+                  }}
+                >
+                  {revisions.map((r) => (
+                    <MenuItem key={r.id} value={r.id}>
+                      {r.id} · {formatLocalTimestamp(r.ts)}
+                    </MenuItem>
+                  ))}
+                </Select>
+              )}
+            </>
+          )}
           <Tooltip title="選択範囲にコメントを追加">
             <span>
               <Button
@@ -1014,7 +1205,17 @@ export function EditorPage() {
         </Tabs>
 
         <Box sx={{ flex: 1, minHeight: 0 }}>
-          {activeFile ? (
+          {activeFile && diffMode ? (
+            <DiffView
+              oldText={diffBaseText}
+              newText={diffLatestText}
+              baseLabel={
+                selectedRevMeta
+                  ? `${selectedRevMeta.id}（${formatLocalTimestamp(selectedRevMeta.ts)}）`
+                  : undefined
+              }
+            />
+          ) : activeFile ? (
             <TiptapEditor />
           ) : (
             <Box

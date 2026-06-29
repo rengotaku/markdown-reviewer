@@ -156,6 +156,7 @@ export const handlers = [
       content: `# ${path}\n\nmock content`,
       modified: "2026-05-20T00:00:00Z",
       created: "2026-05-19T00:00:00Z",
+      state: "draft",
     });
   }),
 
@@ -170,6 +171,7 @@ export const handlers = [
       content: body.content,
       modified: new Date().toISOString(),
       created: "2026-05-19T00:00:00Z",
+      state: "draft",
     });
   }),
 
@@ -182,6 +184,30 @@ export const handlers = [
       root,
       modified: "2026-05-20T00:00:00Z",
       created: "2026-05-19T00:00:00Z",
+      state: "draft",
     });
+  }),
+
+  http.post(`${API_BASE}/api/ingest/*`, ({ request }) => {
+    const url = new URL(request.url);
+    const path = url.pathname.replace(/^\/api\/ingest\//, "");
+    const root = url.searchParams.get("root") ?? "mock-root";
+    return HttpResponse.json({ path, root, state: "review" });
+  }),
+
+  http.get(`${API_BASE}/api/revisions/*`, ({ request }) => {
+    const url = new URL(request.url);
+    const path = url.pathname.replace(/^\/api\/revisions\//, "");
+    const root = url.searchParams.get("root") ?? "mock-root";
+    const id = url.searchParams.get("id");
+    if (id) {
+      return HttpResponse.json({
+        id,
+        ts: "2026-05-20T00:00:00Z",
+        author: "ai",
+        content: `# ${path}\n\nprevious content`,
+      });
+    }
+    return HttpResponse.json({ path, root, revisions: [] });
   }),
 ];
