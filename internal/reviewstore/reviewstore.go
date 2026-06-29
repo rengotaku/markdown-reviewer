@@ -63,14 +63,6 @@ type RevisionMeta struct {
 	Author string `json:"author"`
 }
 
-// reviewDoc is the minimal review.json document created on ingest. Comments
-// are added by the sidecar-comment work (#50/#42); #49 only establishes the
-// container so the document has a stable, valid shape from the start.
-type reviewDoc struct {
-	Version  int               `json:"version"`
-	Comments []json.RawMessage `json:"comments"`
-}
-
 // baseDir returns the reviewer storage root, honoring REVIEWER_CONFIG_DIR
 // first, then XDG_CONFIG_HOME, then os.UserConfigDir (~/.config on Linux,
 // ~/Library/Application Support on darwin — both acceptable as a stable
@@ -159,13 +151,8 @@ func Ingest(root, relPath string) error {
 	if _, statErr := os.Stat(reviewPath); statErr == nil {
 		return nil // already ingested; keep existing comments
 	}
-	doc := reviewDoc{Version: 1, Comments: []json.RawMessage{}}
-	data, err := json.MarshalIndent(doc, "", "  ")
-	if err != nil {
-		return fmt.Errorf("reviewstore: marshal review doc: %w", err)
-	}
-	if err := atomicWrite(reviewPath, append(data, '\n')); err != nil {
-		return fmt.Errorf("reviewstore: write review.json: %w", err)
+	if err := writeReview(reviewPath, Review{Version: reviewVersion, Comments: []Comment{}}); err != nil {
+		return err
 	}
 	return nil
 }

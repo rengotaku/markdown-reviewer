@@ -1,0 +1,289 @@
+package reviewstore
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+)
+
+// reviewVersion is the schema version stamped into review.json.
+const reviewVersion = 1
+
+// Comment status values.
+const (
+	StatusOpen     = "open"
+	StatusResolved = "resolved"
+)
+
+// ErrNotIngested is returned when a comment operation targets a file that has
+// not been put under review yet (no review.json). Ingest is explicit (#52), so
+// callers surface this as a 409 rather than silently creating the entry.
+var ErrNotIngested = errors.New("reviewstore: file not ingested")
+
+// ErrCommentNotFound is returned when an id does not match any comment.
+var ErrCommentNotFound = errors.New("reviewstore: comment not found")
+
+// Anchor locates a comment inside the clean canonical markdown by content,
+// not by position — the canonical file carries no review markers (#50). On
+// load the snippet is searched under heading_path; the occurrence index
+// disambiguates identical snippets. A miss yields an orphan (honest failure)
+// rather than a silent mis-anchor.
+type Anchor struct {
+	HeadingPath []string `json:"heading_path"`
+	Snippet     string   `json:"snippet"`
+	Occurrence  int      `json:"occurrence"`
+}
+
+// Reply is one threaded response under a comment.
+type Reply struct {
+	Author string `json:"author,omitempty"`
+	Date   string `json:"date,omitempty"`
+	Body   string `json:"body"`
+}
+
+// Comment is one review note stored in review.json. Anchor is nil for global
+// scope; Anchors carries one entry per section for cross_section.
+type Comment struct {
+	ID      string   `json:"id"`
+	Scope   string   `json:"scope"`
+	GroupID string   `json:"group_id,omitempty"`
+	Author  string   `json:"author,omitempty"`
+	Date    string   `json:"date,omitempty"`
+	Body    string   `json:"body"`
+	Status  string   `json:"status"`
+	Replies []Reply  `json:"replies,omitempty"`
+	Anchor  *Anchor  `json:"anchor,omitempty"`
+	Anchors []Anchor `json:"anchors,omitempty"`
+}
+
+// Review is the review.json document.
+type Review struct {
+	Version  int       `json:"version"`
+	Comments []Comment `json:"comments"`
+}
+
+// ReadReview loads review.json. A missing file (not ingested, or freshly
+// ingested with no comments) yields an empty review, not an error, so callers
+// can treat "no comments" uniformly.
+func ReadReview(root, relPath string) (Review, error) {
+	dir, err := EntryDir(root, relPath)
+	if err != nil {
+		return Review{}, err
+	}
+	data, err := os.ReadFile(filepath.Join(dir, reviewFile))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return Review{Version: reviewVersion, Comments: []Comment{}}, nil
+		}
+		return Review{}, fmt.Errorf("reviewstore: read review.json: %w", err)
+	}
+	var r Review
+	if err := json.Unmarshal(data, &r); err != nil {
+		return Review{}, fmt.Errorf("reviewstore: parse review.json: %w", err)
+	}
+	if r.Comments == nil {
+		r.Comments = []Comment{}
+	}
+	return r, nil
+}
+
+// writeReview marshals and atomically writes a Review to path.
+func writeReview(path string, r Review) error {
+	if r.Version == 0 {
+		r.Version = reviewVersion
+	}
+	if r.Comments == nil {
+		r.Comments = []Comment{}
+	}
+	data, err := json.MarshalIndent(r, "", "  ")
+	if err != nil {
+		return fmt.Errorf("reviewstore: marshal review.json: %w", err)
+	}
+	return atomicWrite(path, append(data, '\n'))
+}
+
+// saveReview writes the review for an ingested file.
+func saveReview(root, relPath string, r Review) error {
+	dir, err := EntryDir(root, relPath)
+	if err != nil {
+		return err
+	}
+	return writeReview(filepath.Join(dir, reviewFile), r)
+}
+
+// AddComment appends a comment to an ingested file's review.json. The id is
+// assigned (c-NNN) when empty; status defaults to open. Returns the stored
+// comment. Errors with ErrNotIngested if the file is not under review.
+func AddComment(root, relPath string, c Comment) (Comment, error) {
+	if !HasEntry(root, relPath) {
+		return Comment{}, ErrNotIngested
+	}
+	r, err := ReadReview(root, relPath)
+	if err != nil {
+		return Comment{}, err
+	}
+	if c.ID == "" {
+		c.ID = nextCommentID(r.Comments)
+	}
+	if c.Status == "" {
+		c.Status = StatusOpen
+	}
+	r.Comments = append(r.Comments, c)
+	if err := saveReview(root, relPath, r); err != nil {
+		return Comment{}, err
+	}
+	return c, nil
+}
+
+// UpdateCommentStatus sets a comment's status (e.g. resolved). Returns the
+// updated comment, or ErrCommentNotFound.
+func UpdateCommentStatus(root, relPath, id, status string) (Comment, error) {
+	return mutateComment(root, relPath, id, func(c *Comment) {
+		c.Status = status
+	})
+}
+
+// AddReply appends a threaded reply to a comment.
+func AddReply(root, relPath, id string, reply Reply) (Comment, error) {
+	return mutateComment(root, relPath, id, func(c *Comment) {
+		c.Replies = append(c.Replies, reply)
+	})
+}
+
+// DeleteComment removes a comment by id. Returns ErrCommentNotFound if absent.
+func DeleteComment(root, relPath, id string) error {
+	if !HasEntry(root, relPath) {
+		return ErrNotIngested
+	}
+	r, err := ReadReview(root, relPath)
+	if err != nil {
+		return err
+	}
+	out := r.Comments[:0]
+	removed := false
+	for _, c := range r.Comments {
+		if c.ID == id {
+			removed = true
+			continue
+		}
+		out = append(out, c)
+	}
+	if !removed {
+		return ErrCommentNotFound
+	}
+	r.Comments = out
+	return saveReview(root, relPath, r)
+}
+
+// mutateComment applies fn to the comment with the given id and persists.
+func mutateComment(root, relPath, id string, fn func(*Comment)) (Comment, error) {
+	if !HasEntry(root, relPath) {
+		return Comment{}, ErrNotIngested
+	}
+	r, err := ReadReview(root, relPath)
+	if err != nil {
+		return Comment{}, err
+	}
+	for i := range r.Comments {
+		if r.Comments[i].ID == id {
+			fn(&r.Comments[i])
+			if err := saveReview(root, relPath, r); err != nil {
+				return Comment{}, err
+			}
+			return r.Comments[i], nil
+		}
+	}
+	return Comment{}, ErrCommentNotFound
+}
+
+// nextCommentID returns c-NNN one past the highest numeric suffix present, so
+// ids stay unique and stable even after deletions.
+func nextCommentID(comments []Comment) string {
+	max := 0
+	for _, c := range comments {
+		s := strings.TrimPrefix(c.ID, "c-")
+		if s == c.ID {
+			continue
+		}
+		if n, err := strconv.Atoi(s); err == nil && n > max {
+			max = n
+		}
+	}
+	return fmt.Sprintf("c-%03d", max+1)
+}
+
+var anchorHeadingRe = regexp.MustCompile(`^(#{1,6})\s+(.+?)\s*$`)
+
+// ResolveAnchor finds the 1-indexed line range of an anchor in the canonical
+// content. It searches for the snippet under a matching heading path, picking
+// the Occurrence-th match. ok=false means the anchor is orphaned (snippet not
+// found / heading renamed) — the caller surfaces it as an orphan rather than
+// guessing a location.
+func ResolveAnchor(content string, a Anchor) (lineRange [2]int, ok bool) {
+	if a.Snippet == "" {
+		return [2]int{}, false
+	}
+	stacks := headingStacks(content)
+	lines := strings.Split(content, "\n")
+	seen := 0
+	for i, line := range lines {
+		if !strings.Contains(line, a.Snippet) {
+			continue
+		}
+		if len(a.HeadingPath) > 0 && !headingSuffixMatch(stacks[i], a.HeadingPath) {
+			continue
+		}
+		if seen == a.Occurrence {
+			return [2]int{i + 1, i + 1}, true
+		}
+		seen++
+	}
+	return [2]int{}, false
+}
+
+// headingStacks returns, for each 0-indexed line, the heading stack in effect
+// on that line (each element keeps its `#` prefix so the level is explicit).
+func headingStacks(content string) [][]string {
+	lines := strings.Split(content, "\n")
+	out := make([][]string, len(lines))
+	type entry struct {
+		text  string
+		level int
+	}
+	var stack []entry
+	for i, line := range lines {
+		if m := anchorHeadingRe.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
+			level := len(m[1])
+			for len(stack) > 0 && stack[len(stack)-1].level >= level {
+				stack = stack[:len(stack)-1]
+			}
+			stack = append(stack, entry{text: m[1] + " " + strings.TrimSpace(m[2]), level: level})
+		}
+		snap := make([]string, len(stack))
+		for j, e := range stack {
+			snap[j] = e.text
+		}
+		out[i] = snap
+	}
+	return out
+}
+
+// headingSuffixMatch reports whether want is a suffix of stack, so a partial
+// heading path (e.g. just the immediate section) still anchors correctly.
+func headingSuffixMatch(stack, want []string) bool {
+	if len(want) > len(stack) {
+		return false
+	}
+	off := len(stack) - len(want)
+	for i := range want {
+		if stack[off+i] != want[i] {
+			return false
+		}
+	}
+	return true
+}

@@ -1,8 +1,10 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -103,4 +105,70 @@ func (h *Handler) Revisions(c *gin.Context) {
 		metas = []reviewstore.RevisionMeta{}
 	}
 	c.JSON(http.StatusOK, RevisionListResponse{Path: rel, Root: name, Revisions: metas})
+}
+
+// ReviewMarkdown renders the file's comments as AI-facing Markdown so an AI
+// client can read the open review with one GET. Defaults to open comments;
+// `?status=all` includes resolved ones. The canonical content is used to
+// resolve each anchor to a line number (or flag it orphaned).
+func (h *Handler) ReviewMarkdown(c *gin.Context) {
+	full, rel, name, ok := h.resolveRequest(c)
+	if !ok {
+		return
+	}
+	content, ok := h.readCanonical(c, full)
+	if !ok {
+		return
+	}
+	review, err := reviewstore.ReadReview(name, rel)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read review"})
+		return
+	}
+	onlyOpen := c.Query("status") != "all"
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "# レビュー: %s\n\n", rel)
+	shown := 0
+	for _, cm := range review.Comments {
+		if onlyOpen && cm.Status != reviewstore.StatusOpen {
+			continue
+		}
+		shown++
+		writeReviewComment(&b, content, cm)
+	}
+	if shown == 0 {
+		b.WriteString("open コメントはありません。\n")
+	}
+	c.Data(http.StatusOK, "text/markdown; charset=utf-8", []byte(b.String()))
+}
+
+// writeReviewComment appends one comment's Markdown block to b.
+func writeReviewComment(b *strings.Builder, content string, cm reviewstore.Comment) {
+	loc := "全体"
+	if cm.Anchor != nil {
+		if lr, ok := reviewstore.ResolveAnchor(content, *cm.Anchor); ok {
+			heading := ""
+			if n := len(cm.Anchor.HeadingPath); n > 0 {
+				heading = cm.Anchor.HeadingPath[n-1] + " "
+			}
+			loc = fmt.Sprintf("%s(L%d)", heading, lr[0])
+		} else {
+			loc = "⚠ orphan（対象テキストが見つかりません）"
+		}
+	}
+	fmt.Fprintf(b, "## %s [%s] %s\n\n", cm.ID, cm.Scope, loc)
+	if cm.Anchor != nil && cm.Anchor.Snippet != "" {
+		fmt.Fprintf(b, "> 対象: %s\n\n", cm.Anchor.Snippet)
+	}
+	fmt.Fprintf(b, "- 状態: %s\n", cm.Status)
+	fmt.Fprintf(b, "- 指摘: %s\n", cm.Body)
+	for _, rep := range cm.Replies {
+		who := rep.Author
+		if who == "" {
+			who = "?"
+		}
+		fmt.Fprintf(b, "  - 返信 (%s): %s\n", who, rep.Body)
+	}
+	b.WriteString("\n")
 }
