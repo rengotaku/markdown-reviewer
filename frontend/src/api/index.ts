@@ -23,3 +23,19 @@ export {
   type RevisionListResponse,
   type RevisionResponse,
 } from "./files";
+export {
+  listComments,
+  createComment,
+  setCommentStatus,
+  deleteComment,
+  replyToComment,
+  type CommentAnchor,
+  type CommentReply,
+  type CommentContext,
+  type CommentStatus,
+  type CommentScope,
+  type CommentJSON,
+  type CommentsSummary,
+  type CommentsResponse,
+  type CreateCommentRequest,
+} from "./comments";
