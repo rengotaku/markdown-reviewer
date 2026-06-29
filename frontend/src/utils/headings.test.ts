@@ -2,11 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import { Editor } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
 import { Markdown } from "tiptap-markdown";
-import {
-  collectHeadings,
-  decodeSections,
-  encodeSections,
-} from "./headings";
+import { collectHeadings } from "./headings";
 
 function createEditor(content = ""): Editor {
   return new Editor({
@@ -58,22 +54,5 @@ describe("collectHeadings", () => {
   it("trims surrounding whitespace from heading text", () => {
     editor = createEditor("##   spaced heading   ");
     expect(collectHeadings(editor)[0].text).toBe("spaced heading");
-  });
-});
-
-describe("encodeSections / decodeSections", () => {
-  it("encodes a list as newline-joined string and round-trips", () => {
-    const sections = ["Problem", "Try", "Action"];
-    const encoded = encodeSections(sections);
-    expect(encoded).toBe("Problem\nTry\nAction");
-    expect(decodeSections(encoded)).toEqual(sections);
-  });
-
-  it("drops empty / whitespace-only entries on encode", () => {
-    expect(encodeSections(["", "  ", "A", "B"])).toBe("A\nB");
-  });
-
-  it("returns [] for empty input on decode", () => {
-    expect(decodeSections("")).toEqual([]);
   });
 });
