@@ -210,4 +210,68 @@ export const handlers = [
     }
     return HttpResponse.json({ path, root, revisions: [] });
   }),
+
+  http.get(`${API_BASE}/api/comments/*`, ({ request }) => {
+    const url = new URL(request.url);
+    const path = url.pathname.replace(/^\/api\/comments\//, "");
+    const root = url.searchParams.get("root") ?? "mock-root";
+    return HttpResponse.json({
+      file: path,
+      root,
+      summary: { total: 0, by_scope: {}, by_status: {} },
+      comments: [],
+    });
+  }),
+
+  http.post(`${API_BASE}/api/comments/*`, async ({ request }) => {
+    const body = (await request.json()) as Record<string, unknown>;
+    return HttpResponse.json(
+      {
+        id: "c-001",
+        scope: body.scope ?? "inline",
+        body: body.body ?? "",
+        author: body.author,
+        date: body.date,
+        status: "open",
+        anchor: body.anchor,
+        anchors: body.anchors,
+        context: null,
+        orphan: false,
+      },
+      { status: 201 }
+    );
+  }),
+
+  http.patch(`${API_BASE}/api/comments/*`, async ({ request }) => {
+    const url = new URL(request.url);
+    const id = url.searchParams.get("id") ?? "c-001";
+    const body = (await request.json()) as { status: string };
+    return HttpResponse.json({
+      id,
+      scope: "inline",
+      body: "",
+      status: body.status,
+      context: null,
+      orphan: false,
+    });
+  }),
+
+  http.delete(`${API_BASE}/api/comments/*`, () => {
+    return new HttpResponse(null, { status: 204 });
+  }),
+
+  http.post(`${API_BASE}/api/replies/*`, async ({ request }) => {
+    const url = new URL(request.url);
+    const id = url.searchParams.get("id") ?? "c-001";
+    const body = (await request.json()) as Record<string, unknown>;
+    return HttpResponse.json({
+      id,
+      scope: "inline",
+      body: "",
+      status: "open",
+      replies: [body],
+      context: null,
+      orphan: false,
+    });
+  }),
 ];

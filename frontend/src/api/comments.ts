@@ -35,6 +35,8 @@ export interface CommentJSON {
   status: CommentStatus;
   replies?: CommentReply[];
   anchor?: CommentAnchor;
+  /** Multiple anchors for cross-section comments. */
+  anchors?: CommentAnchor[];
   context: CommentContext | null;
   orphan: boolean;
 }

@@ -29,10 +29,11 @@ type CommentJSON struct {
 	Date    string              `json:"date,omitempty"`
 	Body    string              `json:"body"`
 	Status  string              `json:"status"`
-	Replies []reviewstore.Reply `json:"replies,omitempty"`
-	Anchor  *reviewstore.Anchor `json:"anchor,omitempty"`
-	Context *CommentContext     `json:"context"`
-	Orphan  bool                `json:"orphan"`
+	Replies []reviewstore.Reply  `json:"replies,omitempty"`
+	Anchor  *reviewstore.Anchor  `json:"anchor,omitempty"`
+	Anchors []reviewstore.Anchor `json:"anchors,omitempty"`
+	Context *CommentContext      `json:"context"`
+	Orphan  bool                 `json:"orphan"`
 }
 
 // CommentsSummary is the count breakdown returned alongside the list.
@@ -58,10 +59,14 @@ func buildCommentJSON(content string, c reviewstore.Comment) CommentJSON {
 	out := CommentJSON{
 		ID: c.ID, Scope: c.Scope, GroupID: c.GroupID,
 		Author: c.Author, Date: c.Date, Body: c.Body,
-		Status: c.Status, Replies: c.Replies, Anchor: c.Anchor,
+		Status: c.Status, Replies: c.Replies,
+		Anchor: c.Anchor, Anchors: c.Anchors,
 	}
 	if c.Anchor == nil {
-		return out // global: no location
+		// Cross-section comments carry Anchors instead of a single Anchor and
+		// are resolved client-side; global comments have neither. Either way
+		// there is no single line context to attach here.
+		return out
 	}
 	if lr, ok := reviewstore.ResolveAnchor(content, *c.Anchor); ok {
 		out.Context = &CommentContext{HeadingPath: c.Anchor.HeadingPath, LineRange: lr}

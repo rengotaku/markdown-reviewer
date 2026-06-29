@@ -2,7 +2,6 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { Editor } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
 import { Markdown } from "tiptap-markdown";
-import { CommentMark } from "./extensions/CommentMark";
 
 /**
  * Verifies the fix for issue #20: opening a file via `setContent(..., {
@@ -28,7 +27,6 @@ describe("setContent emitUpdate behavior", () => {
           transformPastedText: false,
           transformCopiedText: false,
         }),
-        CommentMark,
       ],
       content: "",
       onUpdate,
@@ -51,7 +49,6 @@ describe("setContent emitUpdate behavior", () => {
           transformPastedText: false,
           transformCopiedText: false,
         }),
-        CommentMark,
       ],
       content: "",
       onUpdate,
