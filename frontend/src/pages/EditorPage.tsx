@@ -59,6 +59,7 @@ import {
   listComments,
   createComment,
   setCommentStatus,
+  editCommentBody,
   deleteComment,
   replyToComment,
   type ReviewState,
@@ -712,6 +713,16 @@ export function EditorPage() {
     }
   };
 
+  const handleEditComment = async (id: string, nextBody: string) => {
+    if (!activeFile) return;
+    try {
+      await editCommentBody(activeFile.path, id, nextBody, activeFile.root);
+      refreshComments();
+    } catch (err) {
+      commentErr("コメントの編集", err);
+    }
+  };
+
   const handleReplyComment = async (id: string, replyBody: string) => {
     if (!activeFile) return;
     try {
@@ -1137,6 +1148,7 @@ export function EditorPage() {
             onDelete={handleDeleteComment}
             onResolveToggle={handleResolveToggle}
             onReply={handleReplyComment}
+            onEdit={handleEditComment}
             onJump={handleJumpToComment}
           />
         </Box>

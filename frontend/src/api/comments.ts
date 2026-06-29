@@ -107,6 +107,21 @@ export async function setCommentStatus(
     .json<CommentJSON>();
 }
 
+export async function editCommentBody(
+  path: string,
+  id: string,
+  body: string,
+  root?: string
+): Promise<CommentJSON> {
+  const sep = root ? "&" : "?";
+  return apiClient
+    .patch(
+      `api/comments/${encodePath(path)}${rootQuery(root, "?")}${sep}id=${encodeURIComponent(id)}`,
+      { json: { body } }
+    )
+    .json<CommentJSON>();
+}
+
 export async function deleteComment(
   path: string,
   id: string,

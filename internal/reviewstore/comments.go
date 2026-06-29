@@ -148,6 +148,14 @@ func UpdateCommentStatus(root, relPath, id, status string) (Comment, error) {
 	})
 }
 
+// UpdateCommentBody replaces a comment's body text. Returns the updated
+// comment, or ErrCommentNotFound.
+func UpdateCommentBody(root, relPath, id, body string) (Comment, error) {
+	return mutateComment(root, relPath, id, func(c *Comment) {
+		c.Body = body
+	})
+}
+
 // AddReply appends a threaded reply to a comment.
 func AddReply(root, relPath, id string, reply Reply) (Comment, error) {
 	return mutateComment(root, relPath, id, func(c *Comment) {

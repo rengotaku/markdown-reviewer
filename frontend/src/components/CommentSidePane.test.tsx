@@ -26,6 +26,7 @@ function renderPane(props: Partial<React.ComponentProps<typeof CommentSidePane>>
     onDelete: vi.fn(),
     onResolveToggle: vi.fn(),
     onReply: vi.fn(),
+    onEdit: vi.fn(),
     onJump: vi.fn(),
   };
   render(
@@ -99,6 +100,17 @@ describe("CommentSidePane", () => {
     const h = renderPane({ comments: [comment("c1", { status: "resolved" })] });
     await user.click(screen.getByTestId("comment-resolve-toggle"));
     expect(h.onResolveToggle).toHaveBeenCalledWith("c1", "open");
+  });
+
+  it("edits a comment body", async () => {
+    const user = userEvent.setup();
+    const h = renderPane({ comments: [comment("c1", { body: "old body" })] });
+    await user.click(screen.getByTestId("comment-edit"));
+    const input = screen.getByTestId("comment-edit-input");
+    await user.clear(input);
+    await user.type(input, "new body");
+    await user.click(screen.getByTestId("comment-edit-submit"));
+    expect(h.onEdit).toHaveBeenCalledWith("c1", "new body");
   });
 
   it("submits a reply", async () => {

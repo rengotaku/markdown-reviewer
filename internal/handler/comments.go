@@ -144,12 +144,14 @@ func (h *Handler) CreateComment(c *gin.Context) {
 	c.JSON(http.StatusCreated, buildCommentJSON(string(content), created))
 }
 
-// StatusRequest is the body for PATCH /api/comments/*path?id=...
-type StatusRequest struct {
+// UpdateRequest is the body for PATCH /api/comments/*path?id=... Either field
+// may be set: status toggles open/resolved, body edits the comment text.
+type UpdateRequest struct {
 	Status string `json:"status"`
+	Body   string `json:"body"`
 }
 
-// UpdateComment changes a comment's status (open/resolved).
+// UpdateComment changes a comment's status (open/resolved) and/or body.
 func (h *Handler) UpdateComment(c *gin.Context) {
 	full, rel, name, ok := h.resolveRequest(c)
 	if !ok {
@@ -160,16 +162,30 @@ func (h *Handler) UpdateComment(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "id query param required"})
 		return
 	}
-	var req StatusRequest
+	var req UpdateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
 		return
 	}
-	if req.Status != reviewstore.StatusOpen && req.Status != reviewstore.StatusResolved {
+	if req.Status == "" && req.Body == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "status or body is required"})
+		return
+	}
+	if req.Status != "" &&
+		req.Status != reviewstore.StatusOpen &&
+		req.Status != reviewstore.StatusResolved {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "status must be open or resolved"})
 		return
 	}
-	updated, err := reviewstore.UpdateCommentStatus(name, rel, id, req.Status)
+
+	var updated reviewstore.Comment
+	var err error
+	if req.Body != "" {
+		updated, err = reviewstore.UpdateCommentBody(name, rel, id, req.Body)
+	}
+	if err == nil && req.Status != "" {
+		updated, err = reviewstore.UpdateCommentStatus(name, rel, id, req.Status)
+	}
 	if err != nil {
 		h.writeCommentErr(c, err)
 		return

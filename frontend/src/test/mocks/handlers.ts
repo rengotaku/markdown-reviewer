@@ -245,12 +245,12 @@ export const handlers = [
   http.patch(`${API_BASE}/api/comments/*`, async ({ request }) => {
     const url = new URL(request.url);
     const id = url.searchParams.get("id") ?? "c-001";
-    const body = (await request.json()) as { status: string };
+    const body = (await request.json()) as { status?: string; body?: string };
     return HttpResponse.json({
       id,
       scope: "inline",
-      body: "",
-      status: body.status,
+      body: body.body ?? "",
+      status: body.status ?? "open",
       context: null,
       orphan: false,
     });

@@ -8,6 +8,7 @@ import Tooltip from "@mui/material/Tooltip";
 import Chip from "@mui/material/Chip";
 import Divider from "@mui/material/Divider";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
+import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import CommentsDisabledIcon from "@mui/icons-material/CommentsDisabled";
 import AddCommentIcon from "@mui/icons-material/AddComment";
 import PublicIcon from "@mui/icons-material/Public";
@@ -37,6 +38,7 @@ interface Props {
   onDelete: (id: string) => void;
   onResolveToggle: (id: string, next: "open" | "resolved") => void;
   onReply: (id: string, body: string) => void;
+  onEdit: (id: string, body: string) => void;
   /** Scroll to + flash the comment's highlight in the editor. */
   onJump: (id: string) => void;
 }
@@ -71,6 +73,7 @@ export function CommentSidePane({
   onDelete,
   onResolveToggle,
   onReply,
+  onEdit,
   onJump,
 }: Props) {
   const openCount = useMemo(
@@ -196,6 +199,7 @@ export function CommentSidePane({
               onDelete={onDelete}
               onResolveToggle={onResolveToggle}
               onReply={onReply}
+              onEdit={onEdit}
               onJump={onJump}
             />
           ))
@@ -210,12 +214,22 @@ interface RowProps {
   onDelete: (id: string) => void;
   onResolveToggle: (id: string, next: "open" | "resolved") => void;
   onReply: (id: string, body: string) => void;
+  onEdit: (id: string, body: string) => void;
   onJump: (id: string) => void;
 }
 
-function CommentRow({ comment: c, onDelete, onResolveToggle, onReply, onJump }: RowProps) {
+function CommentRow({
+  comment: c,
+  onDelete,
+  onResolveToggle,
+  onReply,
+  onEdit,
+  onJump,
+}: RowProps) {
   const [replyOpen, setReplyOpen] = useState(false);
   const [replyBody, setReplyBody] = useState("");
+  const [editOpen, setEditOpen] = useState(false);
+  const [editBody, setEditBody] = useState(c.body);
   const ctx = contextLabel(c);
   const badge = SCOPE_BADGE[c.scope];
   const resolved = c.status === "resolved";
@@ -227,6 +241,21 @@ function CommentRow({ comment: c, onDelete, onResolveToggle, onReply, onJump }: 
     onReply(c.id, body);
     setReplyBody("");
     setReplyOpen(false);
+  };
+
+  const startEdit = () => {
+    setEditBody(c.body);
+    setEditOpen(true);
+  };
+
+  const submitEdit = () => {
+    const body = editBody.trim();
+    if (!body || body === c.body) {
+      setEditOpen(false);
+      return;
+    }
+    onEdit(c.id, body);
+    setEditOpen(false);
   };
 
   return (
@@ -302,12 +331,41 @@ function CommentRow({ comment: c, onDelete, onResolveToggle, onReply, onJump }: 
         </Typography>
       )}
 
-      <Typography
-        variant="body2"
-        sx={{ mt: 0.5, whiteSpace: "pre-wrap", wordBreak: "break-word" }}
-      >
-        {c.body}
-      </Typography>
+      {editOpen ? (
+        <Box sx={{ mt: 0.5 }}>
+          <TextField
+            value={editBody}
+            onChange={(e) => setEditBody(e.target.value)}
+            multiline
+            minRows={2}
+            fullWidth
+            size="small"
+            autoFocus
+            inputProps={{ "data-testid": "comment-edit-input" }}
+          />
+          <Box sx={{ display: "flex", justifyContent: "flex-end", gap: 0.5, mt: 0.5 }}>
+            <Button size="small" onClick={() => setEditOpen(false)}>
+              キャンセル
+            </Button>
+            <Button
+              size="small"
+              variant="contained"
+              onClick={submitEdit}
+              disabled={!editBody.trim()}
+              data-testid="comment-edit-submit"
+            >
+              更新
+            </Button>
+          </Box>
+        </Box>
+      ) : (
+        <Typography
+          variant="body2"
+          sx={{ mt: 0.5, whiteSpace: "pre-wrap", wordBreak: "break-word" }}
+        >
+          {c.body}
+        </Typography>
+      )}
 
       {c.replies && c.replies.length > 0 && (
         <Box sx={{ mt: 1, pl: 1, borderLeft: "2px solid", borderColor: "divider" }}>
@@ -367,6 +425,16 @@ function CommentRow({ comment: c, onDelete, onResolveToggle, onReply, onJump }: 
             data-testid="comment-reply-toggle"
           >
             <ReplyIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+        <Tooltip title="コメントを編集">
+          <IconButton
+            size="small"
+            onClick={startEdit}
+            aria-label="edit comment"
+            data-testid="comment-edit"
+          >
+            <EditOutlinedIcon fontSize="small" />
           </IconButton>
         </Tooltip>
         <Tooltip title={resolved ? "未解決に戻す" : "解決済みにする"}>

@@ -27,6 +27,7 @@ export {
   listComments,
   createComment,
   setCommentStatus,
+  editCommentBody,
   deleteComment,
   replyToComment,
   type CommentAnchor,

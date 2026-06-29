@@ -85,7 +85,7 @@ func TestComments_CRUDLifecycle(t *testing.T) {
 	require.Equal(t, http.StatusOK, postJSON(t, h, http.MethodPost, "/api/replies/doc.md?id=c-001",
 		handler.ReplyRequest{Author: "ai", Body: "直しました"}).Code)
 	require.Equal(t, http.StatusOK, postJSON(t, h, http.MethodPatch, "/api/comments/doc.md?id=c-001",
-		handler.StatusRequest{Status: "resolved"}).Code)
+		handler.UpdateRequest{Status: "resolved"}).Code)
 
 	// List reflects status + reply.
 	rec = serve(h, httptest.NewRequest(http.MethodGet, "/api/comments/doc.md", nil))
@@ -95,6 +95,15 @@ func TestComments_CRUDLifecycle(t *testing.T) {
 	assert.Equal(t, "resolved", list.Comments[0].Status)
 	require.Len(t, list.Comments[0].Replies, 1)
 	assert.Equal(t, 1, list.Summary.ByStatus["resolved"])
+
+	// Edit the body (status untouched).
+	rec = postJSON(t, h, http.MethodPatch, "/api/comments/doc.md?id=c-001",
+		handler.UpdateRequest{Body: "やっぱり 48 時間では？"})
+	require.Equal(t, http.StatusOK, rec.Code)
+	var edited handler.CommentJSON
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&edited))
+	assert.Equal(t, "やっぱり 48 時間では？", edited.Body)
+	assert.Equal(t, "resolved", edited.Status, "editing body must not change status")
 
 	// Delete.
 	rec = serve(h, httptest.NewRequest(http.MethodDelete, "/api/comments/doc.md?id=c-001", nil))
@@ -138,7 +147,7 @@ func TestReviewMarkdown_OpenOnly(t *testing.T) {
 	require.Equal(t, http.StatusCreated, postJSON(t, h, http.MethodPost, "/api/comments/doc.md",
 		handler.CreateCommentRequest{Scope: "global", Body: "解決済み"}).Code)
 	require.Equal(t, http.StatusOK, postJSON(t, h, http.MethodPatch, "/api/comments/doc.md?id=c-002",
-		handler.StatusRequest{Status: "resolved"}).Code)
+		handler.UpdateRequest{Status: "resolved"}).Code)
 
 	rec := serve(h, httptest.NewRequest(http.MethodGet, "/api/review/doc.md", nil))
 	require.Equal(t, http.StatusOK, rec.Code)
