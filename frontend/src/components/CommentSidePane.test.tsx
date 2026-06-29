@@ -95,6 +95,15 @@ describe("CommentSidePane", () => {
     expect(h.onResolveToggle).toHaveBeenCalledWith("c1", "resolved");
   });
 
+  it("disables reply and edit for a resolved comment", () => {
+    renderPane({ comments: [comment("c1", { status: "resolved" })] });
+    expect(screen.getByTestId("comment-reply-toggle")).toBeDisabled();
+    expect(screen.getByTestId("comment-edit")).toBeDisabled();
+    // reopen + delete stay enabled
+    expect(screen.getByTestId("comment-resolve-toggle")).toBeEnabled();
+    expect(screen.getByTestId("comment-delete")).toBeEnabled();
+  });
+
   it("reopens a resolved comment via the toggle", async () => {
     const user = userEvent.setup();
     const h = renderPane({ comments: [comment("c1", { status: "resolved" })] });

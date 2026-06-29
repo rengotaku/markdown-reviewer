@@ -403,7 +403,7 @@ function CommentRow({
         </Typography>
       )}
 
-      {editOpen ? (
+      {editOpen && !resolved ? (
         <Box sx={{ mt: 0.5 }}>
           <TextField
             value={editBody}
@@ -457,7 +457,7 @@ function CommentRow({
         </Box>
       )}
 
-      {replyOpen && (
+      {replyOpen && !resolved && (
         <Box sx={{ mt: 1 }}>
           <TextField
             value={replyBody}
@@ -489,25 +489,31 @@ function CommentRow({
 
       <Divider sx={{ my: 1 }} />
       <Box sx={{ display: "flex", gap: 0.5 }}>
-        <Tooltip title="返信を追加">
-          <IconButton
-            size="small"
-            onClick={() => setReplyOpen((v) => !v)}
-            aria-label="reply to comment"
-            data-testid="comment-reply-toggle"
-          >
-            <ReplyIcon fontSize="small" />
-          </IconButton>
+        <Tooltip title={resolved ? "解決済みのため返信できません" : "返信を追加"}>
+          <span>
+            <IconButton
+              size="small"
+              disabled={resolved}
+              onClick={() => setReplyOpen((v) => !v)}
+              aria-label="reply to comment"
+              data-testid="comment-reply-toggle"
+            >
+              <ReplyIcon fontSize="small" />
+            </IconButton>
+          </span>
         </Tooltip>
-        <Tooltip title="コメントを編集">
-          <IconButton
-            size="small"
-            onClick={startEdit}
-            aria-label="edit comment"
-            data-testid="comment-edit"
-          >
-            <EditOutlinedIcon fontSize="small" />
-          </IconButton>
+        <Tooltip title={resolved ? "解決済みのため編集できません" : "コメントを編集"}>
+          <span>
+            <IconButton
+              size="small"
+              disabled={resolved}
+              onClick={startEdit}
+              aria-label="edit comment"
+              data-testid="comment-edit"
+            >
+              <EditOutlinedIcon fontSize="small" />
+            </IconButton>
+          </span>
         </Tooltip>
         <Tooltip title={resolved ? "未解決に戻す" : "解決済みにする"}>
           <IconButton
