@@ -122,6 +122,40 @@ describe("CommentSidePane", () => {
     expect(h.onReply).toHaveBeenCalledWith("c1", "返信です");
   });
 
+  it("filters the list by status via the toggle", async () => {
+    const user = userEvent.setup();
+    renderPane({
+      comments: [
+        comment("c1", { status: "open" }),
+        comment("c2", { status: "resolved" }),
+      ],
+    });
+    expect(screen.getAllByTestId("comment-item")).toHaveLength(2);
+    await user.click(screen.getByTestId("comment-filter-resolved"));
+    let items = screen.getAllByTestId("comment-item");
+    expect(items).toHaveLength(1);
+    expect(items[0]).toHaveAttribute("data-comment-id", "c2");
+    await user.click(screen.getByTestId("comment-filter-open"));
+    items = screen.getAllByTestId("comment-item");
+    expect(items).toHaveLength(1);
+    expect(items[0]).toHaveAttribute("data-comment-id", "c1");
+  });
+
+  it("shows the original anchored target for an orphaned comment", () => {
+    renderPane({
+      comments: [
+        comment("c1", {
+          orphan: true,
+          context: null,
+          anchor: { heading_path: ["## 認証"], snippet: "アクセストークン: 24 時間", occurrence: 0 },
+        }),
+      ],
+    });
+    const ctx = screen.getByTestId("comment-context-c1");
+    expect(ctx).toHaveTextContent("## 認証 › アクセストークン: 24 時間");
+    expect(ctx).toHaveTextContent("現在の本文には見つかりません");
+  });
+
   it("calls onJump when the context label of an anchored comment is clicked", () => {
     const h = renderPane({ comments: [comment("c1")] });
     fireEvent.click(screen.getByTestId("comment-context-c1"));

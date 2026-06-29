@@ -7,6 +7,8 @@ import TextField from "@mui/material/TextField";
 import Tooltip from "@mui/material/Tooltip";
 import Chip from "@mui/material/Chip";
 import Divider from "@mui/material/Divider";
+import ToggleButton from "@mui/material/ToggleButton";
+import ToggleButtonGroup from "@mui/material/ToggleButtonGroup";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import CommentsDisabledIcon from "@mui/icons-material/CommentsDisabled";
@@ -43,9 +45,29 @@ interface Props {
   onJump: (id: string) => void;
 }
 
+/** The text/section a comment was originally anchored to, from its stored
+ *  anchor(s). Used to show what an orphaned comment pointed at, even after the
+ *  canonical body changed and the live position can no longer be resolved. */
+function originalTarget(c: CommentJSON): string {
+  const fmt = (heading: string[], snippet: string) => {
+    const head = heading[heading.length - 1];
+    return head ? `${head} › ${snippet}` : snippet;
+  };
+  if (c.anchors && c.anchors.length > 0) {
+    return c.anchors.map((a) => fmt(a.heading_path, a.snippet)).join(" / ");
+  }
+  if (c.anchor) return fmt(c.anchor.heading_path, c.anchor.snippet);
+  return "";
+}
+
 function contextLabel(c: CommentJSON): string | null {
   if (c.scope === "global") return null;
-  if (c.orphan) return "位置不明 (orphan)";
+  if (c.orphan) {
+    const orig = originalTarget(c);
+    return orig
+      ? `${orig}（現在の本文には見つかりません）`
+      : "位置不明 (orphan)";
+  }
   if (c.anchors && c.anchors.length > 0) {
     return c.anchors
       .map((a) => a.heading_path[a.heading_path.length - 1] ?? a.snippet)
@@ -62,6 +84,8 @@ function contextLabel(c: CommentJSON): string | null {
   return null;
 }
 
+type StatusFilter = "all" | "open" | "resolved";
+
 export function CommentSidePane({
   comments,
   reviewActive,
@@ -76,9 +100,18 @@ export function CommentSidePane({
   onEdit,
   onJump,
 }: Props) {
+  const [filter, setFilter] = useState<StatusFilter>("all");
   const openCount = useMemo(
     () => comments.filter((c) => c.status === "open").length,
     [comments]
+  );
+  const resolvedCount = comments.length - openCount;
+  const visible = useMemo(
+    () =>
+      filter === "all"
+        ? comments
+        : comments.filter((c) => c.status === filter),
+    [comments, filter]
   );
 
   return (
@@ -120,6 +153,37 @@ export function CommentSidePane({
             </IconButton>
           </Tooltip>
         )}
+      </Box>
+
+      <Box
+        sx={{
+          px: 1.5,
+          py: 0.75,
+          borderBottom: "1px solid",
+          borderColor: "divider",
+        }}
+      >
+        <ToggleButtonGroup
+          value={filter}
+          exclusive
+          size="small"
+          fullWidth
+          onChange={(_, v) => {
+            if (v !== null) setFilter(v as StatusFilter);
+          }}
+          aria-label="コメントの表示フィルタ"
+          data-testid="comment-status-filter"
+        >
+          <ToggleButton value="all" sx={{ textTransform: "none", py: 0.25 }} data-testid="comment-filter-all">
+            すべて ({comments.length})
+          </ToggleButton>
+          <ToggleButton value="open" sx={{ textTransform: "none", py: 0.25 }} data-testid="comment-filter-open">
+            未解決 ({openCount})
+          </ToggleButton>
+          <ToggleButton value="resolved" sx={{ textTransform: "none", py: 0.25 }} data-testid="comment-filter-resolved">
+            解決済 ({resolvedCount})
+          </ToggleButton>
+        </ToggleButtonGroup>
       </Box>
 
       <Box
@@ -191,8 +255,16 @@ export function CommentSidePane({
               コメントはまだありません。テキストを選択して「コメント」を押すと追加できます。
             </Typography>
           </Box>
+        ) : visible.length === 0 ? (
+          <Box sx={{ p: 2 }}>
+            <Typography variant="body2" color="text.secondary">
+              {filter === "open"
+                ? "未解決のコメントはありません。"
+                : "解決済みのコメントはありません。"}
+            </Typography>
+          </Box>
         ) : (
-          comments.map((c) => (
+          visible.map((c) => (
             <CommentRow
               key={c.id}
               comment={c}
