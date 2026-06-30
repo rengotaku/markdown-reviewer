@@ -259,7 +259,10 @@ func ResolveAnchor(content string, a Anchor) (lineRange [2]int, ok bool) {
 	lines := strings.Split(content, "\n")
 	seen := 0
 	for i, line := range lines {
-		if !strings.Contains(line, a.Snippet) {
+		// Snippet/heading_path are authored from the frontend's ProseMirror
+		// textContent, which renders inline marks away. Strip the same marks
+		// here so a code span / emphasis in the canonical line still matches.
+		if !strings.Contains(stripInlineMarkup(line), a.Snippet) {
 			continue
 		}
 		if len(a.HeadingPath) > 0 && !headingSuffixMatch(stacks[i], a.HeadingPath) {
@@ -289,7 +292,7 @@ func headingStacks(content string) [][]string {
 			for len(stack) > 0 && stack[len(stack)-1].level >= level {
 				stack = stack[:len(stack)-1]
 			}
-			stack = append(stack, entry{text: m[1] + " " + strings.TrimSpace(m[2]), level: level})
+			stack = append(stack, entry{text: m[1] + " " + stripInlineMarkup(strings.TrimSpace(m[2])), level: level})
 		}
 		snap := make([]string, len(stack))
 		for j, e := range stack {
@@ -313,4 +316,101 @@ func headingSuffixMatch(stack, want []string) bool {
 		}
 	}
 	return true
+}
+
+var (
+	mdImageRe       = regexp.MustCompile(`!\[([^\]]*)\]\([^)]*\)`)
+	mdLinkRe        = regexp.MustCompile(`\[([^\]]*)\]\([^)]*\)`)
+	mdStrikeRe      = regexp.MustCompile(`~~(.+?)~~`)
+	mdStrongStarRe  = regexp.MustCompile(`\*\*(.+?)\*\*`)
+	mdStrongUnderRe = regexp.MustCompile(`__(.+?)__`)
+	mdEmStarRe      = regexp.MustCompile(`\*([^*\n]+?)\*`)
+	mdEmUnderRe     = regexp.MustCompile(`(^|[^\p{L}\p{N}])_([^_\n]+?)_($|[^\p{L}\p{N}])`)
+)
+
+// stripInlineMarkup removes inline Markdown formatting so backend anchor text
+// matches the frontend's ProseMirror textContent, which renders these marks
+// away (the editor uses tiptap-markdown / markdown-it). Without this, a code
+// span or emphasis anywhere in a heading desyncs the heading_path the frontend
+// stored (marks stripped) from the one the backend re-parses (marks intact),
+// orphaning the comment even though nothing was edited.
+//
+// Code spans are unwrapped first and their contents kept literal, mirroring
+// CommonMark precedence — so emphasis characters inside them (e.g. the
+// underscores in `_watchlist.md`) survive. Only text outside code spans has
+// links/images unwrapped to their text and emphasis/strikethrough delimiters
+// dropped.
+func stripInlineMarkup(s string) string {
+	runes := []rune(s)
+	n := len(runes)
+	var out strings.Builder
+	var seg strings.Builder
+	flush := func() {
+		if seg.Len() > 0 {
+			out.WriteString(stripEmphasis(seg.String()))
+			seg.Reset()
+		}
+	}
+	i := 0
+	for i < n {
+		if runes[i] != '`' {
+			seg.WriteRune(runes[i])
+			i++
+			continue
+		}
+		// Count the opening backtick run, then find a closing run of equal length.
+		k := 0
+		for i+k < n && runes[i+k] == '`' {
+			k++
+		}
+		j := i + k
+		for j < n {
+			if runes[j] != '`' {
+				j++
+				continue
+			}
+			m := 0
+			for j+m < n && runes[j+m] == '`' {
+				m++
+			}
+			if m == k {
+				break
+			}
+			j += m
+		}
+		if j >= n {
+			// No matching closing run: the backticks are literal text.
+			seg.WriteString(string(runes[i : i+k]))
+			i += k
+			continue
+		}
+		flush()
+		out.WriteString(trimCodeSpan(string(runes[i+k : j])))
+		i = j + k
+	}
+	flush()
+	return out.String()
+}
+
+// trimCodeSpan strips one leading and trailing space from a code span when both
+// are present and the content is not all spaces, per CommonMark.
+func trimCodeSpan(content string) string {
+	if len(content) >= 2 && strings.HasPrefix(content, " ") && strings.HasSuffix(content, " ") && strings.TrimSpace(content) != "" {
+		return content[1 : len(content)-1]
+	}
+	return content
+}
+
+// stripEmphasis unwraps links/images and removes emphasis/strikethrough
+// delimiters from text that lies outside code spans. Strong is removed before
+// emphasis so paired `**`/`__` are not mistaken for nested single delimiters.
+func stripEmphasis(s string) string {
+	s = mdImageRe.ReplaceAllString(s, "$1")
+	s = mdLinkRe.ReplaceAllString(s, "$1")
+	s = mdStrikeRe.ReplaceAllString(s, "$1")
+	s = mdStrongStarRe.ReplaceAllString(s, "$1")
+	s = mdStrongUnderRe.ReplaceAllString(s, "$1")
+	s = mdEmStarRe.ReplaceAllString(s, "$1")
+	s = mdEmUnderRe.ReplaceAllString(s, "${1}${2}${3}")
+	return s
 }

@@ -99,3 +99,49 @@ func TestResolveAnchor(t *testing.T) {
 		t.Fatal("expected orphan for missing snippet")
 	}
 }
+
+// TestResolveAnchor_InlineMarkupInHeading guards the regression where an
+// ancestor heading containing inline markup (here a code span) orphaned a
+// comment even though nothing was edited: the frontend stored the heading_path
+// with the markup rendered away, while the backend re-parsed it raw.
+func TestResolveAnchor_InlineMarkupInHeading(t *testing.T) {
+	content := "# 進捗レポート\n\n## 👁️ 台帳サマリ（`_watchlist.md` 全アクティブ行）\n\n### 棄却した仮説・教訓\n\n本文\n"
+
+	// heading_path as the frontend stores it: code span rendered to literal
+	// text, underscores preserved (CommonMark code-span precedence).
+	a := Anchor{
+		HeadingPath: []string{
+			"# 進捗レポート",
+			"## 👁️ 台帳サマリ（_watchlist.md 全アクティブ行）",
+			"### 棄却した仮説・教訓",
+		},
+		Snippet:    "棄却した仮説・教訓",
+		Occurrence: 0,
+	}
+	lr, ok := ResolveAnchor(content, a)
+	if !ok || lr[0] != 5 {
+		t.Fatalf("want line 5, got %v ok=%v", lr, ok)
+	}
+}
+
+func TestStripInlineMarkup(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"## 👁️ 台帳サマリ（`_watchlist.md` 全アクティブ行）", "## 👁️ 台帳サマリ（_watchlist.md 全アクティブ行）"},
+		{"plain text", "plain text"},
+		{"a **bold** word", "a bold word"},
+		{"a *em* word", "a em word"},
+		{"an __under__ strong", "an under strong"},
+		{"mix of `code` and **bold**", "mix of code and bold"},
+		{"see [the docs](https://example.com)", "see the docs"},
+		{"img ![alt](x.png) here", "img alt here"},
+		{"~~struck~~ out", "struck out"},
+		{"intraword foo_bar stays", "intraword foo_bar stays"},
+		{"`a*b[c](d)` literal", "a*b[c](d) literal"},
+		{"unmatched ` backtick", "unmatched ` backtick"},
+	}
+	for _, c := range cases {
+		if got := stripInlineMarkup(c.in); got != c.want {
+			t.Errorf("stripInlineMarkup(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
