@@ -58,13 +58,13 @@ interface OpenFilesState {
   updateActiveMarkdown: (root: string, markdown: string) => void;
   setActive: (root: string, id: string) => void;
   closeFile: (id: string) => void;
+  /** Close every other file in the same root, keeping only id (made active). */
+  closeOthers: (id: string) => void;
+  /** Close the files that sit to the right of id within the same root's tab order. */
+  closeToRight: (id: string) => void;
   closeAll: () => void;
   openServerFile: (incoming: IncomingFile) => void;
-  markActiveSaved: (
-    root: string,
-    modified?: string,
-    created?: string
-  ) => void;
+  markActiveSaved: (root: string, modified?: string, created?: string) => void;
   /** Revert the given root's active file's markdown back to its last-saved state. */
   discardActiveChanges: (root: string) => void;
   /**
@@ -152,9 +152,7 @@ export const useOpenFiles = create<OpenFilesState>()(
       overwriteFiles: (root, incoming) =>
         set((state) => {
           if (incoming.length === 0) return state;
-          const byName = new Map(
-            incoming.map((item) => [item.name, item] as const)
-          );
+          const byName = new Map(incoming.map((item) => [item.name, item] as const));
           const files = state.files.map((file) => {
             if (file.root !== root) return file;
             const item = byName.get(file.name);
@@ -225,6 +223,41 @@ export const useOpenFiles = create<OpenFilesState>()(
 
           return {
             files: remaining,
+            activeIdByRoot: {
+              ...state.activeIdByRoot,
+              [target.root]: nextActiveId,
+            },
+          };
+        }),
+
+      closeOthers: (id) =>
+        set((state) => {
+          const target = state.files.find((file) => file.id === id);
+          if (!target) return state;
+          // Keep id within its root; leave other roots' files untouched.
+          const files = state.files.filter((f) => f.root !== target.root || f.id === id);
+          if (files.length === state.files.length) return state;
+          return {
+            files,
+            activeIdByRoot: { ...state.activeIdByRoot, [target.root]: id },
+          };
+        }),
+
+      closeToRight: (id) =>
+        set((state) => {
+          const target = state.files.find((file) => file.id === id);
+          if (!target) return state;
+          const sameRoot = state.files.filter((f) => f.root === target.root);
+          const index = sameRoot.findIndex((f) => f.id === id);
+          const toClose = new Set(sameRoot.slice(index + 1).map((f) => f.id));
+          if (toClose.size === 0) return state;
+          const files = state.files.filter((f) => !toClose.has(f.id));
+          // If the active file was among those closed, fall back to id.
+          const currentActive = state.activeIdByRoot[target.root];
+          const nextActiveId =
+            currentActive && toClose.has(currentActive) ? id : currentActive;
+          return {
+            files,
             activeIdByRoot: {
               ...state.activeIdByRoot,
               [target.root]: nextActiveId,
