@@ -5,14 +5,21 @@
 // server exactly (same internal packages), so the CLI and the web UI operate
 // on the same review state.
 //
-//	mr comments <path> [--json]   list comments (resolved location, orphan flag)
-//	mr review   <path> [--all]    AI-facing Markdown of open (or all) comments
+//	mr inbox    [--root NAME] [--all]   files with open comments, newest first
+//	mr comments <path> [--json] [--since ID] [--unanswered]   list comments
+//	mr review   <path> [--all] [--since ID] [--unanswered]    AI-facing Markdown
 //	mr reply    <path> <id> <text> [--author NAME]   add a threaded reply
 //	mr resolve  <path> <id>       mark a comment resolved
 //	mr reopen   <path> <id>       reopen a resolved comment
 //
 // <path> may be absolute or relative to the current directory; it must live
 // under one of the configured REVIEW_ROOTS.
+//
+// --since ID returns only comments numbered after ID (e.g. --since c-008) so a
+// caller can spot what was added since its last look. --unanswered returns only
+// comments whose latest activity is not from the AI (no reply, or the last
+// reply is human) — both catch new top-level comments; --unanswered also catches
+// fresh human replies on existing threads.
 package main
 
 import (
@@ -36,6 +43,8 @@ func main() {
 		err = cmdComments(args)
 	case "review":
 		err = cmdReview(args)
+	case "inbox":
+		err = cmdInbox(args)
 	case "reply":
 		err = cmdReply(args)
 	case "resolve":
@@ -60,13 +69,16 @@ func usage() {
 	fmt.Fprint(os.Stderr, `mr — markdown-reviewer CLI
 
 Usage:
-  mr comments <path> [--json]          list comments (location / orphan)
-  mr review   <path> [--all]           AI-facing Markdown of open comments
+  mr inbox    [--root NAME] [--all]    files with open comments, newest first
+  mr comments <path> [--json] [--since ID] [--unanswered]
+  mr review   <path> [--all] [--since ID] [--unanswered]
   mr reply    <path> <id> <text> [--author NAME]
   mr resolve  <path> <id>              mark a comment resolved
   mr reopen   <path> <id>              reopen a resolved comment
 
 <path> is absolute or relative to cwd, and must be under a configured root.
+--since ID: only comments after ID (e.g. --since c-008).
+--unanswered: only comments whose latest activity is not from the AI.
 `)
 }
 
@@ -96,6 +108,7 @@ func cmdComments(args []string) error {
 	if err != nil {
 		return err
 	}
+	comments = applyFilters(comments, flags)
 	if flags["json"] != "" {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
@@ -114,9 +127,22 @@ func cmdReview(args []string) error {
 	if err != nil {
 		return err
 	}
+	comments = applyFilters(comments, flags)
 	onlyOpen := flags["all"] == ""
 	renderReview(os.Stdout, rel, content, comments, onlyOpen)
 	return nil
+}
+
+// applyFilters narrows comments by the --since / --unanswered flags (no-op when
+// neither is set), preserving order.
+func applyFilters(comments []reviewstore.Comment, flags map[string]string) []reviewstore.Comment {
+	if since := flags["since"]; since != "" {
+		comments = commentsSince(comments, since)
+	}
+	if flags["unanswered"] != "" {
+		comments = unansweredComments(comments)
+	}
+	return comments
 }
 
 func cmdReply(args []string) error {
@@ -172,7 +198,7 @@ func statusVerb(status string) string {
 // Everything else (--all, --json) is boolean, so positional/flag order stays
 // free without the flag package's stricter model and without mistaking a
 // positional path for a flag value.
-var valueFlags = map[string]bool{"author": true}
+var valueFlags = map[string]bool{"author": true, "since": true, "root": true}
 
 // parseArgs splits args into positionals and flags. A flag is "--name"; it is
 // boolean (stored as "true") unless it is in valueFlags, in which case the next

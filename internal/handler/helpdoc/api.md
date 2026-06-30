@@ -25,14 +25,17 @@ API 全仕様:             GET <base-url>/api/help
 内部パッケージを直接使うため、**サーバ未起動でも動作**し、Web UI と同じ sidecar を読み書きする。
 
 ```
-mr comments <path> [--json]          # コメント一覧（解決位置 / orphan）
-mr review   <path> [--all]           # open コメントを整形 Markdown で（/api/review 相当）
+mr inbox    [--root NAME] [--all]    # open コメントを持つファイルを更新の新しい順に一覧
+mr comments <path> [--json] [--since ID] [--unanswered]   # コメント一覧（解決位置 / orphan）
+mr review   <path> [--all] [--since ID] [--unanswered]    # open コメントを整形 Markdown で（/api/review 相当）
 mr reply    <path> <id> <text> [--author NAME]   # スレッド返信（既定 author=ai）
 mr resolve  <path> <id>              # resolved にする
 mr reopen   <path> <id>              # resolved を open に戻す
 ```
 
 ルートは `REVIEW_ROOTS` 環境変数、無ければ launchd plist から自動解決する。
+
+「人がコメントした」と言われたら **`mr inbox` でどのファイルか特定** → `mr review <path>` で読む。前回見た以降の新規だけ見たいときは `--since <最後に見た ID>`、AI 未対応分だけは `--unanswered`。コメント ID は `c-NNN` の単調増加なので、`mr comments` 末尾の最大 ID を控えておけば次回の `--since` に使える。
 
 ## ベース URL
 
