@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { CommentSidePane } from "./CommentSidePane";
 import type { CommentJSON } from "@/api";
@@ -30,13 +30,7 @@ function renderPane(props: Partial<React.ComponentProps<typeof CommentSidePane>>
     onJump: vi.fn(),
   };
   render(
-    <CommentSidePane
-      comments={[]}
-      reviewActive
-      canAddComment
-      {...handlers}
-      {...props}
-    />
+    <CommentSidePane comments={[]} reviewActive canAddComment {...handlers} {...props} />
   );
   return handlers;
 }
@@ -44,18 +38,14 @@ function renderPane(props: Partial<React.ComponentProps<typeof CommentSidePane>>
 describe("CommentSidePane", () => {
   it("shows a not-under-review message and disables the add toolbar", () => {
     renderPane({ reviewActive: false });
-    expect(
-      screen.getByText(/まだレビュー対象ではありません/)
-    ).toBeInTheDocument();
+    expect(screen.getByText(/まだレビュー対象ではありません/)).toBeInTheDocument();
     expect(screen.getByTestId("editor-add-comment")).toBeDisabled();
     expect(screen.getByTestId("editor-add-global-comment")).toBeDisabled();
   });
 
   it("shows the empty state when under review with no comments", () => {
     renderPane();
-    expect(
-      screen.getByText(/コメントはまだありません/)
-    ).toBeInTheDocument();
+    expect(screen.getByText(/コメントはまだありません/)).toBeInTheDocument();
     expect(screen.getByText("Comments (0/0)")).toBeInTheDocument();
   });
 
@@ -63,7 +53,12 @@ describe("CommentSidePane", () => {
     renderPane({
       comments: [
         comment("c1", { body: "first" }),
-        comment("c2", { scope: "global", anchor: undefined, context: null, body: "second" }),
+        comment("c2", {
+          scope: "global",
+          anchor: undefined,
+          context: null,
+          body: "second",
+        }),
       ],
     });
     expect(screen.getByText("Comments (2/2)")).toBeInTheDocument();
@@ -156,7 +151,11 @@ describe("CommentSidePane", () => {
         comment("c1", {
           orphan: true,
           context: null,
-          anchor: { heading_path: ["## 認証"], snippet: "アクセストークン: 24 時間", occurrence: 0 },
+          anchor: {
+            heading_path: ["## 認証"],
+            snippet: "アクセストークン: 24 時間",
+            occurrence: 0,
+          },
         }),
       ],
     });
@@ -180,5 +179,30 @@ describe("CommentSidePane", () => {
     expect(h.onAddComment).toHaveBeenCalled();
     expect(h.onAddGlobal).toHaveBeenCalled();
     expect(h.onAddCrossSection).toHaveBeenCalled();
+  });
+
+  it("opens a centered detail dialog and replies / resolves from it", async () => {
+    const user = userEvent.setup();
+    const h = renderPane({ comments: [comment("c1", { body: "detail body" })] });
+    expect(screen.queryByTestId("comment-detail-dialog")).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId("comment-open-detail"));
+    const dialog = screen.getByTestId("comment-detail-dialog");
+    expect(within(dialog).getByText("detail body")).toBeInTheDocument();
+
+    await user.type(screen.getByTestId("comment-detail-reply-input"), "見ました");
+    await user.click(screen.getByTestId("comment-detail-reply-submit"));
+    expect(h.onReply).toHaveBeenCalledWith("c1", "見ました");
+
+    await user.click(screen.getByTestId("comment-detail-resolve-toggle"));
+    expect(h.onResolveToggle).toHaveBeenCalledWith("c1", "resolved");
+  });
+
+  it("resolved comment's detail dialog hides the reply input", async () => {
+    const user = userEvent.setup();
+    renderPane({ comments: [comment("c1", { status: "resolved" })] });
+    await user.click(screen.getByTestId("comment-open-detail"));
+    expect(screen.getByTestId("comment-detail-dialog")).toBeInTheDocument();
+    expect(screen.queryByTestId("comment-detail-reply-input")).not.toBeInTheDocument();
   });
 });
