@@ -1,4 +1,4 @@
-.PHONY: install build build-frontend run run-binary run-server run-frontend stop status \
+.PHONY: install build build-mr build-frontend run run-binary run-server run-frontend stop status \
 	lint lint-frontend lint-fix format format-check \
 	test test-frontend test-frontend-coverage test-cov test-cov-check test-watch coverage \
 	migrate migrate-diff migrate-apply migrate-hash \
@@ -31,9 +31,13 @@ build-frontend:
 	cd $(FRONTEND_DIR) && npm run build
 	@touch internal/static/dist/.gitkeep
 
-## build: Build the monolithic binary (frontend + Go embed)
-build: build-frontend
+## build: Build the monolithic binary (frontend + Go embed) and the mr CLI
+build: build-frontend build-mr
 	go build -o $(BIN_DIR)/$(BINARY_NAME) ./cmd/server
+
+## build-mr: Build the mr CLI (review comments from the shell; no frontend dep)
+build-mr:
+	go build -o $(BIN_DIR)/mr ./cmd/mr
 
 ## run: Run Go (with hot reload via air, -tags dev) + Vite in parallel
 run:
