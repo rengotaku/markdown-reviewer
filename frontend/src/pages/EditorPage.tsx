@@ -34,10 +34,7 @@ import {
   CommentSidePane,
   DiffView,
 } from "@/components";
-import {
-  useOpenFiles,
-  reattachLegacyFilesToRoot,
-} from "@/hooks/useOpenFiles";
+import { useOpenFiles, reattachLegacyFilesToRoot } from "@/hooks/useOpenFiles";
 import { useReadFile, useWriteFile } from "@/hooks/useFileContent";
 import { useFileWatcher } from "@/hooks/useFileWatcher";
 import { useDirChangeWatcher } from "@/hooks/useDirChangeWatcher";
@@ -129,6 +126,13 @@ export function EditorPage() {
   const discardActiveChanges = useOpenFiles((s) => s.discardActiveChanges);
   const setActive = useOpenFiles((s) => s.setActive);
   const closeFile = useOpenFiles((s) => s.closeFile);
+  const closeOthers = useOpenFiles((s) => s.closeOthers);
+  const closeToRight = useOpenFiles((s) => s.closeToRight);
+
+  // Right-click tab menu: anchor position + the tab the menu was opened on.
+  const [tabMenu, setTabMenu] = useState<{ x: number; y: number; id: string } | null>(
+    null
+  );
 
   const readFile = useReadFile();
   const writeFile = useWriteFile();
@@ -379,9 +383,7 @@ export function EditorPage() {
       pos: number;
     }>;
   }>({ open: false, mode: "anchored", snippet: "", headings: [] });
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(
-    null
-  );
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
 
   // Re-render the toolbar Add-Comment button when selection / doc changes.
   const [, setSelectionTick] = useState(0);
@@ -437,9 +439,7 @@ export function EditorPage() {
     const state = useOpenFiles.getState();
     const currentActiveId = state.activeIdByRoot[activeRoot];
     const active = state.files.find((f) => f.id === currentActiveId);
-    const target = state.files.find(
-      (f) => f.path === path && f.root === activeRoot
-    );
+    const target = state.files.find((f) => f.path === path && f.root === activeRoot);
 
     if (target && target.id === currentActiveId) return;
 
@@ -679,11 +679,7 @@ export function EditorPage() {
           closeCommentDialog();
           return;
         }
-        await createComment(
-          path,
-          { scope: "inline", body, author, date, anchor },
-          root
-        );
+        await createComment(path, { scope: "inline", body, author, date, anchor }, root);
       }
       refreshComments();
     } catch (err) {
@@ -756,7 +752,6 @@ export function EditorPage() {
       nodes.forEach((el) => el.classList.remove("is-flash"));
     }, 1600);
   };
-
 
   const canSave = Boolean(activeFile);
   const isSaving = writeFile.isPending;
@@ -950,9 +945,7 @@ export function EditorPage() {
                 label="review 中"
                 data-testid="editor-review-indicator"
               />
-              <Tooltip
-                title={diffMode ? "差分表示を閉じる" : "前回保存との差分を表示"}
-              >
+              <Tooltip title={diffMode ? "差分表示を閉じる" : "前回保存との差分を表示"}>
                 <span>
                   <Button
                     variant={diffMode ? "contained" : "outlined"}
@@ -1041,6 +1034,10 @@ export function EditorPage() {
               key={f.id}
               value={f.id}
               data-testid={`editor-tab-${f.path}`}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                setTabMenu({ x: e.clientX, y: e.clientY, id: f.id });
+              }}
               label={
                 <Box
                   sx={{
@@ -1094,6 +1091,34 @@ export function EditorPage() {
             />
           ))}
         </Tabs>
+
+        <Menu
+          open={tabMenu !== null}
+          onClose={() => setTabMenu(null)}
+          anchorReference="anchorPosition"
+          anchorPosition={tabMenu ? { top: tabMenu.y, left: tabMenu.x } : undefined}
+        >
+          <MenuItem
+            disabled={
+              !tabMenu || files.findIndex((f) => f.id === tabMenu.id) >= files.length - 1
+            }
+            onClick={() => {
+              if (tabMenu) closeToRight(tabMenu.id);
+              setTabMenu(null);
+            }}
+          >
+            右側のタブを閉じる
+          </MenuItem>
+          <MenuItem
+            disabled={!tabMenu || files.length <= 1}
+            onClick={() => {
+              if (tabMenu) closeOthers(tabMenu.id);
+              setTabMenu(null);
+            }}
+          >
+            他のタブを閉じる
+          </MenuItem>
+        </Menu>
 
         <Box sx={{ flex: 1, minHeight: 0 }}>
           {activeFile && diffMode ? (
@@ -1214,4 +1239,3 @@ export function EditorPage() {
     </Box>
   );
 }
-
