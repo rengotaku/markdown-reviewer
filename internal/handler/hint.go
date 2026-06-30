@@ -41,6 +41,7 @@ func buildAIHint(baseURL, relPath, rootName string) string {
 	// The canonical file is clean: review comments live in a sidecar, not in
 	// the body. This hint just points an AI at the review API.
 	b.WriteString("本文はクリーンです。レビューコメントは別管理(sidecar)で、以下から取得します。\n")
+	b.WriteString("CLI(推奨):  mr review <このファイルのパス>   # 返信: mr reply <path> <id> '...' / 解決: mr resolve <path> <id>\n")
 	b.WriteString("レビュー(open, 整形済): GET ")
 	b.WriteString(reviewURL)
 	b.WriteString("\n")
