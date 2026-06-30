@@ -83,6 +83,9 @@ function basename(path: string): string {
 
 const TARGET_SNIPPET_LENGTH = 60;
 const SELECT_FILE_PARAM = "select_file";
+// How often to re-poll the active review file's comments for out-of-band
+// changes (mr CLI / API / other viewers). Matches the file-tree cadence.
+const COMMENTS_POLL_MS = 30_000;
 
 function todayISO(): string {
   const d = new Date();
@@ -250,6 +253,22 @@ export function EditorPage() {
       cancelled = true;
     };
   }, [activePath, activeFileRoot, reviewState, commentsRefresh]);
+
+  // Poll for comment changes the UI didn't make itself: comments can be added
+  // or answered out-of-band (mr CLI / HTTP API / another viewer), and unlike
+  // the file tree / external-content watcher the comment list otherwise only
+  // refetches on file-switch or a local mutation. Bump commentsRefresh on an
+  // interval (active review file only, paused when the tab is hidden) to reuse
+  // the fetch effect above.
+  useEffect(() => {
+    if (!activePath || reviewState !== "review") return;
+    const handle = window.setInterval(() => {
+      if (document.visibilityState === "visible") {
+        setCommentsRefresh((n) => n + 1);
+      }
+    }, COMMENTS_POLL_MS);
+    return () => window.clearInterval(handle);
+  }, [activePath, activeFileRoot, reviewState]);
 
   // Push the current comments into the editor as inline highlight decorations.
   // Re-runs whenever the list changes or a new file is loaded; passing [] when
