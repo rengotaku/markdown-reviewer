@@ -81,6 +81,15 @@ func baseDir() (string, error) {
 	return filepath.Join(cfg, "reviewer"), nil
 }
 
+// BaseDir exposes the reviewer storage root (see baseDir) so out-of-package
+// callers — e.g. the mr CLI's inbox scan — locate sidecars the same way the
+// server does, instead of re-deriving the path and risking drift.
+func BaseDir() (string, error) { return baseDir() }
+
+// ReviewFileName is the per-entry comments file name (review.json), exported so
+// a scanner can recognize sidecar entries on disk.
+const ReviewFileName = reviewFile
+
 // EntryDir is the directory holding review state for one canonical file. The
 // relative path (including the .md filename) becomes a directory so review.json
 // and history.jsonl sit beside each other, mirroring the source tree.
