@@ -7,6 +7,10 @@ import TextField from "@mui/material/TextField";
 import Tooltip from "@mui/material/Tooltip";
 import Chip from "@mui/material/Chip";
 import Divider from "@mui/material/Divider";
+import Dialog from "@mui/material/Dialog";
+import DialogTitle from "@mui/material/DialogTitle";
+import DialogContent from "@mui/material/DialogContent";
+import DialogActions from "@mui/material/DialogActions";
 import ToggleButton from "@mui/material/ToggleButton";
 import ToggleButtonGroup from "@mui/material/ToggleButtonGroup";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
@@ -18,6 +22,7 @@ import HubIcon from "@mui/icons-material/Hub";
 import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutline";
 import ReplayIcon from "@mui/icons-material/Replay";
 import ReplyIcon from "@mui/icons-material/Reply";
+import OpenInFullIcon from "@mui/icons-material/OpenInFull";
 import type { CommentJSON } from "@/api";
 
 const SCOPE_BADGE: Record<string, { label: string; color: string }> = {
@@ -64,9 +69,7 @@ function contextLabel(c: CommentJSON): string | null {
   if (c.scope === "global") return null;
   if (c.orphan) {
     const orig = originalTarget(c);
-    return orig
-      ? `${orig}（現在の本文には見つかりません）`
-      : "位置不明 (orphan)";
+    return orig ? `${orig}（現在の本文には見つかりません）` : "位置不明 (orphan)";
   }
   if (c.anchors && c.anchors.length > 0) {
     return c.anchors
@@ -101,16 +104,20 @@ export function CommentSidePane({
   onJump,
 }: Props) {
   const [filter, setFilter] = useState<StatusFilter>("all");
+  const [detailId, setDetailId] = useState<string | null>(null);
+  // Look the comment up live so the dialog reflects refetched replies/edits;
+  // if it was deleted out from under us, the dialog simply closes.
+  const detailComment = useMemo(
+    () => comments.find((c) => c.id === detailId) ?? null,
+    [comments, detailId]
+  );
   const openCount = useMemo(
     () => comments.filter((c) => c.status === "open").length,
     [comments]
   );
   const resolvedCount = comments.length - openCount;
   const visible = useMemo(
-    () =>
-      filter === "all"
-        ? comments
-        : comments.filter((c) => c.status === filter),
+    () => (filter === "all" ? comments : comments.filter((c) => c.status === filter)),
     [comments, filter]
   );
 
@@ -174,13 +181,25 @@ export function CommentSidePane({
           aria-label="コメントの表示フィルタ"
           data-testid="comment-status-filter"
         >
-          <ToggleButton value="all" sx={{ textTransform: "none", py: 0.25 }} data-testid="comment-filter-all">
+          <ToggleButton
+            value="all"
+            sx={{ textTransform: "none", py: 0.25 }}
+            data-testid="comment-filter-all"
+          >
             すべて ({comments.length})
           </ToggleButton>
-          <ToggleButton value="open" sx={{ textTransform: "none", py: 0.25 }} data-testid="comment-filter-open">
+          <ToggleButton
+            value="open"
+            sx={{ textTransform: "none", py: 0.25 }}
+            data-testid="comment-filter-open"
+          >
             未解決 ({openCount})
           </ToggleButton>
-          <ToggleButton value="resolved" sx={{ textTransform: "none", py: 0.25 }} data-testid="comment-filter-resolved">
+          <ToggleButton
+            value="resolved"
+            sx={{ textTransform: "none", py: 0.25 }}
+            data-testid="comment-filter-resolved"
+          >
             解決済 ({resolvedCount})
           </ToggleButton>
         </ToggleButtonGroup>
@@ -273,10 +292,27 @@ export function CommentSidePane({
               onReply={onReply}
               onEdit={onEdit}
               onJump={onJump}
+              onOpenDetail={setDetailId}
             />
           ))
         )}
       </Box>
+
+      <CommentDetailDialog
+        comment={detailComment}
+        onClose={() => setDetailId(null)}
+        onDelete={(id) => {
+          onDelete(id);
+          setDetailId(null);
+        }}
+        onResolveToggle={onResolveToggle}
+        onReply={onReply}
+        onEdit={onEdit}
+        onJump={(id) => {
+          onJump(id);
+          setDetailId(null);
+        }}
+      />
     </Box>
   );
 }
@@ -288,6 +324,7 @@ interface RowProps {
   onReply: (id: string, body: string) => void;
   onEdit: (id: string, body: string) => void;
   onJump: (id: string) => void;
+  onOpenDetail: (id: string) => void;
 }
 
 function CommentRow({
@@ -297,6 +334,7 @@ function CommentRow({
   onReply,
   onEdit,
   onJump,
+  onOpenDetail,
 }: RowProps) {
   const [replyOpen, setReplyOpen] = useState(false);
   const [replyBody, setReplyBody] = useState("");
@@ -529,6 +567,16 @@ function CommentRow({
             )}
           </IconButton>
         </Tooltip>
+        <Tooltip title="詳細を中央に開く">
+          <IconButton
+            size="small"
+            onClick={() => onOpenDetail(c.id)}
+            aria-label="open comment detail"
+            data-testid="comment-open-detail"
+          >
+            <OpenInFullIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
         <Box sx={{ flexGrow: 1 }} />
         <Tooltip title="コメントを削除">
           <IconButton
@@ -542,5 +590,246 @@ function CommentRow({
         </Tooltip>
       </Box>
     </Box>
+  );
+}
+
+interface DetailDialogProps {
+  comment: CommentJSON | null;
+  onClose: () => void;
+  onDelete: (id: string) => void;
+  onResolveToggle: (id: string, next: "open" | "resolved") => void;
+  onReply: (id: string, body: string) => void;
+  onEdit: (id: string, body: string) => void;
+  onJump: (id: string) => void;
+}
+
+/** A roomy, centered view of one comment: full target, body, the whole reply
+ *  thread, and the same actions as the side-pane row. Opened from a row's
+ *  "詳細" button; closes when the comment is deleted or jumped to. */
+function CommentDetailDialog({
+  comment: c,
+  onClose,
+  onDelete,
+  onResolveToggle,
+  onReply,
+  onEdit,
+  onJump,
+}: DetailDialogProps) {
+  const [replyBody, setReplyBody] = useState("");
+  const [editOpen, setEditOpen] = useState(false);
+  const [editBody, setEditBody] = useState("");
+
+  const open = c !== null;
+  // Reset the inline forms whenever a different comment is shown.
+  const shownId = c?.id ?? null;
+  const [lastId, setLastId] = useState<string | null>(null);
+  if (shownId !== lastId) {
+    setLastId(shownId);
+    setReplyBody("");
+    setEditOpen(false);
+    setEditBody(c?.body ?? "");
+  }
+
+  if (!c) {
+    return <Dialog open={false} onClose={onClose} />;
+  }
+
+  const resolved = c.status === "resolved";
+  const canJump = c.scope !== "global" && !c.orphan;
+  const ctx = contextLabel(c);
+  const badge = SCOPE_BADGE[c.scope];
+
+  const submitReply = () => {
+    const body = replyBody.trim();
+    if (!body) return;
+    onReply(c.id, body);
+    setReplyBody("");
+  };
+  const submitEdit = () => {
+    const body = editBody.trim();
+    if (body && body !== c.body) onEdit(c.id, body);
+    setEditOpen(false);
+  };
+
+  return (
+    <Dialog
+      open={open}
+      onClose={onClose}
+      maxWidth="sm"
+      fullWidth
+      data-testid="comment-detail-dialog"
+    >
+      <DialogTitle sx={{ display: "flex", alignItems: "center", gap: 1, pb: 1 }}>
+        {badge && (
+          <Chip
+            label={badge.label}
+            size="small"
+            sx={{ height: 20, fontSize: "0.7rem", bgcolor: badge.color }}
+          />
+        )}
+        {resolved && (
+          <Chip
+            label="resolved"
+            size="small"
+            color="success"
+            variant="outlined"
+            sx={{ height: 20 }}
+          />
+        )}
+        {c.orphan && (
+          <Chip
+            label="orphan"
+            size="small"
+            color="warning"
+            variant="outlined"
+            sx={{ height: 20 }}
+          />
+        )}
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          sx={{ flexGrow: 1, textAlign: "right" }}
+        >
+          {c.author || "?"} {c.date ? `· ${c.date}` : ""}
+        </Typography>
+      </DialogTitle>
+      <DialogContent dividers>
+        {ctx && (
+          <Typography
+            variant="body2"
+            color="text.secondary"
+            onClick={canJump ? () => onJump(c.id) : undefined}
+            sx={{
+              fontStyle: "italic",
+              wordBreak: "break-word",
+              mb: 1,
+              cursor: canJump ? "pointer" : "default",
+              "&:hover": canJump ? { textDecoration: "underline" } : undefined,
+            }}
+          >
+            対象: {ctx}
+          </Typography>
+        )}
+
+        {editOpen && !resolved ? (
+          <Box>
+            <TextField
+              value={editBody}
+              onChange={(e) => setEditBody(e.target.value)}
+              multiline
+              minRows={3}
+              fullWidth
+              autoFocus
+              inputProps={{ "data-testid": "comment-detail-edit-input" }}
+            />
+            <Box sx={{ display: "flex", justifyContent: "flex-end", gap: 0.5, mt: 0.5 }}>
+              <Button size="small" onClick={() => setEditOpen(false)}>
+                キャンセル
+              </Button>
+              <Button
+                size="small"
+                variant="contained"
+                onClick={submitEdit}
+                disabled={!editBody.trim()}
+                data-testid="comment-detail-edit-submit"
+              >
+                更新
+              </Button>
+            </Box>
+          </Box>
+        ) : (
+          <Typography
+            variant="body1"
+            sx={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}
+          >
+            {c.body}
+          </Typography>
+        )}
+
+        {c.replies && c.replies.length > 0 && (
+          <Box sx={{ mt: 2, pl: 1.5, borderLeft: "3px solid", borderColor: "divider" }}>
+            {c.replies.map((r, i) => (
+              <Box key={i} sx={{ mb: 1 }} data-testid="comment-detail-reply">
+                <Typography variant="caption" color="text.secondary">
+                  {r.author || "?"} {r.date ? `· ${r.date}` : ""}
+                </Typography>
+                <Typography
+                  variant="body2"
+                  sx={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}
+                >
+                  {r.body}
+                </Typography>
+              </Box>
+            ))}
+          </Box>
+        )}
+
+        {!resolved && (
+          <Box sx={{ mt: 2 }}>
+            <TextField
+              value={replyBody}
+              onChange={(e) => setReplyBody(e.target.value)}
+              placeholder="返信を入力"
+              multiline
+              minRows={2}
+              fullWidth
+              size="small"
+              inputProps={{ "data-testid": "comment-detail-reply-input" }}
+            />
+            <Box sx={{ display: "flex", justifyContent: "flex-end", mt: 0.5 }}>
+              <Button
+                size="small"
+                variant="contained"
+                onClick={submitReply}
+                disabled={!replyBody.trim()}
+                data-testid="comment-detail-reply-submit"
+              >
+                返信
+              </Button>
+            </Box>
+          </Box>
+        )}
+      </DialogContent>
+      <DialogActions sx={{ justifyContent: "space-between", px: 2 }}>
+        <Box>
+          <Tooltip title={resolved ? "解決済みのため編集できません" : "コメントを編集"}>
+            <span>
+              <IconButton
+                size="small"
+                disabled={resolved}
+                onClick={() => setEditOpen((v) => !v)}
+                aria-label="edit comment"
+                data-testid="comment-detail-edit"
+              >
+                <EditOutlinedIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+          <Tooltip title="コメントを削除">
+            <IconButton
+              size="small"
+              onClick={() => onDelete(c.id)}
+              aria-label="delete comment"
+              data-testid="comment-detail-delete"
+            >
+              <DeleteOutlineIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        </Box>
+        <Box>
+          <Button
+            size="small"
+            startIcon={resolved ? <ReplayIcon /> : <CheckCircleOutlineIcon />}
+            onClick={() => onResolveToggle(c.id, resolved ? "open" : "resolved")}
+            data-testid="comment-detail-resolve-toggle"
+          >
+            {resolved ? "未解決に戻す" : "解決済みにする"}
+          </Button>
+          <Button size="small" onClick={onClose}>
+            閉じる
+          </Button>
+        </Box>
+      </DialogActions>
+    </Dialog>
   );
 }
