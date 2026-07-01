@@ -62,18 +62,11 @@ import {
   type ReviewState,
   type RevisionMeta,
   type CommentJSON,
-  type CommentAnchor,
 } from "@/api";
 import { stripHint } from "@/utils/stripHint";
 import { formatLocalTimestamp } from "@/utils/formatTimestamp";
 import { nextVersionedPath } from "@/utils/versionedPath";
-import { collectHeadings } from "@/utils/headings";
-import {
-  computeAnchorFromSelection,
-  extractAnchorBlocks,
-  blockIndexAtPos,
-  computeAnchorAtBlock,
-} from "@/utils/pmAnchor";
+import { computeAnchorFromSelection } from "@/utils/pmAnchor";
 import type { HighlightComment } from "@/components/tiptap/extensions/CommentHighlight";
 
 function basename(path: string): string {
@@ -388,7 +381,7 @@ export function EditorPage() {
 
   const [commentDialog, setCommentDialog] = useState<{
     open: boolean;
-    mode: "anchored" | "global" | "cross-section";
+    mode: "anchored" | "global";
     snippet: string;
     /**
      * The editor selection captured when the dialog opened (anchored mode).
@@ -396,12 +389,7 @@ export function EditorPage() {
      * even if focus shifts to the dialog.
      */
     range?: { from: number; to: number };
-    headings: ReadonlyArray<{
-      level: 1 | 2 | 3 | 4 | 5 | 6;
-      text: string;
-      pos: number;
-    }>;
-  }>({ open: false, mode: "anchored", snippet: "", headings: [] });
+  }>({ open: false, mode: "anchored", snippet: "" });
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
 
   // Re-render the toolbar Add-Comment button when selection / doc changes.
@@ -597,7 +585,6 @@ export function EditorPage() {
       mode: "anchored",
       snippet: buildTargetSnippet(selectedText),
       range: { from, to },
-      headings: [],
     });
   };
 
@@ -607,24 +594,7 @@ export function EditorPage() {
       showToast("先にファイルを「取り込む」とコメントを追加できます", "info");
       return;
     }
-    setCommentDialog({ open: true, mode: "global", snippet: "", headings: [] });
-  };
-
-  const handleAddCrossSectionClick = () => {
-    if (!editor) return;
-    if (!reviewActive) {
-      showToast("先にファイルを「取り込む」とコメントを追加できます", "info");
-      return;
-    }
-    const headings = collectHeadings(editor, [1, 2, 3, 4, 5, 6]);
-    if (headings.length === 0) {
-      showToast(
-        "横断コメントを付ける見出しが見つかりません。先に見出しを追加してください。",
-        "info"
-      );
-      return;
-    }
-    setCommentDialog({ open: true, mode: "cross-section", snippet: "", headings });
+    setCommentDialog({ open: true, mode: "global", snippet: "" });
   };
 
   const closeContextMenu = () => setContextMenu(null);
@@ -635,7 +605,7 @@ export function EditorPage() {
   };
 
   const closeCommentDialog = () =>
-    setCommentDialog({ open: false, mode: "anchored", snippet: "", headings: [] });
+    setCommentDialog({ open: false, mode: "anchored", snippet: "" });
 
   // Submit a new comment to the sidecar. The anchor(s) are derived from the
   // live ProseMirror doc so they resolve identically server-side against the
@@ -643,15 +613,9 @@ export function EditorPage() {
   const handleCommentSubmit = async ({
     body,
     scope,
-    selectedHeadings,
   }: {
     body: string;
-    scope: "inline" | "block" | "cross-section" | "global";
-    selectedHeadings?: ReadonlyArray<{
-      level: 1 | 2 | 3 | 4 | 5 | 6;
-      text: string;
-      pos: number;
-    }>;
+    scope: "inline" | "block" | "global";
   }) => {
     if (!editor || !activeFile) {
       closeCommentDialog();
@@ -664,29 +628,6 @@ export function EditorPage() {
     try {
       if (scope === "global") {
         await createComment(path, { scope: "global", body, author, date }, root);
-      } else if (scope === "cross-section") {
-        if (!selectedHeadings || selectedHeadings.length === 0) {
-          closeCommentDialog();
-          return;
-        }
-        const blocks = extractAnchorBlocks(editor.state.doc);
-        const anchors: CommentAnchor[] = [];
-        for (const h of selectedHeadings) {
-          const idx = blockIndexAtPos(blocks, h.pos);
-          if (idx === -1) continue;
-          const a = computeAnchorAtBlock(blocks, idx);
-          if (a) anchors.push(a);
-        }
-        if (anchors.length === 0) {
-          showToast("対象見出しのアンカーを特定できませんでした", "warning");
-          closeCommentDialog();
-          return;
-        }
-        await createComment(
-          path,
-          { scope: "cross_section", body, author, date, anchors },
-          root
-        );
       } else {
         // anchored inline
         const range = commentDialog.range;
@@ -1188,7 +1129,6 @@ export function EditorPage() {
             canAddComment={canAddComment}
             onAddComment={handleAddCommentClick}
             onAddGlobal={handleAddGlobalClick}
-            onAddCrossSection={handleAddCrossSectionClick}
             onDelete={handleDeleteComment}
             onResolveToggle={handleResolveToggle}
             onReply={handleReplyComment}
@@ -1248,7 +1188,6 @@ export function EditorPage() {
         open={commentDialog.open}
         mode={commentDialog.mode}
         targetSnippet={commentDialog.snippet}
-        headings={commentDialog.headings}
         onClose={closeCommentDialog}
         onSubmit={handleCommentSubmit}
       />

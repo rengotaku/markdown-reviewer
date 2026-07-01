@@ -4,6 +4,7 @@ import Typography from "@mui/material/Typography";
 import IconButton from "@mui/material/IconButton";
 import Button from "@mui/material/Button";
 import TextField from "@mui/material/TextField";
+import Link from "@mui/material/Link";
 import Tooltip from "@mui/material/Tooltip";
 import Chip from "@mui/material/Chip";
 import Divider from "@mui/material/Divider";
@@ -18,12 +19,16 @@ import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import CommentsDisabledIcon from "@mui/icons-material/CommentsDisabled";
 import AddCommentIcon from "@mui/icons-material/AddComment";
 import PublicIcon from "@mui/icons-material/Public";
-import HubIcon from "@mui/icons-material/Hub";
 import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutline";
 import ReplayIcon from "@mui/icons-material/Replay";
 import ReplyIcon from "@mui/icons-material/Reply";
 import OpenInFullIcon from "@mui/icons-material/OpenInFull";
 import type { CommentJSON } from "@/api";
+
+/** Comment bodies longer than this are collapsed to a preview in the side-pane
+ *  row, with an inline link to expand/collapse. The detail dialog always shows
+ *  the full body. */
+const BODY_PREVIEW_LIMIT = 200;
 
 const SCOPE_BADGE: Record<string, { label: string; color: string }> = {
   inline: { label: "inline", color: "#fff8c5" },
@@ -41,7 +46,6 @@ interface Props {
   canAddComment: boolean;
   onAddComment: () => void;
   onAddGlobal: () => void;
-  onAddCrossSection: () => void;
   onDelete: (id: string) => void;
   onResolveToggle: (id: string, next: "open" | "resolved") => void;
   onReply: (id: string, body: string) => void;
@@ -96,7 +100,6 @@ export function CommentSidePane({
   canAddComment,
   onAddComment,
   onAddGlobal,
-  onAddCrossSection,
   onDelete,
   onResolveToggle,
   onReply,
@@ -245,20 +248,6 @@ export function CommentSidePane({
             </Button>
           </span>
         </Tooltip>
-        <Tooltip title="複数の見出しに紐付ける横断コメントを追加">
-          <span>
-            <Button
-              variant="outlined"
-              size="small"
-              startIcon={<HubIcon />}
-              disabled={!reviewActive}
-              onClick={onAddCrossSection}
-              data-testid="editor-add-cross-section-comment"
-            >
-              横断
-            </Button>
-          </span>
-        </Tooltip>
       </Box>
 
       <Box sx={{ flex: 1, overflow: "auto" }}>
@@ -340,6 +329,7 @@ function CommentRow({
   const [replyBody, setReplyBody] = useState("");
   const [editOpen, setEditOpen] = useState(false);
   const [editBody, setEditBody] = useState(c.body);
+  const [bodyExpanded, setBodyExpanded] = useState(false);
   const ctx = contextLabel(c);
   const badge = SCOPE_BADGE[c.scope];
   const resolved = c.status === "resolved";
@@ -472,8 +462,24 @@ function CommentRow({
         <Typography
           variant="body2"
           sx={{ mt: 0.5, whiteSpace: "pre-wrap", wordBreak: "break-word" }}
+          data-testid="comment-body"
         >
-          {c.body}
+          {c.body.length > BODY_PREVIEW_LIMIT && !bodyExpanded
+            ? `${c.body.slice(0, BODY_PREVIEW_LIMIT)}…`
+            : c.body}
+          {c.body.length > BODY_PREVIEW_LIMIT && (
+            <Link
+              component="button"
+              type="button"
+              variant="caption"
+              underline="hover"
+              onClick={() => setBodyExpanded((v) => !v)}
+              data-testid="comment-body-toggle"
+              sx={{ ml: 0.5, verticalAlign: "baseline" }}
+            >
+              {bodyExpanded ? "折りたたむ" : "続きを表示"}
+            </Link>
+          )}
         </Typography>
       )}
 
