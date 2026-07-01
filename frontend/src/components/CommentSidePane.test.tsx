@@ -94,6 +94,35 @@ describe("CommentSidePane", () => {
     expect(screen.getByTestId("comment-body-toggle")).toHaveTextContent("続きを表示");
   });
 
+  it("truncates long replies individually with their own toggle", async () => {
+    const user = userEvent.setup();
+    const longReply = "り".repeat(250);
+    renderPane({
+      comments: [
+        comment("c1", {
+          body: "short",
+          replies: [
+            { author: "ai", date: "2026-05-21", body: "短い返信" },
+            { author: "ai", date: "2026-05-21", body: longReply },
+          ],
+        }),
+      ],
+    });
+
+    // Short reply: no toggle. Long reply: collapsed preview + one toggle.
+    const replyBodies = screen.getAllByTestId("comment-reply-body");
+    expect(replyBodies).toHaveLength(2);
+    expect(replyBodies[0]).toHaveTextContent("短い返信");
+    expect(replyBodies[1].textContent).toContain("り".repeat(200) + "…");
+    expect(replyBodies[1].textContent).not.toContain("り".repeat(201));
+
+    const toggle = screen.getByTestId("comment-reply-body-toggle");
+    await user.click(toggle);
+    const expanded = screen.getAllByTestId("comment-reply-body")[1];
+    expect(expanded.textContent).toContain("り".repeat(250));
+    expect(screen.getByTestId("comment-reply-body-toggle")).toHaveTextContent("折りたたむ");
+  });
+
   it("marks resolved and orphan comments", () => {
     renderPane({
       comments: [
