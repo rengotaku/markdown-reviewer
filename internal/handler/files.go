@@ -344,13 +344,17 @@ func (h *Handler) WriteFile(c *gin.Context) {
 		return
 	}
 
+	// Read the about-to-be-overwritten content once; it feeds both the
+	// revision snapshot and the re-anchor diff below.
+	oldRaw, oldErr := os.ReadFile(full)
+
 	// Snapshot the about-to-be-overwritten content into revision history
 	// before the atomic rename destroys it. Strip the AI hint first so the
 	// per-save hint churn never pollutes a diff. AppendRevision no-ops for
 	// draft (un-ingested) files, so only managed files accrue history. A
 	// snapshot failure must never block the save — log and continue.
-	if old, rerr := os.ReadFile(full); rerr == nil {
-		snap := stripAIHint(string(old))
+	if oldErr == nil {
+		snap := stripAIHint(string(oldRaw))
 		if _, _, aerr := reviewstore.AppendRevision(name, rel, c.Query("author"), snap); aerr != nil {
 			slog.Warn("revision snapshot failed", "root", name, "path", rel, "err", aerr)
 		}
@@ -361,6 +365,26 @@ func (h *Handler) WriteFile(c *gin.Context) {
 	// appending keeps the block unique across save cycles.
 	hint := buildAIHint(deriveBaseURL(c.Request), rel, name)
 	content := injectAIHint(req.Content, hint)
+
+	// Re-anchor comments that would orphan under this edit. The old/new bodies
+	// fed to the re-anchor diff must be normalized exactly like the GET path
+	// (readCanonical) resolves anchors — readCanonical returns the raw file
+	// bytes verbatim, so we pass the raw old bytes and the raw new content
+	// (both still carry the AI hint block).
+	//
+	// Order is deliberate: compute + persist review.json BEFORE writing the
+	// body. A strict two-phase commit is unnecessary. If the write below fails,
+	// review.json may transiently point at the not-yet-written body; the client
+	// retries the same PUT and the (idempotent) re-anchor converges — on retry
+	// the moved anchors already resolve against the identical new content, so
+	// ReanchorOnSave is a no-op and the eventual successful write makes disk +
+	// review.json consistent. A re-anchor failure must never block the save —
+	// mirror the revision snapshot's "saving is never blocked" policy.
+	if oldErr == nil {
+		if _, rerr := reviewstore.ReanchorOnSave(name, rel, string(oldRaw), content); rerr != nil {
+			slog.Warn("reanchor on save failed", "root", name, "path", rel, "err", rerr)
+		}
+	}
 
 	if err := atomicWrite(full, []byte(content)); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
