@@ -68,6 +68,32 @@ describe("CommentSidePane", () => {
     expect(screen.getByTestId("comment-scope-global")).toBeInTheDocument();
   });
 
+  it("shows short bodies in full with no toggle", () => {
+    renderPane({ comments: [comment("c1", { body: "short" })] });
+    expect(screen.getByTestId("comment-body")).toHaveTextContent("short");
+    expect(screen.queryByTestId("comment-body-toggle")).toBeNull();
+  });
+
+  it("truncates long bodies to a 200-char preview with an expand/collapse toggle", async () => {
+    const user = userEvent.setup();
+    const long = "あ".repeat(250);
+    renderPane({ comments: [comment("c1", { body: long })] });
+
+    const body = screen.getByTestId("comment-body");
+    expect(body.textContent).toContain("あ".repeat(200) + "…");
+    expect(body.textContent).not.toContain("あ".repeat(201));
+
+    const toggle = screen.getByTestId("comment-body-toggle");
+    expect(toggle).toHaveTextContent("続きを表示");
+
+    await user.click(toggle);
+    expect(screen.getByTestId("comment-body").textContent).toContain("あ".repeat(250));
+    expect(screen.getByTestId("comment-body-toggle")).toHaveTextContent("折りたたむ");
+
+    await user.click(screen.getByTestId("comment-body-toggle"));
+    expect(screen.getByTestId("comment-body-toggle")).toHaveTextContent("続きを表示");
+  });
+
   it("marks resolved and orphan comments", () => {
     renderPane({
       comments: [
