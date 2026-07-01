@@ -18,7 +18,6 @@ import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import CommentsDisabledIcon from "@mui/icons-material/CommentsDisabled";
 import AddCommentIcon from "@mui/icons-material/AddComment";
 import PublicIcon from "@mui/icons-material/Public";
-import HubIcon from "@mui/icons-material/Hub";
 import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutline";
 import ReplayIcon from "@mui/icons-material/Replay";
 import ReplyIcon from "@mui/icons-material/Reply";
@@ -41,7 +40,6 @@ interface Props {
   canAddComment: boolean;
   onAddComment: () => void;
   onAddGlobal: () => void;
-  onAddCrossSection: () => void;
   onDelete: (id: string) => void;
   onResolveToggle: (id: string, next: "open" | "resolved") => void;
   onReply: (id: string, body: string) => void;
@@ -96,7 +94,6 @@ export function CommentSidePane({
   canAddComment,
   onAddComment,
   onAddGlobal,
-  onAddCrossSection,
   onDelete,
   onResolveToggle,
   onReply,
@@ -242,20 +239,6 @@ export function CommentSidePane({
               data-testid="editor-add-global-comment"
             >
               全体
-            </Button>
-          </span>
-        </Tooltip>
-        <Tooltip title="複数の見出しに紐付ける横断コメントを追加">
-          <span>
-            <Button
-              variant="outlined"
-              size="small"
-              startIcon={<HubIcon />}
-              disabled={!reviewActive}
-              onClick={onAddCrossSection}
-              data-testid="editor-add-cross-section-comment"
-            >
-              横断
             </Button>
           </span>
         </Tooltip>

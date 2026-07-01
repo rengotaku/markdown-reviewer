@@ -22,7 +22,6 @@ function renderPane(props: Partial<React.ComponentProps<typeof CommentSidePane>>
     onClose: vi.fn(),
     onAddComment: vi.fn(),
     onAddGlobal: vi.fn(),
-    onAddCrossSection: vi.fn(),
     onDelete: vi.fn(),
     onResolveToggle: vi.fn(),
     onReply: vi.fn(),
@@ -175,10 +174,8 @@ describe("CommentSidePane", () => {
     const h = renderPane();
     await user.click(screen.getByTestId("editor-add-comment"));
     await user.click(screen.getByTestId("editor-add-global-comment"));
-    await user.click(screen.getByTestId("editor-add-cross-section-comment"));
     expect(h.onAddComment).toHaveBeenCalled();
     expect(h.onAddGlobal).toHaveBeenCalled();
-    expect(h.onAddCrossSection).toHaveBeenCalled();
   });
 
   it("opens a centered detail dialog and replies / resolves from it", async () => {
