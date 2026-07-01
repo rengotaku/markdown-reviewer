@@ -23,12 +23,48 @@ import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutline";
 import ReplayIcon from "@mui/icons-material/Replay";
 import ReplyIcon from "@mui/icons-material/Reply";
 import OpenInFullIcon from "@mui/icons-material/OpenInFull";
+import type { SxProps, Theme } from "@mui/material/styles";
 import type { CommentJSON } from "@/api";
 
-/** Comment bodies longer than this are collapsed to a preview in the side-pane
- *  row, with an inline link to expand/collapse. The detail dialog always shows
- *  the full body. */
+/** Comment/reply bodies longer than this are collapsed to a preview in the
+ *  side-pane row, each with its own inline link to expand/collapse. The detail
+ *  dialog always shows the full text. */
 const BODY_PREVIEW_LIMIT = 200;
+
+/** A text block that collapses to a `BODY_PREVIEW_LIMIT`-char preview when long,
+ *  with an inline "続きを表示 / 折りたたむ" toggle. Each instance keeps its own
+ *  expand state, so a comment body and each of its replies collapse
+ *  independently. Short text renders in full with no toggle. */
+function CollapsibleText({
+  text,
+  testid,
+  sx,
+}: {
+  text: string;
+  testid: string;
+  sx?: SxProps<Theme>;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const long = text.length > BODY_PREVIEW_LIMIT;
+  return (
+    <Typography variant="body2" sx={sx} data-testid={testid}>
+      {long && !expanded ? `${text.slice(0, BODY_PREVIEW_LIMIT)}…` : text}
+      {long && (
+        <Link
+          component="button"
+          type="button"
+          variant="caption"
+          underline="hover"
+          onClick={() => setExpanded((v) => !v)}
+          data-testid={`${testid}-toggle`}
+          sx={{ ml: 0.5, verticalAlign: "baseline" }}
+        >
+          {expanded ? "折りたたむ" : "続きを表示"}
+        </Link>
+      )}
+    </Typography>
+  );
+}
 
 const SCOPE_BADGE: Record<string, { label: string; color: string }> = {
   inline: { label: "inline", color: "#fff8c5" },
@@ -329,7 +365,6 @@ function CommentRow({
   const [replyBody, setReplyBody] = useState("");
   const [editOpen, setEditOpen] = useState(false);
   const [editBody, setEditBody] = useState(c.body);
-  const [bodyExpanded, setBodyExpanded] = useState(false);
   const ctx = contextLabel(c);
   const badge = SCOPE_BADGE[c.scope];
   const resolved = c.status === "resolved";
@@ -459,28 +494,11 @@ function CommentRow({
           </Box>
         </Box>
       ) : (
-        <Typography
-          variant="body2"
+        <CollapsibleText
+          text={c.body}
+          testid="comment-body"
           sx={{ mt: 0.5, whiteSpace: "pre-wrap", wordBreak: "break-word" }}
-          data-testid="comment-body"
-        >
-          {c.body.length > BODY_PREVIEW_LIMIT && !bodyExpanded
-            ? `${c.body.slice(0, BODY_PREVIEW_LIMIT)}…`
-            : c.body}
-          {c.body.length > BODY_PREVIEW_LIMIT && (
-            <Link
-              component="button"
-              type="button"
-              variant="caption"
-              underline="hover"
-              onClick={() => setBodyExpanded((v) => !v)}
-              data-testid="comment-body-toggle"
-              sx={{ ml: 0.5, verticalAlign: "baseline" }}
-            >
-              {bodyExpanded ? "折りたたむ" : "続きを表示"}
-            </Link>
-          )}
-        </Typography>
+        />
       )}
 
       {c.replies && c.replies.length > 0 && (
@@ -490,12 +508,11 @@ function CommentRow({
               <Typography variant="caption" color="text.secondary">
                 {r.author || "?"} {r.date ? `· ${r.date}` : ""}
               </Typography>
-              <Typography
-                variant="body2"
+              <CollapsibleText
+                text={r.body}
+                testid="comment-reply-body"
                 sx={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}
-              >
-                {r.body}
-              </Typography>
+              />
             </Box>
           ))}
         </Box>
