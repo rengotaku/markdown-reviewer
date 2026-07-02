@@ -354,7 +354,7 @@ func (h *Handler) WriteFile(c *gin.Context) {
 	// draft (un-ingested) files, so only managed files accrue history. A
 	// snapshot failure must never block the save — log and continue.
 	if oldErr == nil {
-		snap := stripAIHint(string(oldRaw))
+		snap := reviewstore.StripAIHint(string(oldRaw))
 		if _, _, aerr := reviewstore.AppendRevision(name, rel, c.Query("author"), snap); aerr != nil {
 			slog.Warn("revision snapshot failed", "root", name, "path", rel, "err", aerr)
 		}
