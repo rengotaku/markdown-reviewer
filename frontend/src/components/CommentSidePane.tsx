@@ -174,8 +174,10 @@ export function CommentSidePane({
         sx={{
           pl: 2,
           pr: 0.5,
-          py: 1,
-          minHeight: 48,
+          // Fixed height shared with the sidebar / editor headers so the
+          // three dividers form one continuous line (#65).
+          height: 48,
+          flexShrink: 0,
           boxSizing: "border-box",
           borderBottom: "1px solid",
           borderColor: "divider",
