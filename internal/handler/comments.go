@@ -23,17 +23,17 @@ type CommentContext struct {
 // surfaced as-is; Context is the resolved location (nil when global/orphan);
 // Orphan flags an anchored comment whose snippet no longer matches.
 type CommentJSON struct {
-	ID      string              `json:"id"`
-	Scope   string              `json:"scope"`
-	GroupID string              `json:"group_id,omitempty"`
-	Author  string              `json:"author,omitempty"`
-	Date    string              `json:"date,omitempty"`
-	Body    string              `json:"body"`
-	Status  string              `json:"status"`
-	Replies []reviewstore.Reply  `json:"replies,omitempty"`
 	Anchor  *reviewstore.Anchor  `json:"anchor,omitempty"`
-	Anchors []reviewstore.Anchor `json:"anchors,omitempty"`
 	Context *CommentContext      `json:"context"`
+	ID      string               `json:"id"`
+	Scope   string               `json:"scope"`
+	GroupID string               `json:"group_id,omitempty"`
+	Author  string               `json:"author,omitempty"`
+	Date    string               `json:"date,omitempty"`
+	Body    string               `json:"body"`
+	Status  string               `json:"status"`
+	Replies []reviewstore.Reply  `json:"replies,omitempty"`
+	Anchors []reviewstore.Anchor `json:"anchors,omitempty"`
 	Orphan  bool                 `json:"orphan"`
 }
 

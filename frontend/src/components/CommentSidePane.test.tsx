@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent, within } from "@testing-library/react";
+import { render, screen, fireEvent, within, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { CommentSidePane } from "./CommentSidePane";
 import type { CommentJSON } from "@/api";
@@ -256,5 +256,194 @@ describe("CommentSidePane", () => {
     await user.click(screen.getByTestId("comment-open-detail"));
     expect(screen.getByTestId("comment-detail-dialog")).toBeInTheDocument();
     expect(screen.queryByTestId("comment-detail-reply-input")).not.toBeInTheDocument();
+  });
+
+  it("closes the pane via the header button", async () => {
+    const user = userEvent.setup();
+    const h = renderPane();
+    await user.click(screen.getByTestId("comment-pane-close"));
+    expect(h.onClose).toHaveBeenCalled();
+  });
+
+  it("labels a multi-anchor (cross-section) comment with its heading names", () => {
+    renderPane({
+      comments: [
+        comment("c1", {
+          scope: "cross_section",
+          anchor: undefined,
+          context: null,
+          anchors: [
+            { heading_path: ["# 認証", "## トークン"], snippet: "s1", occurrence: 0 },
+            { heading_path: ["# 認証", "## エラー"], snippet: "s2", occurrence: 0 },
+          ],
+        }),
+      ],
+    });
+    expect(screen.getByTestId("comment-context-c1")).toHaveTextContent(
+      "対象: ## トークン ・ ## エラー"
+    );
+  });
+
+  it("falls back to the anchor snippet when no live context is resolved", () => {
+    renderPane({
+      comments: [
+        comment("c1", {
+          context: null,
+          anchor: { heading_path: [], snippet: "生スニペット", occurrence: 0 },
+        }),
+      ],
+    });
+    expect(screen.getByTestId("comment-context-c1")).toHaveTextContent("対象: 生スニペット");
+  });
+
+  it("shows original targets for an orphan with multiple anchors, without heading", () => {
+    renderPane({
+      comments: [
+        comment("c1", {
+          orphan: true,
+          context: null,
+          anchor: undefined,
+          anchors: [
+            { heading_path: ["## A"], snippet: "s1", occurrence: 0 },
+            { heading_path: [], snippet: "s2", occurrence: 0 },
+          ],
+        }),
+      ],
+    });
+    const ctx = screen.getByTestId("comment-context-c1");
+    expect(ctx).toHaveTextContent("## A › s1 / s2");
+    expect(ctx).toHaveTextContent("現在の本文には見つかりません");
+  });
+
+  it("shows 位置不明 for an orphan without any stored anchor", () => {
+    renderPane({
+      comments: [comment("c1", { orphan: true, context: null, anchor: undefined })],
+    });
+    expect(screen.getByTestId("comment-context-c1")).toHaveTextContent("位置不明 (orphan)");
+  });
+
+  it("cancels an inline edit without calling onEdit", async () => {
+    const user = userEvent.setup();
+    const h = renderPane({ comments: [comment("c1", { body: "original" })] });
+    await user.click(screen.getByTestId("comment-edit"));
+    await user.type(screen.getByTestId("comment-edit-input"), " extra");
+    await user.click(screen.getByRole("button", { name: "キャンセル" }));
+    expect(h.onEdit).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("comment-edit-input")).not.toBeInTheDocument();
+    expect(screen.getByTestId("comment-body")).toHaveTextContent("original");
+  });
+
+  it("submitting an unchanged edit just closes the editor without onEdit", async () => {
+    const user = userEvent.setup();
+    const h = renderPane({ comments: [comment("c1", { body: "same body" })] });
+    await user.click(screen.getByTestId("comment-edit"));
+    await user.click(screen.getByTestId("comment-edit-submit"));
+    expect(h.onEdit).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("comment-edit-input")).not.toBeInTheDocument();
+  });
+
+  it("cancels a reply draft without calling onReply", async () => {
+    const user = userEvent.setup();
+    const h = renderPane({ comments: [comment("c1")] });
+    await user.click(screen.getByTestId("comment-reply-toggle"));
+    await user.type(screen.getByTestId("comment-reply-input"), "下書き");
+    await user.click(screen.getByRole("button", { name: "キャンセル" }));
+    expect(h.onReply).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("comment-reply-input")).not.toBeInTheDocument();
+  });
+
+  it("detail dialog shows the full reply thread", async () => {
+    const user = userEvent.setup();
+    renderPane({
+      comments: [
+        comment("c1", {
+          replies: [
+            { author: "ai", date: "2026-05-21", body: "一次回答" },
+            { body: "追記" },
+          ],
+        }),
+      ],
+    });
+    await user.click(screen.getByTestId("comment-open-detail"));
+    const replies = screen.getAllByTestId("comment-detail-reply");
+    expect(replies).toHaveLength(2);
+    expect(replies[0]).toHaveTextContent("一次回答");
+    expect(replies[1]).toHaveTextContent("追記");
+  });
+
+  it("edits the comment body from the detail dialog", async () => {
+    const user = userEvent.setup();
+    const h = renderPane({ comments: [comment("c1", { body: "old" })] });
+    await user.click(screen.getByTestId("comment-open-detail"));
+    await user.click(screen.getByTestId("comment-detail-edit"));
+    const input = screen.getByTestId("comment-detail-edit-input");
+    await user.clear(input);
+    await user.type(input, "detail edited");
+    await user.click(screen.getByTestId("comment-detail-edit-submit"));
+    expect(h.onEdit).toHaveBeenCalledWith("c1", "detail edited");
+    expect(screen.queryByTestId("comment-detail-edit-input")).not.toBeInTheDocument();
+  });
+
+  it("detail edit submit with unchanged body closes without onEdit", async () => {
+    const user = userEvent.setup();
+    const h = renderPane({ comments: [comment("c1", { body: "keep me" })] });
+    await user.click(screen.getByTestId("comment-open-detail"));
+    await user.click(screen.getByTestId("comment-detail-edit"));
+    await user.click(screen.getByTestId("comment-detail-edit-submit"));
+    expect(h.onEdit).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("comment-detail-edit-input")).not.toBeInTheDocument();
+  });
+
+  it("cancels a detail edit without calling onEdit", async () => {
+    const user = userEvent.setup();
+    const h = renderPane({ comments: [comment("c1", { body: "old" })] });
+    await user.click(screen.getByTestId("comment-open-detail"));
+    await user.click(screen.getByTestId("comment-detail-edit"));
+    await user.type(screen.getByTestId("comment-detail-edit-input"), " more");
+    const dialog = screen.getByTestId("comment-detail-dialog");
+    await user.click(within(dialog).getByRole("button", { name: "キャンセル" }));
+    expect(h.onEdit).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("comment-detail-edit-input")).not.toBeInTheDocument();
+  });
+
+  it("deletes from the detail dialog and closes it", async () => {
+    const user = userEvent.setup();
+    const h = renderPane({ comments: [comment("c1")] });
+    await user.click(screen.getByTestId("comment-open-detail"));
+    await user.click(screen.getByTestId("comment-detail-delete"));
+    expect(h.onDelete).toHaveBeenCalledWith("c1");
+    await waitFor(() =>
+      expect(screen.queryByTestId("comment-detail-dialog")).not.toBeInTheDocument()
+    );
+  });
+
+  it("jumps from the detail dialog's context label and closes it", async () => {
+    const user = userEvent.setup();
+    const h = renderPane({ comments: [comment("c1")] });
+    await user.click(screen.getByTestId("comment-open-detail"));
+    const dialog = screen.getByTestId("comment-detail-dialog");
+    await user.click(within(dialog).getByText(/対象:/));
+    expect(h.onJump).toHaveBeenCalledWith("c1");
+    await waitFor(() =>
+      expect(screen.queryByTestId("comment-detail-dialog")).not.toBeInTheDocument()
+    );
+  });
+
+  it("closes the detail dialog via 閉じる", async () => {
+    const user = userEvent.setup();
+    renderPane({ comments: [comment("c1")] });
+    await user.click(screen.getByTestId("comment-open-detail"));
+    await user.click(screen.getByRole("button", { name: "閉じる" }));
+    await waitFor(() =>
+      expect(screen.queryByTestId("comment-detail-dialog")).not.toBeInTheDocument()
+    );
+  });
+
+  it("reopens a resolved comment from the detail dialog", async () => {
+    const user = userEvent.setup();
+    const h = renderPane({ comments: [comment("c1", { status: "resolved" })] });
+    await user.click(screen.getByTestId("comment-open-detail"));
+    await user.click(screen.getByTestId("comment-detail-resolve-toggle"));
+    expect(h.onResolveToggle).toHaveBeenCalledWith("c1", "open");
   });
 });
