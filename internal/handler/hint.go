@@ -4,8 +4,9 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"regexp"
 	"strings"
+
+	"markdown-reviewer/internal/reviewstore"
 )
 
 // hintEnv is the env var that overrides the auto-derived base URL. Useful
@@ -13,19 +14,11 @@ import (
 // reachable via a hostname different from what the Host header says.
 const hintEnv = "MARKDOWN_REVIEWER_BASE_URL"
 
-// hintBlockRe matches a markdown-reviewer AI hint comment at the very top
-// of the file, with any trailing blank lines. Used to strip the previous
-// hint before re-injecting a fresh one so the block never duplicates.
-//
-// The leading `\A` anchors to the file start — we only ever look at the
-// first block, not stray comments mid-file.
-var hintBlockRe = regexp.MustCompile(`(?s)\A<!--\s*markdown-reviewer\b.*?-->\s*\n*`)
-
 // buildAIHint formats the HTML comment that AI clients see when they open
 // a freshly-saved file. The two URLs are the only piece of dynamic state;
 // everything else is deterministic so identical content produces an
 // identical hint and the surrounding `<!-- ... -->` shape stays parseable
-// by hintBlockRe on the next save.
+// by reviewstore.StripAIHint's block matcher on the next save.
 func buildAIHint(baseURL, relPath, rootName string) string {
 	base := strings.TrimSuffix(baseURL, "/")
 	rootQuery := ""
@@ -60,20 +53,10 @@ func buildAIHint(baseURL, relPath, rootName string) string {
 // save, which is the trade-off the project accepts for self-describing
 // access.
 func injectAIHint(content, hint string) string {
-	body := hintBlockRe.ReplaceAllString(content, "")
-	// Avoid an unwanted leading blank line when the rest of the file
-	// already starts with one.
-	body = strings.TrimLeft(body, "\n")
-	return hint + body
-}
-
-// stripAIHint removes the leading markdown-reviewer hint block (if any) so
-// revision snapshots and the diffs computed from them are free of the
-// per-save hint churn — the hint's embedded URLs change every save and would
-// otherwise dominate the diff.
-func stripAIHint(content string) string {
-	body := hintBlockRe.ReplaceAllString(content, "")
-	return strings.TrimLeft(body, "\n")
+	// StripAIHint also trims leading blank lines, avoiding an unwanted blank
+	// line when the rest of the file already starts with one. The stripper
+	// lives in reviewstore because hint-free snapshots are a store invariant.
+	return hint + reviewstore.StripAIHint(content)
 }
 
 // deriveBaseURL picks the base URL to embed in the hint. Precedence:
