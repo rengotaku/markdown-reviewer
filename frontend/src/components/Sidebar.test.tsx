@@ -1,9 +1,10 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { Sidebar } from "./Sidebar";
+import { useUIStore } from "@/hooks/useUIStore";
 
 function renderWithProviders(ui: React.ReactElement, initialPath = "/") {
   const client = new QueryClient({
@@ -17,6 +18,12 @@ function renderWithProviders(ui: React.ReactElement, initialPath = "/") {
 }
 
 describe("Sidebar", () => {
+  beforeEach(() => {
+    // The view mode lives in a module-level persisted store; reset it so a
+    // previous test's "recent" selection doesn't leak into tree-mode tests.
+    useUIStore.setState({ sidebarViewMode: "tree" });
+  });
+
   it("renders only top-level entries (lazy-collapsed by default)", async () => {
     const onSelect = vi.fn();
     renderWithProviders(<Sidebar onSelect={onSelect} />);
@@ -137,5 +144,177 @@ describe("Sidebar", () => {
     expect(screen.getByTestId("sidebar-no-match")).toBeInTheDocument();
     // Files at top level remain visible regardless of filter.
     expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument();
+  });
+});
+
+describe("Sidebar recent view (#68)", () => {
+  beforeEach(() => {
+    useUIStore.setState({ sidebarViewMode: "tree" });
+  });
+
+  it("toggle switches between tree and recent list", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<Sidebar onSelect={() => {}} />);
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-dir-docs")).toBeInTheDocument()
+    );
+
+    await user.click(screen.getByTestId("sidebar-view-recent"));
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("sidebar-recent-file-docs/intro.md")
+      ).toBeInTheDocument()
+    );
+    // Tree entries are gone while the flat list is shown.
+    expect(screen.queryByTestId("sidebar-dir-docs")).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId("sidebar-view-tree"));
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-dir-docs")).toBeInTheDocument()
+    );
+    expect(
+      screen.queryByTestId("sidebar-recent-file-docs/intro.md")
+    ).not.toBeInTheDocument();
+  });
+
+  it("persists the chosen view mode via the UI store", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<Sidebar onSelect={() => {}} />);
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-dir-docs")).toBeInTheDocument()
+    );
+
+    await user.click(screen.getByTestId("sidebar-view-recent"));
+    expect(useUIStore.getState().sidebarViewMode).toBe("recent");
+
+    const raw = localStorage.getItem("markdown-reviewer-ui");
+    expect(raw).not.toBeNull();
+    expect(
+      (JSON.parse(raw as string) as { state: { sidebarViewMode: string } }).state
+        .sidebarViewMode
+    ).toBe("recent");
+  });
+
+  it("lists all files sorted by modified descending", async () => {
+    useUIStore.setState({ sidebarViewMode: "recent" });
+    renderWithProviders(<Sidebar onSelect={() => {}} />);
+
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("sidebar-recent-file-docs/intro.md")
+      ).toBeInTheDocument()
+    );
+
+    // MSW returns README(05-18) / intro(05-21) / spec(05-20) → newest first.
+    const items = screen.getAllByTestId(/^sidebar-recent-file-/);
+    expect(items.map((el) => el.getAttribute("data-testid"))).toEqual([
+      "sidebar-recent-file-docs/intro.md",
+      "sidebar-recent-file-docs/api/spec.md",
+      "sidebar-recent-file-README.md",
+    ]);
+  });
+
+  it("renders each entry as folder path + file name (root files show /)", async () => {
+    useUIStore.setState({ sidebarViewMode: "recent" });
+    renderWithProviders(<Sidebar onSelect={() => {}} />);
+
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("sidebar-recent-file-docs/api/spec.md")
+      ).toBeInTheDocument()
+    );
+
+    const nested = screen.getByTestId("sidebar-recent-file-docs/api/spec.md");
+    expect(
+      screen.getByTestId("sidebar-recent-dir-docs/api/spec.md")
+    ).toHaveTextContent("docs/api");
+    expect(nested).toHaveTextContent("spec.md");
+
+    // Root-level file: the folder line falls back to "/".
+    expect(
+      screen.getByTestId("sidebar-recent-dir-README.md")
+    ).toHaveTextContent("/");
+  });
+
+  it("invokes onSelect with the file path when a recent entry is clicked", async () => {
+    useUIStore.setState({ sidebarViewMode: "recent" });
+    const user = userEvent.setup();
+    const onSelect = vi.fn();
+    renderWithProviders(<Sidebar onSelect={onSelect} />);
+
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("sidebar-recent-file-docs/intro.md")
+      ).toBeInTheDocument()
+    );
+
+    await user.click(screen.getByTestId("sidebar-recent-file-docs/intro.md"));
+    expect(onSelect).toHaveBeenCalledWith("docs/intro.md");
+  });
+
+  it("highlights the active file like the tree does", async () => {
+    useUIStore.setState({ sidebarViewMode: "recent" });
+    renderWithProviders(
+      <Sidebar activePath="docs/intro.md" onSelect={() => {}} />
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("sidebar-recent-file-docs/intro.md")
+      ).toBeInTheDocument()
+    );
+
+    expect(screen.getByTestId("sidebar-recent-file-docs/intro.md")).toHaveClass(
+      "Mui-selected"
+    );
+    expect(
+      screen.getByTestId("sidebar-recent-file-README.md")
+    ).not.toHaveClass("Mui-selected");
+  });
+
+  it("filters the flat list by partial path match", async () => {
+    useUIStore.setState({ sidebarViewMode: "recent" });
+    const user = userEvent.setup();
+    renderWithProviders(<Sidebar onSelect={() => {}} />);
+
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("sidebar-recent-file-docs/intro.md")
+      ).toBeInTheDocument()
+    );
+
+    // Matches path segments, not just the file name.
+    await user.type(screen.getByTestId("sidebar-filter"), "api");
+    await waitFor(() =>
+      expect(
+        screen.queryByTestId("sidebar-recent-file-docs/intro.md")
+      ).not.toBeInTheDocument()
+    );
+    expect(
+      screen.getByTestId("sidebar-recent-file-docs/api/spec.md")
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByTestId("sidebar-recent-file-README.md")
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows a no-match note when the filter matches no file", async () => {
+    useUIStore.setState({ sidebarViewMode: "recent" });
+    const user = userEvent.setup();
+    renderWithProviders(<Sidebar onSelect={() => {}} />);
+
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("sidebar-recent-file-docs/intro.md")
+      ).toBeInTheDocument()
+    );
+
+    await user.type(screen.getByTestId("sidebar-filter"), "zzz-no-match");
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-no-match")).toBeInTheDocument()
+    );
+    expect(
+      screen.queryByTestId("sidebar-recent-file-docs/intro.md")
+    ).not.toBeInTheDocument();
   });
 });
