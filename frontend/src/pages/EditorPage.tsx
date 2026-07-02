@@ -763,8 +763,11 @@ export function EditorPage() {
             sx={{
               pl: 0.5,
               pr: 1.5,
-              py: 1,
-              minHeight: 48,
+              // Fixed (not min) height, shared by all three pane headers, so
+              // the header divider stays one continuous line regardless of
+              // which pane holds the tallest control (#65).
+              height: 48,
+              flexShrink: 0,
               boxSizing: "border-box",
               borderBottom: "1px solid",
               borderColor: "divider",
@@ -817,8 +820,10 @@ export function EditorPage() {
             alignItems: "center",
             gap: 1,
             px: 2,
-            py: 1,
-            minHeight: 48,
+            // Fixed height shared with the sidebar / comment pane headers so
+            // the three dividers form one continuous line (#65).
+            height: 48,
+            flexShrink: 0,
             boxSizing: "border-box",
             borderBottom: "1px solid",
             borderColor: "divider",
