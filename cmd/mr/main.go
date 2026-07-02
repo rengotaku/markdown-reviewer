@@ -92,6 +92,12 @@ func readForReview(path string) (rel, content string, comments []reviewstore.Com
 	if err != nil {
 		return "", "", nil, err
 	}
+	// Re-anchor after an out-of-band edit (the AI workflow edits the .md on
+	// disk directly, bypassing the server's PUT re-anchor). A sync failure
+	// must never block the read — worst case is the pre-sync orphans.
+	if _, serr := reviewstore.SyncExternalEdit(root, rel, string(data)); serr != nil {
+		fmt.Fprintln(os.Stderr, "mr: warning: external-edit sync failed: "+serr.Error())
+	}
 	review, err := reviewstore.ReadReview(root, rel)
 	if err != nil {
 		return "", "", nil, err
