@@ -4,7 +4,7 @@ import { useUIStore } from "./useUIStore";
 describe("useUIStore", () => {
   beforeEach(() => {
     // Reset store state before each test
-    useUIStore.setState({ isSidebarOpen: true });
+    useUIStore.setState({ isSidebarOpen: true, sidebarViewMode: "tree" });
   });
 
   it("has sidebar open by default", () => {
@@ -55,5 +55,29 @@ describe("useUIStore", () => {
     expect(useUIStore.getState().selectedDirPath).toBe("docs/api");
     setSelectedDirPath(null);
     expect(useUIStore.getState().selectedDirPath).toBeNull();
+  });
+
+  it("defaults the sidebar view mode to tree", () => {
+    expect(useUIStore.getState().sidebarViewMode).toBe("tree");
+  });
+
+  it("switches the sidebar view mode", () => {
+    const { setSidebarViewMode } = useUIStore.getState();
+
+    setSidebarViewMode("recent");
+    expect(useUIStore.getState().sidebarViewMode).toBe("recent");
+    setSidebarViewMode("tree");
+    expect(useUIStore.getState().sidebarViewMode).toBe("tree");
+  });
+
+  it("persists only the sidebar view mode to localStorage", () => {
+    useUIStore.getState().setSidebarViewMode("recent");
+
+    const raw = localStorage.getItem("markdown-reviewer-ui");
+    expect(raw).not.toBeNull();
+    const persisted = JSON.parse(raw as string) as {
+      state: Record<string, unknown>;
+    };
+    expect(persisted.state).toEqual({ sidebarViewMode: "recent" });
   });
 });

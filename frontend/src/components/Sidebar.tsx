@@ -11,17 +11,24 @@ import ListItemText from "@mui/material/ListItemText";
 import Menu from "@mui/material/Menu";
 import MenuItem from "@mui/material/MenuItem";
 import TextField from "@mui/material/TextField";
+import ToggleButton from "@mui/material/ToggleButton";
+import ToggleButtonGroup from "@mui/material/ToggleButtonGroup";
+import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
+import AccountTreeIcon from "@mui/icons-material/AccountTree";
 import ChevronRight from "@mui/icons-material/ChevronRight";
 import ClearIcon from "@mui/icons-material/Clear";
 import ExpandMore from "@mui/icons-material/ExpandMore";
 import FolderOpen from "@mui/icons-material/FolderOpen";
 import InsertDriveFile from "@mui/icons-material/InsertDriveFile";
+import ScheduleIcon from "@mui/icons-material/Schedule";
 import { useSearchParams } from "react-router-dom";
 import { useDir } from "@/hooks/useDir";
+import { useFiles } from "@/hooks/useFiles";
 import { useActiveRoot } from "@/hooks/useActiveRoot";
 import { useToast } from "@/hooks/useToast";
-import { useUIStore } from "@/hooks/useUIStore";
+import { useUIStore, type SidebarViewMode } from "@/hooks/useUIStore";
+import { formatLocalTimestamp } from "@/utils/formatTimestamp";
 import type { DirEntryApi } from "@/api";
 
 interface SidebarProps {
@@ -46,6 +53,8 @@ export function Sidebar({ activePath, onSelect }: SidebarProps) {
   );
   const showToast = useToast((s) => s.show);
   const selectedDirPath = useUIStore((s) => s.selectedDirPath);
+  const viewMode = useUIStore((s) => s.sidebarViewMode);
+  const setSidebarViewMode = useUIStore((s) => s.setSidebarViewMode);
   const { activePath: reviewRoot } = useActiveRoot();
 
   const buildFullPath = (path: string): string => {
@@ -86,7 +95,12 @@ export function Sidebar({ activePath, onSelect }: SidebarProps) {
     );
   };
 
-  const { data, isLoading, isError, error } = useDir("");
+  // The tree query is paused while the recent list is shown so only the
+  // visible view polls the server; switching back re-enables (and refetches
+  // when stale).
+  const { data, isLoading, isError, error } = useDir("", {
+    enabled: viewMode === "tree",
+  });
 
   // Filter applies ONLY to top-level directories.
   // Top-level files and any nested entries are unaffected.
@@ -109,13 +123,26 @@ export function Sidebar({ activePath, onSelect }: SidebarProps) {
         flexDirection: "column",
       }}
     >
-      <Box sx={{ p: 1, borderBottom: "1px solid", borderColor: "divider" }}>
+      <Box
+        sx={{
+          p: 1,
+          borderBottom: "1px solid",
+          borderColor: "divider",
+          display: "flex",
+          alignItems: "center",
+          gap: 1,
+        }}
+      >
         <TextField
           value={filter}
           onChange={(e) => updateFilter(e.target.value)}
-          placeholder="直下のディレクトリ名でフィルタ"
+          placeholder={
+            viewMode === "recent"
+              ? "ファイル名・パスでフィルタ"
+              : "直下のディレクトリ名でフィルタ"
+          }
           size="small"
-          fullWidth
+          sx={{ flex: 1, minWidth: 0 }}
           inputProps={{ "data-testid": "sidebar-filter" }}
           InputProps={{
             endAdornment: filter ? (
@@ -132,10 +159,49 @@ export function Sidebar({ activePath, onSelect }: SidebarProps) {
             ) : null,
           }}
         />
+        <ToggleButtonGroup
+          value={viewMode}
+          exclusive
+          size="small"
+          onChange={(_, next) => {
+            // null = click on the already-active button; keep the mode.
+            if (next !== null) setSidebarViewMode(next as SidebarViewMode);
+          }}
+          aria-label="サイドバーの表示モード"
+          data-testid="sidebar-view-mode"
+        >
+          <ToggleButton
+            value="tree"
+            aria-label="ツリー表示"
+            sx={{ py: 0.25 }}
+            data-testid="sidebar-view-tree"
+          >
+            <Tooltip title="ツリー表示">
+              <AccountTreeIcon fontSize="small" />
+            </Tooltip>
+          </ToggleButton>
+          <ToggleButton
+            value="recent"
+            aria-label="更新順表示"
+            sx={{ py: 0.25 }}
+            data-testid="sidebar-view-recent"
+          >
+            <Tooltip title="更新順表示">
+              <ScheduleIcon fontSize="small" />
+            </Tooltip>
+          </ToggleButton>
+        </ToggleButtonGroup>
       </Box>
 
       <Box sx={{ flex: 1, overflow: "auto" }}>
-        {isLoading ? (
+        {viewMode === "recent" ? (
+          <RecentList
+            filter={filter}
+            activePath={activePath}
+            onSelect={onSelect}
+            onContextMenu={openContextMenu}
+          />
+        ) : isLoading ? (
           <Box className="flex items-center justify-center p-4">
             <CircularProgress size={20} />
           </Box>
@@ -363,6 +429,140 @@ function DirChildren({
           onContextMenu={onContextMenu}
         />
       ))}
+    </>
+  );
+}
+
+// Directory portion of a path for the recent list's first line. Root-level
+// files show "/" so the line is never blank.
+function dirLabel(path: string): string {
+  const idx = path.lastIndexOf("/");
+  return idx === -1 ? "/" : path.slice(0, idx);
+}
+
+function baseName(path: string): string {
+  const idx = path.lastIndexOf("/");
+  return idx === -1 ? path : path.slice(idx + 1);
+}
+
+interface RecentListProps {
+  filter: string;
+  activePath?: string;
+  onSelect: (path: string) => void;
+  onContextMenu: (e: React.MouseEvent, entry: DirEntryApi) => void;
+}
+
+/**
+ * Flat "recent" view (#68): every file under the root, newest modification
+ * first, each rendered as folder-path + file-name two-liner. Data comes from
+ * the /api/files listing — like /api/dirs it only ever returns .md files, so
+ * no client-side extension filtering is needed.
+ */
+function RecentList({ filter, activePath, onSelect, onContextMenu }: RecentListProps) {
+  const { data, isLoading, isError, error } = useFiles();
+
+  if (isLoading) {
+    return (
+      <Box className="flex items-center justify-center p-4">
+        <CircularProgress size={20} />
+      </Box>
+    );
+  }
+  if (isError) {
+    return (
+      <Box className="p-3">
+        <Alert severity="error" variant="outlined">
+          ファイル一覧の取得に失敗しました: {error?.message ?? "unknown error"}
+        </Alert>
+      </Box>
+    );
+  }
+
+  const files = data?.files ?? [];
+  if (files.length === 0) {
+    return (
+      <Box className="p-4">
+        <Typography variant="body2" color="text.secondary">
+          .md ファイルが見つかりませんでした
+        </Typography>
+      </Box>
+    );
+  }
+
+  // Newest first. RFC3339 strings with mixed timezone offsets don't sort
+  // lexicographically, so compare parsed epoch values.
+  const sorted = [...files].sort(
+    (a, b) => Date.parse(b.modified) - Date.parse(a.modified)
+  );
+  // Unlike the tree (top-level dirs only), the flat list matches the filter
+  // against the whole path so files can be narrowed by name or folder.
+  const filterLower = filter.toLowerCase();
+  const visible = filterLower
+    ? sorted.filter((f) => f.path.toLowerCase().includes(filterLower))
+    : sorted;
+
+  return (
+    <>
+      <List dense disablePadding>
+        {visible.map((file) => {
+          const name = baseName(file.path);
+          return (
+            <ListItemButton
+              key={file.path}
+              onClick={() => onSelect(file.path)}
+              onContextMenu={(e) =>
+                onContextMenu(e, {
+                  name,
+                  path: file.path,
+                  type: "file",
+                  modified: file.modified,
+                })
+              }
+              selected={file.path === activePath}
+              sx={{ px: 1.5, py: 0.5 }}
+              data-testid={`sidebar-recent-file-${file.path}`}
+            >
+              <Box sx={{ minWidth: 0, width: "100%" }}>
+                <Box
+                  sx={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "baseline",
+                    gap: 1,
+                  }}
+                >
+                  <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    noWrap
+                    sx={{ minWidth: 0 }}
+                    data-testid={`sidebar-recent-dir-${file.path}`}
+                  >
+                    {dirLabel(file.path)}
+                  </Typography>
+                  <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    sx={{ flexShrink: 0 }}
+                  >
+                    {formatLocalTimestamp(file.modified)}
+                  </Typography>
+                </Box>
+                <Typography variant="body2" noWrap>
+                  {name}
+                </Typography>
+              </Box>
+            </ListItemButton>
+          );
+        })}
+      </List>
+      {filter && visible.length === 0 && (
+        <Box sx={{ p: 2 }} data-testid="sidebar-no-match">
+          <Typography variant="caption" color="text.secondary">
+            「{filter}」に一致するファイルはありません
+          </Typography>
+        </Box>
+      )}
     </>
   );
 }
