@@ -31,7 +31,13 @@ export function RootTabs() {
       sx={{
         borderBottom: "1px solid",
         borderColor: "divider",
-        minHeight: 36,
+        // Fixed (not min) height, matching the editor file tab bar: 36px of
+        // content + the 1px bottom border (global border-box), so the
+        // second-row divider stays one continuous line across the panes (#65).
+        height: 37,
+        flexShrink: 0,
+        boxSizing: "border-box",
+        overflow: "hidden",
       }}
       data-testid="root-tabs"
     >

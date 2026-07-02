@@ -206,7 +206,14 @@ export function CommentSidePane({
       <Box
         sx={{
           px: 1.5,
-          py: 0.75,
+          // Same fixed height as the editor file tab bar: 36px of content +
+          // the 1px bottom border (global border-box), so the three
+          // second-row dividers form one continuous line across the panes (#65).
+          height: 37,
+          flexShrink: 0,
+          boxSizing: "border-box",
+          display: "flex",
+          alignItems: "center",
           borderBottom: "1px solid",
           borderColor: "divider",
         }}
