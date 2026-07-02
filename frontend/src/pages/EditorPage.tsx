@@ -340,7 +340,11 @@ export function EditorPage() {
   useFileWatcher();
 
   const handleRefreshTree = () => {
+    // The sidebar has two data sources — the lazy tree ("dir") and the flat
+    // recent list ("files") — refresh both so the button works in either
+    // view mode (#68).
     void queryClient.invalidateQueries({ queryKey: ["dir"] });
+    void queryClient.invalidateQueries({ queryKey: ["files"] });
   };
 
   useDirChangeWatcher({
@@ -796,7 +800,7 @@ export function EditorPage() {
                 {reviewRootName}
               </Typography>
             </Tooltip>
-            <Tooltip title="ファイルツリーを再読み込み">
+            <Tooltip title="ファイル一覧を再読み込み">
               <IconButton
                 size="small"
                 onClick={handleRefreshTree}

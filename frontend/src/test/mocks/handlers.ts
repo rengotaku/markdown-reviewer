@@ -136,11 +136,14 @@ export const handlers = [
   http.get(`${API_BASE}/api/files`, ({ request }) => {
     const url = new URL(request.url);
     const root = url.searchParams.get("root") ?? "mock-root";
+    // Distinct, deliberately non-path-ordered timestamps so the sidebar's
+    // recent view has a meaningful modified-desc order to assert on:
+    // docs/intro.md (newest) → docs/api/spec.md → README.md (oldest).
     return HttpResponse.json({
       root,
       files: [
-        { path: "README.md", size: 12, modified: "2026-05-20T00:00:00Z" },
-        { path: "docs/intro.md", size: 34, modified: "2026-05-20T00:00:00Z" },
+        { path: "README.md", size: 12, modified: "2026-05-18T00:00:00Z" },
+        { path: "docs/intro.md", size: 34, modified: "2026-05-21T00:00:00Z" },
         { path: "docs/api/spec.md", size: 56, modified: "2026-05-20T00:00:00Z" },
       ],
     });
