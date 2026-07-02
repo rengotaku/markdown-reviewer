@@ -56,11 +56,11 @@ func unansweredComments(comments []reviewstore.Comment) []reviewstore.Comment {
 
 // inboxEntry is one file that has comments, with counts and recency for sorting.
 type inboxEntry struct {
+	modTime time.Time
 	root    string
 	rel     string
 	open    int
 	total   int
-	modTime time.Time
 }
 
 // cmdInbox scans every configured root's sidecar store and lists the files that
@@ -131,11 +131,11 @@ func cmdInbox(args []string) error {
 	})
 
 	if len(entries) == 0 {
-		fmt.Fprintln(os.Stdout, "open コメントを持つファイルはありません。")
+		_, _ = fmt.Fprintln(os.Stdout, "open コメントを持つファイルはありません。")
 		return nil
 	}
 	for _, e := range entries {
-		fmt.Fprintf(os.Stdout, "%s  [%s] %s  (open %d / 全 %d)\n",
+		_, _ = fmt.Fprintf(os.Stdout, "%s  [%s] %s  (open %d / 全 %d)\n",
 			e.modTime.Local().Format("2006-01-02 15:04"), e.root, e.rel, e.open, e.total)
 	}
 	return nil

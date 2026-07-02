@@ -399,3 +399,116 @@ describe("useOpenFiles", () => {
     expect(useOpenFiles.getState().files).toHaveLength(2);
   });
 });
+
+describe("useOpenFiles guards and recovery", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    useOpenFiles.setState({ files: [], activeIdByRoot: {} });
+  });
+
+  it("addFiles / overwriteFiles with empty input are no-ops", () => {
+    const before = useOpenFiles.getState();
+    useOpenFiles.getState().addFiles([]);
+    useOpenFiles.getState().overwriteFiles(ROOT, []);
+    expect(useOpenFiles.getState().files).toBe(before.files);
+  });
+
+  it("mutators targeting unknown ids or inactive roots are no-ops", () => {
+    useOpenFiles.getState().addFiles([{ name: "a.md", root: ROOT, markdown: "# A" }]);
+    const before = useOpenFiles.getState().files;
+
+    useOpenFiles.getState().setActive(ROOT, "missing-id");
+    useOpenFiles.getState().closeFile("missing-id");
+    useOpenFiles.getState().closeOthers("missing-id");
+    useOpenFiles.getState().closeToRight("missing-id");
+    useOpenFiles.getState().updateActiveMarkdown("other-root", "# X");
+    useOpenFiles.getState().markActiveSaved("other-root");
+    useOpenFiles.getState().discardActiveChanges("other-root");
+    useOpenFiles.getState().applyExternalReload("missing-id", "# X", "2026-01-01T00:00:00Z");
+    useOpenFiles.getState().acknowledgeExternalChange("missing-id", "2026-01-01T00:00:00Z");
+
+    expect(useOpenFiles.getState().files).toEqual(before);
+    expect(activeId()).toBe(before[0].id);
+  });
+
+  it("discardActiveChanges restores the saved baseline and bumps reloadToken", () => {
+    useOpenFiles.getState().addFiles([{ name: "a.md", root: ROOT, markdown: "# A" }]);
+    useOpenFiles.getState().updateActiveMarkdown(ROOT, "# dirty edit");
+    expect(useOpenFiles.getState().files[0].isDirty).toBe(true);
+
+    useOpenFiles.getState().discardActiveChanges(ROOT);
+    const f = useOpenFiles.getState().files[0];
+    expect(f.markdown).toBe("# A");
+    expect(f.isDirty).toBe(false);
+    expect(f.reloadToken).toBe(1);
+  });
+
+  it("applyExternalReload swaps content and records the new server mtime", () => {
+    useOpenFiles.getState().addFiles([{ name: "a.md", root: ROOT, markdown: "# A" }]);
+    const id = useOpenFiles.getState().files[0].id;
+    useOpenFiles
+      .getState()
+      .applyExternalReload(id, "# external", "2026-06-01T00:00:00Z", "2026-05-01T00:00:00Z");
+    const f = useOpenFiles.getState().files[0];
+    expect(f.markdown).toBe("# external");
+    expect(f.savedMarkdown).toBe("# external");
+    expect(f.isDirty).toBe(false);
+    expect(f.reloadToken).toBe(1);
+    expect(f.initialHash).toBe(simpleHash("# external"));
+    expect(f.serverModified).toBe("2026-06-01T00:00:00Z");
+    expect(f.serverCreated).toBe("2026-05-01T00:00:00Z");
+  });
+
+  it("acknowledgeExternalChange records the mtime without touching content", () => {
+    useOpenFiles.getState().addFiles([{ name: "a.md", root: ROOT, markdown: "# A" }]);
+    useOpenFiles.getState().updateActiveMarkdown(ROOT, "# keep my edit");
+    const id = useOpenFiles.getState().files[0].id;
+    useOpenFiles.getState().acknowledgeExternalChange(id, "2026-06-02T00:00:00Z");
+    const f = useOpenFiles.getState().files[0];
+    expect(f.serverModified).toBe("2026-06-02T00:00:00Z");
+    expect(f.markdown).toBe("# keep my edit");
+    expect(f.isDirty).toBe(true);
+  });
+
+  it("migrates a version-1 persisted payload onto the placeholder root", async () => {
+    localStorage.setItem(
+      "markdown-reviewer-open-files",
+      JSON.stringify({
+        version: 1,
+        state: {
+          files: [{ id: "legacy-1", name: "old.md", markdown: "# Old" }],
+          activeId: "legacy-1",
+        },
+      })
+    );
+    await useOpenFiles.persist.rehydrate();
+
+    const state = useOpenFiles.getState();
+    expect(state.files).toHaveLength(1);
+    const f = state.files[0];
+    // migrate() parks legacy entries on root "" and onRehydrateStorage
+    // backfills the fields the v1 schema didn't have.
+    expect(f.root).toBe("");
+    expect(f.path).toBe("old.md");
+    expect(f.savedMarkdown).toBe("# Old");
+    expect(f.initialHash).toBe(simpleHash("# Old"));
+    expect(f.serverModified).toBe("");
+    expect(f.serverCreated).toBe("");
+    expect(state.activeIdByRoot[""]).toBe("legacy-1");
+  });
+
+  it("drops stale active ids whose files are gone on rehydrate", async () => {
+    localStorage.setItem(
+      "markdown-reviewer-open-files",
+      JSON.stringify({
+        version: 2,
+        state: {
+          files: [],
+          activeIdByRoot: { works: "gone-id" },
+        },
+      })
+    );
+    await useOpenFiles.persist.rehydrate();
+    expect(useOpenFiles.getState().activeIdByRoot["works"]).toBeNull();
+  });
+});

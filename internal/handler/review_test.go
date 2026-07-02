@@ -24,11 +24,11 @@ func useTempReviewStore(t *testing.T) {
 	t.Setenv("REVIEWER_CONFIG_DIR", t.TempDir())
 }
 
-func putFile(t *testing.T, h *handler.Handler, path, content string) *httptest.ResponseRecorder {
+func putFile(t *testing.T, h *handler.Handler, content string) *httptest.ResponseRecorder {
 	t.Helper()
 	body, err := json.Marshal(handler.FileWriteRequest{Content: content})
 	require.NoError(t, err)
-	req := httptest.NewRequest(http.MethodPut, "/api/files/"+path, bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPut, "/api/files/doc.md", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	return serve(h, req)
 }
@@ -76,7 +76,7 @@ func TestRevisions_DraftHasEmptyHistory(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(root, "doc.md"), []byte("# hi\n"), 0o644))
 
 	// Saving a draft file records no history.
-	require.Equal(t, http.StatusOK, putFile(t, h, "doc.md", "# changed\n").Code)
+	require.Equal(t, http.StatusOK, putFile(t, h, "# changed\n").Code)
 
 	rec := serve(h, httptest.NewRequest(http.MethodGet, "/api/revisions/doc.md", nil))
 	require.Equal(t, http.StatusOK, rec.Code)
@@ -94,10 +94,10 @@ func TestRevisions_SnapshotsOnWrite(t *testing.T) {
 	require.Equal(t, http.StatusOK, serve(h, httptest.NewRequest(http.MethodPost, "/api/ingest/doc.md", nil)).Code)
 
 	// First write snapshots the on-disk "# v0" (pre-overwrite).
-	require.Equal(t, http.StatusOK, putFile(t, h, "doc.md", "# v1\n").Code)
+	require.Equal(t, http.StatusOK, putFile(t, h, "# v1\n").Code)
 	// Second write snapshots "# v1" (which now carries an AI hint on disk —
 	// the snapshot must strip it).
-	require.Equal(t, http.StatusOK, putFile(t, h, "doc.md", "# v2\n").Code)
+	require.Equal(t, http.StatusOK, putFile(t, h, "# v2\n").Code)
 
 	rec := serve(h, httptest.NewRequest(http.MethodGet, "/api/revisions/doc.md", nil))
 	require.Equal(t, http.StatusOK, rec.Code)
@@ -135,8 +135,8 @@ func TestRevisions_DedupeUnchangedSaves(t *testing.T) {
 
 	// Two identical saves of the same new content: the second save's
 	// pre-overwrite snapshot equals the first's, so it dedupes.
-	require.Equal(t, http.StatusOK, putFile(t, h, "doc.md", "# same\n").Code)
-	require.Equal(t, http.StatusOK, putFile(t, h, "doc.md", "# same\n").Code)
+	require.Equal(t, http.StatusOK, putFile(t, h, "# same\n").Code)
+	require.Equal(t, http.StatusOK, putFile(t, h, "# same\n").Code)
 
 	rec := serve(h, httptest.NewRequest(http.MethodGet, "/api/revisions/doc.md", nil))
 	var list handler.RevisionListResponse

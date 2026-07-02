@@ -39,8 +39,8 @@ var ErrCommentResolved = errors.New("reviewstore: comment is resolved")
 // disambiguates identical snippets. A miss yields an orphan (honest failure)
 // rather than a silent mis-anchor.
 type Anchor struct {
-	HeadingPath []string `json:"heading_path"`
 	Snippet     string   `json:"snippet"`
+	HeadingPath []string `json:"heading_path"`
 	Occurrence  int      `json:"occurrence"`
 }
 
@@ -68,8 +68,8 @@ type Comment struct {
 
 // Review is the review.json document.
 type Review struct {
-	Version  int       `json:"version"`
 	Comments []Comment `json:"comments"`
+	Version  int       `json:"version"`
 }
 
 // ReadReview loads review.json. A missing file (not ingested, or freshly
