@@ -35,8 +35,8 @@ func TestCommentCRUD(t *testing.T) {
 	}
 
 	// Reply + resolve.
-	if _, err := AddReply(root, rel, "c-001", Reply{Author: "ai", Body: "対応しました"}); err != nil {
-		t.Fatalf("AddReply: %v", err)
+	if _, rerr := AddReply(root, rel, "c-001", Reply{Author: "ai", Body: "対応しました"}); rerr != nil {
+		t.Fatalf("AddReply: %v", rerr)
 	}
 	updated, err := UpdateCommentStatus(root, rel, "c-001", StatusResolved)
 	if err != nil {

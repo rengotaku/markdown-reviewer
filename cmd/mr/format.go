@@ -12,7 +12,7 @@ import (
 // shape as the server's GET /api/review — resolving each anchor to a line
 // number (or flagging it orphaned) against the canonical content.
 func renderReview(w io.Writer, rel, content string, comments []reviewstore.Comment, onlyOpen bool) {
-	fmt.Fprintf(w, "# レビュー: %s\n\n", rel)
+	_, _ = fmt.Fprintf(w, "# レビュー: %s\n\n", rel)
 	shown := 0
 	for _, cm := range comments {
 		if onlyOpen && cm.Status != reviewstore.StatusOpen {
@@ -23,9 +23,9 @@ func renderReview(w io.Writer, rel, content string, comments []reviewstore.Comme
 	}
 	if shown == 0 {
 		if onlyOpen {
-			fmt.Fprintln(w, "open コメントはありません。")
+			_, _ = fmt.Fprintln(w, "open コメントはありません。")
 		} else {
-			fmt.Fprintln(w, "コメントはありません。")
+			_, _ = fmt.Fprintln(w, "コメントはありません。")
 		}
 	}
 }
@@ -33,22 +33,22 @@ func renderReview(w io.Writer, rel, content string, comments []reviewstore.Comme
 // renderComment writes one comment block: id, scope, resolved location(s),
 // target snippet(s), status, body, and threaded replies.
 func renderComment(w io.Writer, content string, cm reviewstore.Comment) {
-	fmt.Fprintf(w, "## %s [%s] %s\n\n", cm.ID, cm.Scope, commentLocation(content, cm))
+	_, _ = fmt.Fprintf(w, "## %s [%s] %s\n\n", cm.ID, cm.Scope, commentLocation(content, cm))
 	for _, sn := range snippets(cm) {
 		if sn != "" {
-			fmt.Fprintf(w, "> 対象: %s\n\n", sn)
+			_, _ = fmt.Fprintf(w, "> 対象: %s\n\n", sn)
 		}
 	}
-	fmt.Fprintf(w, "- 状態: %s\n", cm.Status)
-	fmt.Fprintf(w, "- 指摘: %s\n", cm.Body)
+	_, _ = fmt.Fprintf(w, "- 状態: %s\n", cm.Status)
+	_, _ = fmt.Fprintf(w, "- 指摘: %s\n", cm.Body)
 	for _, rep := range cm.Replies {
 		who := rep.Author
 		if who == "" {
 			who = "?"
 		}
-		fmt.Fprintf(w, "  - 返信 (%s): %s\n", who, rep.Body)
+		_, _ = fmt.Fprintf(w, "  - 返信 (%s): %s\n", who, rep.Body)
 	}
-	fmt.Fprintln(w)
+	_, _ = fmt.Fprintln(w)
 }
 
 // anchorsOf flattens a comment's anchor(s): a single inline/block Anchor and/or
