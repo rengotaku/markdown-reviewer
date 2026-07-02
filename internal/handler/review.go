@@ -2,6 +2,7 @@ package handler
 
 import (
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -119,6 +120,12 @@ func (h *Handler) ReviewMarkdown(c *gin.Context) {
 	content, ok := h.readCanonical(c, full)
 	if !ok {
 		return
+	}
+	// Re-anchor after an out-of-band edit (AI file tools bypass PUT) before
+	// resolving anchors below. A failure must never block the read — the
+	// worst case is the pre-sync behavior (orphans), so log and continue.
+	if _, serr := reviewstore.SyncExternalEdit(name, rel, content); serr != nil {
+		slog.Warn("external edit sync failed", "root", name, "path", rel, "err", serr)
 	}
 	review, err := reviewstore.ReadReview(name, rel)
 	if err != nil {
