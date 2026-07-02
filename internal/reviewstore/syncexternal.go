@@ -30,9 +30,12 @@ import "path/filepath"
 // content. That asymmetry is harmless: the hint block never contains anchored
 // user text, and pure insertions/deletions of it are ignored by the line diff.
 //
-// Two concurrent callers may race here; both converge — AppendRevision dedupes
-// identical content by sha and a second ReanchorReview over already-moved
-// anchors is a no-op.
+// There is no file lock (the store has none anywhere), so two concurrent
+// callers can both detect the same drift. The review.json outcome is still
+// correct — ReanchorReview is pure and both writers persist identical results —
+// but history.jsonl may transiently gain a duplicate revision entry when the
+// second caller's AppendRevision reads history before the first one's write
+// lands (its sha dedupe only sees committed entries).
 func SyncExternalEdit(root, relPath, rawContent string) (synced bool, err error) {
 	if !HasEntry(root, relPath) {
 		return false, nil
@@ -60,13 +63,18 @@ func SyncExternalEdit(root, relPath, rawContent string) (synced bool, err error)
 	if err != nil {
 		return false, err
 	}
-	if updated, moved := ReanchorReview(review, newest.Content, rawContent); moved {
+	moved := false
+	if updated, didMove := ReanchorReview(review, newest.Content, rawContent); didMove {
 		if err := saveReview(root, relPath, updated); err != nil {
 			return false, err
 		}
+		moved = true
 	}
 	if _, _, aerr := AppendRevision(root, relPath, externalAuthor, stripped); aerr != nil {
-		return false, aerr
+		// review.json may already be re-anchored at this point; report
+		// synced=moved so the partial write is not misreported as "nothing
+		// happened". The next call retries the append (sha still drifts).
+		return moved, aerr
 	}
 	return true, nil
 }
