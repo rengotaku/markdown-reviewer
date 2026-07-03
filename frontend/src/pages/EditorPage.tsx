@@ -291,19 +291,21 @@ export function EditorPage() {
     }
   };
 
-  const handleIngest = async () => {
-    if (!activeFile) return;
+  const handleIngest = async (): Promise<boolean> => {
+    if (!activeFile) return false;
     try {
       const res = await ingestFile(activeFile.path, activeFile.root);
       setReviewState(res.state);
       markReviewFile(keyOf(activeFile.root, activeFile.path), res.state === "review");
       setReviewRefresh((n) => n + 1);
       showToast(`「${activeFile.name}」をレビュー対象に取り込みました`, "success");
+      return true;
     } catch (err) {
       showToast(
         `取り込みに失敗しました: ${(err as Error).message ?? "unknown error"}`,
         "error"
       );
+      return false;
     }
   };
 
@@ -572,12 +574,8 @@ export function EditorPage() {
       "error"
     );
 
-  const handleAddCommentClick = () => {
+  const openAnchoredCommentDialog = () => {
     if (!editor) return;
-    if (!reviewActive) {
-      showToast("先にファイルを「取り込む」とコメントを追加できます", "info");
-      return;
-    }
     const { from, to, empty } = editor.state.selection;
     if (empty || from === to) {
       showToast("コメントを付ける範囲をエディタで選択してください", "info");
@@ -592,13 +590,32 @@ export function EditorPage() {
     });
   };
 
+  const openGlobalCommentDialog = () =>
+    setCommentDialog({ open: true, mode: "global", snippet: "" });
+
+  // A comment implies the file is under review, so adding one auto-ingests when
+  // needed instead of making the user click a separate "取り込む" first. Ingest
+  // is idempotent; handleIngest still shows the success toast for feedback.
+  const ingestThenOpen = async (open: () => void) => {
+    if (await handleIngest()) open();
+  };
+
+  const handleAddCommentClick = () => {
+    if (!editor) return;
+    if (!reviewActive) {
+      void ingestThenOpen(openAnchoredCommentDialog);
+      return;
+    }
+    openAnchoredCommentDialog();
+  };
+
   const handleAddGlobalClick = () => {
     if (!editor) return;
     if (!reviewActive) {
-      showToast("先にファイルを「取り込む」とコメントを追加できます", "info");
+      void ingestThenOpen(openGlobalCommentDialog);
       return;
     }
-    setCommentDialog({ open: true, mode: "global", snippet: "" });
+    openGlobalCommentDialog();
   };
 
   const closeContextMenu = () => setContextMenu(null);

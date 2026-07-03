@@ -265,13 +265,13 @@ export function CommentSidePane({
         }}
         data-testid="comment-add-toolbar"
       >
-        <Tooltip title="選択範囲にコメントを追加">
+        <Tooltip title="選択範囲にコメントを追加（未取り込みなら自動で取り込む）">
           <span>
             <Button
               variant="outlined"
               size="small"
               startIcon={<AddCommentIcon />}
-              disabled={!reviewActive || !canAddComment}
+              disabled={!canAddComment}
               onClick={onAddComment}
               data-testid="editor-add-comment"
             >
@@ -279,13 +279,12 @@ export function CommentSidePane({
             </Button>
           </span>
         </Tooltip>
-        <Tooltip title="ファイル全体に向けたコメントを追加（選択不要）">
+        <Tooltip title="ファイル全体に向けたコメントを追加（選択不要・未取り込みなら自動で取り込む）">
           <span>
             <Button
               variant="outlined"
               size="small"
               startIcon={<PublicIcon />}
-              disabled={!reviewActive}
               onClick={onAddGlobal}
               data-testid="editor-add-global-comment"
             >
@@ -299,7 +298,7 @@ export function CommentSidePane({
         {!reviewActive ? (
           <Box sx={{ p: 2 }}>
             <Typography variant="body2" color="text.secondary">
-              このファイルはまだレビュー対象ではありません。ヘッダーの「取り込む」でレビューを開始するとコメントを追加できます。
+              このファイルはまだレビュー対象ではありません。テキストを選択して「コメント」（または「全体」）を押すと、自動で取り込んでレビューを開始します。
             </Typography>
           </Box>
         ) : comments.length === 0 ? (

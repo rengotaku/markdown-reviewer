@@ -35,11 +35,18 @@ function renderPane(props: Partial<React.ComponentProps<typeof CommentSidePane>>
 }
 
 describe("CommentSidePane", () => {
-  it("shows a not-under-review message and disables the add toolbar", () => {
-    renderPane({ reviewActive: false });
+  it("shows a not-under-review message but keeps the add toolbar clickable to prompt ingest", async () => {
+    const user = userEvent.setup();
+    const handlers = renderPane({ reviewActive: false });
     expect(screen.getByText(/まだレビュー対象ではありません/)).toBeInTheDocument();
-    expect(screen.getByTestId("editor-add-comment")).toBeDisabled();
-    expect(screen.getByTestId("editor-add-global-comment")).toBeDisabled();
+    // The buttons stay enabled so the click reaches the parent, which shows the
+    // "取り込む" prompt instead of silently doing nothing.
+    expect(screen.getByTestId("editor-add-comment")).not.toBeDisabled();
+    expect(screen.getByTestId("editor-add-global-comment")).not.toBeDisabled();
+    await user.click(screen.getByTestId("editor-add-comment"));
+    expect(handlers.onAddComment).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByTestId("editor-add-global-comment"));
+    expect(handlers.onAddGlobal).toHaveBeenCalledTimes(1);
   });
 
   it("shows the empty state when under review with no comments", () => {
