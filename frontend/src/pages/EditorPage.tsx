@@ -162,6 +162,9 @@ export function EditorPage() {
   const [comments, setComments] = useState<CommentJSON[]>([]);
   const [commentsRefresh, setCommentsRefresh] = useState(0);
   const reviewActive = reviewState === "review";
+  // Once every comment is resolved there's no open review work left, so the
+  // "review 中" indicator is hidden. Diff/history stay available.
+  const hasOpenComments = comments.some((c) => c.status === "open");
 
   const activePath = activeFile?.path;
   const activeFileRoot = activeFile?.root;
@@ -291,6 +294,11 @@ export function EditorPage() {
     }
   };
 
+  // Ingest is internal bookkeeping, not a user action: a file only gets a
+  // sidecar / revision history once it's actually reviewed (tracking every
+  // opened file would be wasteful). It runs transparently the first time the
+  // user comments, so success is never surfaced. Failures still surface, since
+  // they block the comment the user asked for.
   const handleIngest = async (): Promise<boolean> => {
     if (!activeFile) return false;
     try {
@@ -298,7 +306,6 @@ export function EditorPage() {
       setReviewState(res.state);
       markReviewFile(keyOf(activeFile.root, activeFile.path), res.state === "review");
       setReviewRefresh((n) => n + 1);
-      showToast(`「${activeFile.name}」をレビュー対象に取り込みました`, "success");
       return true;
     } catch (err) {
       showToast(
@@ -593,9 +600,9 @@ export function EditorPage() {
   const openGlobalCommentDialog = () =>
     setCommentDialog({ open: true, mode: "global", snippet: "" });
 
-  // A comment implies the file is under review, so adding one auto-ingests when
-  // needed instead of making the user click a separate "取り込む" first. Ingest
-  // is idempotent; handleIngest still shows the success toast for feedback.
+  // A comment implies the file is under review, so adding one silently ingests
+  // when needed instead of making the user notice a separate "取り込む" step.
+  // The user just sees the comment dialog open normally. Ingest is idempotent.
   const ingestThenOpen = async (open: () => void) => {
     if (await handleIngest()) open();
   };
@@ -906,31 +913,21 @@ export function EditorPage() {
               </Typography>
             )}
           </Box>
-          {activeFile && reviewState === "draft" && (
-            <Tooltip title="このファイルをレビュー対象に取り込む（履歴・コメント管理を開始）">
-              <span>
-                <Button
-                  variant="outlined"
-                  size="small"
-                  startIcon={<RateReviewIcon />}
-                  onClick={handleIngest}
-                  data-testid="editor-ingest"
-                >
-                  取り込む
-                </Button>
-              </span>
-            </Tooltip>
-          )}
+          {/* No explicit "取り込む" action: a file is ingested transparently the
+              first time the user comments on it (see handleIngest / ingestThenOpen).
+              Ingesting is internal bookkeeping the user shouldn't have to think about. */}
           {activeFile && reviewState === "review" && (
             <>
-              <Chip
-                size="small"
-                color="success"
-                variant="outlined"
-                icon={<RateReviewIcon />}
-                label="review 中"
-                data-testid="editor-review-indicator"
-              />
+              {hasOpenComments && (
+                <Chip
+                  size="small"
+                  color="success"
+                  variant="outlined"
+                  icon={<RateReviewIcon />}
+                  label="review 中"
+                  data-testid="editor-review-indicator"
+                />
+              )}
               <Tooltip title={diffMode ? "差分表示を閉じる" : "前回保存との差分を表示"}>
                 <span>
                   <Button
