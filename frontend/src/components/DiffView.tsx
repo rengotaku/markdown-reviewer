@@ -3,7 +3,12 @@ import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
 import Select from "@mui/material/Select";
 import MenuItem from "@mui/material/MenuItem";
-import { lineDiff, hasChanges, type DiffRow } from "../utils/lineDiff";
+import {
+  lineDiff,
+  hasChanges,
+  intraLineSegments,
+  type DiffRow,
+} from "../utils/lineDiff";
 import { formatLocalTimestamp } from "../utils/formatTimestamp";
 import type { RevisionMeta } from "../api";
 
@@ -20,10 +25,15 @@ interface DiffViewProps {
   onSelectRevision: (id: string) => void;
 }
 
-const rowStyles: Record<DiffRow["type"], { bg: string; sign: string; color: string }> = {
-  equal: { bg: "transparent", sign: " ", color: "text.secondary" },
-  add: { bg: "rgba(46, 160, 67, 0.18)", sign: "+", color: "success.main" },
-  del: { bg: "rgba(248, 81, 73, 0.18)", sign: "-", color: "error.main" },
+const rowStyles: Record<
+  DiffRow["type"],
+  { bg: string; sign: string; color: string; charBg: string }
+> = {
+  equal: { bg: "transparent", sign: " ", color: "text.secondary", charBg: "transparent" },
+  // charBg is the stronger tint applied to the specific characters that changed
+  // within an edited line, on top of the whole-line bg.
+  add: { bg: "rgba(46, 160, 67, 0.18)", sign: "+", color: "success.main", charBg: "rgba(46, 160, 67, 0.4)" },
+  del: { bg: "rgba(248, 81, 73, 0.18)", sign: "-", color: "error.main", charBg: "rgba(248, 81, 73, 0.4)" },
 };
 
 /**
@@ -42,6 +52,7 @@ export function DiffView({
   onSelectRevision,
 }: DiffViewProps) {
   const rows = useMemo(() => lineDiff(oldText, newText), [oldText, newText]);
+  const segsByRow = useMemo(() => intraLineSegments(rows), [rows]);
   const changed = hasChanges(rows);
 
   return (
@@ -97,6 +108,7 @@ export function DiffView({
 
       {rows.map((row, idx) => {
         const s = rowStyles[row.type];
+        const segs = segsByRow.get(idx);
         return (
           <Box
             key={idx}
@@ -122,7 +134,23 @@ export function DiffView({
               {s.sign}
             </Box>
             <Box component="span" sx={{ flex: 1 }}>
-              {row.text === "" ? " " : row.text}
+              {segs
+                ? segs.map((seg, sidx) =>
+                    seg.changed ? (
+                      <Box
+                        key={sidx}
+                        component="span"
+                        sx={{ fontWeight: 700, bgcolor: s.charBg, borderRadius: "2px" }}
+                      >
+                        {seg.text}
+                      </Box>
+                    ) : (
+                      <span key={sidx}>{seg.text}</span>
+                    )
+                  )
+                : row.text === ""
+                  ? " "
+                  : row.text}
             </Box>
           </Box>
         );
