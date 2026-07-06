@@ -14,6 +14,7 @@ import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import SaveIcon from "@mui/icons-material/Save";
 import SaveAsIcon from "@mui/icons-material/SaveAs";
+import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import MenuOpenIcon from "@mui/icons-material/MenuOpen";
 import MenuIcon from "@mui/icons-material/Menu";
 import RefreshIcon from "@mui/icons-material/Refresh";
@@ -567,6 +568,23 @@ export function EditorPage() {
     }
   };
 
+  // Copy the displayed document as raw Markdown. The AI hint is stripped so
+  // the clipboard holds the clean canonical text the user sees, ready to paste
+  // elsewhere (e.g. into a chat) without the internal hint comment.
+  const handleCopyMarkdown = async () => {
+    if (!activeFile) return;
+    const raw = stripHint(activeFile.markdown);
+    try {
+      await navigator.clipboard.writeText(raw);
+      showToast("素の Markdown をコピーしました", "success");
+    } catch (err) {
+      showToast(
+        `コピーに失敗しました: ${(err as Error).message ?? "unknown error"}`,
+        "error"
+      );
+    }
+  };
+
   const canAddComment = (() => {
     if (!editor) return false;
     const { from, to, empty } = editor.state.selection;
@@ -957,6 +975,19 @@ export function EditorPage() {
                 <FormatAlignCenterIcon fontSize="small" />
               )}
             </IconButton>
+          </Tooltip>
+          <Tooltip title="表示中の素の Markdown をクリップボードにコピー">
+            <span>
+              <IconButton
+                size="small"
+                onClick={handleCopyMarkdown}
+                disabled={!activeFile}
+                aria-label="copy raw markdown"
+                data-testid="editor-copy-markdown"
+              >
+                <ContentCopyIcon fontSize="small" />
+              </IconButton>
+            </span>
           </Tooltip>
           <Button
             variant="contained"
