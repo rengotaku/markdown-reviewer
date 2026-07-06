@@ -226,6 +226,31 @@ describe("EditorPage", () => {
     expect(useToast.getState().toasts[0]?.severity).toBe("success");
   });
 
+  it("copies the raw markdown of the active file to the clipboard", async () => {
+    // userEvent.setup() installs its own navigator.clipboard stub, so spy on
+    // that stub's writeText (created here) rather than pre-defining our own.
+    const user = userEvent.setup();
+    const writeText = vi.spyOn(navigator.clipboard, "writeText");
+    renderPage();
+
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
+    );
+    await user.click(screen.getByTestId("sidebar-file-README.md"));
+    await waitFor(() =>
+      expect(screen.getByTestId("editor-active-path")).toHaveTextContent("README.md")
+    );
+
+    await user.click(screen.getByTestId("editor-copy-markdown"));
+
+    await waitFor(() =>
+      expect(writeText).toHaveBeenCalledWith("# README.md\n\nmock content")
+    );
+    expect(useToast.getState().toasts.some((t) => t.severity === "success")).toBe(
+      true
+    );
+  });
+
   it("displays REVIEW_ROOT basename in the sidebar header (from /api/config)", async () => {
     renderPage();
     await waitFor(() =>
