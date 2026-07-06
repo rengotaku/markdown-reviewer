@@ -348,6 +348,18 @@ func (h *Handler) WriteFile(c *gin.Context) {
 	// revision snapshot and the re-anchor diff below.
 	oldRaw, oldErr := os.ReadFile(full)
 
+	// Auto-ingest on save: a save is a stronger signal of intent than merely
+	// opening a file, so put it under review here (unlike PR #70/#71, which
+	// only ingested on the first comment). Without this the AppendRevision
+	// below no-ops for draft files and no diff history ever accrues for files
+	// the user edits but never comments on. Ingest is idempotent and must
+	// never block the save — log and continue.
+	if oldErr == nil {
+		if ierr := reviewstore.Ingest(name, rel); ierr != nil {
+			slog.Warn("auto-ingest on save failed", "root", name, "path", rel, "err", ierr)
+		}
+	}
+
 	// Snapshot the about-to-be-overwritten content into revision history
 	// before the atomic rename destroys it. Strip the AI hint first so the
 	// per-save hint churn never pollutes a diff. AppendRevision no-ops for

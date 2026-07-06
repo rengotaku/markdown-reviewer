@@ -70,19 +70,29 @@ func TestIngest_MissingFile_404(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, rec.Code)
 }
 
-func TestRevisions_DraftHasEmptyHistory(t *testing.T) {
+func TestRevisions_SaveAutoIngestsDraft(t *testing.T) {
 	useTempReviewStore(t)
 	h, root := setupFilesHandler(t)
 	require.NoError(t, os.WriteFile(filepath.Join(root, "doc.md"), []byte("# hi\n"), 0o644))
 
-	// Saving a draft file records no history.
+	// Saving a draft file now auto-ingests it (a save is a stronger signal of
+	// intent than merely opening), so the pre-overwrite content is snapshotted
+	// as the first revision.
 	require.Equal(t, http.StatusOK, putFile(t, h, "# changed\n").Code)
 
-	rec := serve(h, httptest.NewRequest(http.MethodGet, "/api/revisions/doc.md", nil))
+	// The file transitioned draft -> review.
+	rec := serve(h, httptest.NewRequest(http.MethodGet, "/api/files/doc.md", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	var read handler.FileReadResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&read))
+	assert.Equal(t, "review", read.State)
+
+	// History holds the pre-overwrite content.
+	rec = serve(h, httptest.NewRequest(http.MethodGet, "/api/revisions/doc.md", nil))
 	require.Equal(t, http.StatusOK, rec.Code)
 	var resp handler.RevisionListResponse
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
-	assert.Empty(t, resp.Revisions)
+	require.Len(t, resp.Revisions, 1)
 }
 
 func TestRevisions_SnapshotsOnWrite(t *testing.T) {

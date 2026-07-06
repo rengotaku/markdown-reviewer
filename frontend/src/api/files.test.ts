@@ -1,5 +1,15 @@
 import { describe, it, expect } from "vitest";
-import { ingestFile, listRevisions, getRevision, statFile } from "./files";
+import { http, HttpResponse } from "msw";
+import { server } from "@/test/mocks/server";
+import {
+  ingestFile,
+  listRevisions,
+  getRevision,
+  statFile,
+  writeFile,
+} from "./files";
+
+const API_BASE = "http://localhost:8080";
 
 // These exercise the managed-review endpoints against the shared MSW handlers
 // (src/test/mocks/handlers.ts), which also covers the request-URL building
@@ -30,5 +40,47 @@ describe("review API client", () => {
   it("getRevision works without an explicit root", async () => {
     const rev = await getRevision("README.md", "r-002");
     expect(rev.id).toBe("r-002");
+  });
+
+  it("writeFile tags the save with author=human alongside root", async () => {
+    let captured = "";
+    server.use(
+      http.put(`${API_BASE}/api/files/*`, ({ request }) => {
+        captured = request.url;
+        return HttpResponse.json({
+          path: "docs/intro.md",
+          root: "mock-root",
+          content: "# x",
+          modified: "2026-05-20T00:00:00Z",
+          created: "2026-05-19T00:00:00Z",
+          state: "review",
+        });
+      })
+    );
+
+    await writeFile("docs/intro.md", "# x", "mock-root");
+    const params = new URL(captured).searchParams;
+    expect(params.get("root")).toBe("mock-root");
+    expect(params.get("author")).toBe("human");
+  });
+
+  it("writeFile defaults author=human even without a root", async () => {
+    let captured = "";
+    server.use(
+      http.put(`${API_BASE}/api/files/*`, ({ request }) => {
+        captured = request.url;
+        return HttpResponse.json({
+          path: "README.md",
+          root: "mock-root",
+          content: "# x",
+          modified: "2026-05-20T00:00:00Z",
+          created: "2026-05-19T00:00:00Z",
+          state: "review",
+        });
+      })
+    );
+
+    await writeFile("README.md", "# x");
+    expect(new URL(captured).searchParams.get("author")).toBe("human");
   });
 });
