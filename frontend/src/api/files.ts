@@ -131,10 +131,15 @@ export async function readFile(
 export async function writeFile(
   path: string,
   content: string,
-  root?: string
+  root?: string,
+  // Browser saves are always human actions; label the revision snapshot as
+  // such so history doesn't fall back to the server's "unknown" default.
+  author = "human"
 ): Promise<FileReadResponse> {
+  const rootParam = rootQuery(root, "?");
+  const authorParam = `${rootParam ? "&" : "?"}author=${encodeURIComponent(author)}`;
   return apiClient
-    .put(`api/files/${encodePath(path)}${rootQuery(root, "?")}`, {
+    .put(`api/files/${encodePath(path)}${rootParam}${authorParam}`, {
       json: { content },
     })
     .json<FileReadResponse>();
