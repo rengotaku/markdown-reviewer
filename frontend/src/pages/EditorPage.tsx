@@ -20,7 +20,6 @@ import AddCommentIcon from "@mui/icons-material/AddComment";
 import CommentIcon from "@mui/icons-material/Comment";
 import FormatAlignCenterIcon from "@mui/icons-material/FormatAlignCenter";
 import UnfoldMoreIcon from "@mui/icons-material/UnfoldMore";
-import RateReviewIcon from "@mui/icons-material/RateReview";
 import CompareArrowsIcon from "@mui/icons-material/CompareArrows";
 import { TiptapEditor } from "@/components/tiptap/TiptapEditor";
 import {
@@ -97,6 +96,30 @@ export function EditorPage() {
   const toggleCommentPane = useUIStore((s) => s.toggleCommentPane);
   const setSelectedDirPath = useUIStore((s) => s.setSelectedDirPath);
   const setSidebarOpen = useUIStore((s) => s.setSidebarOpen);
+  const sidebarWidth = useUIStore((s) => s.sidebarWidth);
+  const setSidebarWidth = useUIStore((s) => s.setSidebarWidth);
+
+  const asideRef = useRef<HTMLDivElement>(null);
+
+  const handleResizeMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    document.body.style.userSelect = "none";
+
+    const onMouseMove = (ev: MouseEvent) => {
+      if (!asideRef.current) return;
+      const newWidth = ev.clientX - asideRef.current.getBoundingClientRect().left;
+      setSidebarWidth(Math.max(180, Math.min(600, newWidth)));
+    };
+
+    const onMouseUp = () => {
+      document.body.style.userSelect = "";
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+    };
+
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+  };
 
   const { active: activeRoot, roots } = useActiveRoot();
   const allFiles = useOpenFiles((s) => s.files);
@@ -847,15 +870,17 @@ export function EditorPage() {
       )}
       {isSidebarOpen && (
         <Box
+          ref={asideRef}
           component="aside"
           sx={{
-            width: 280,
+            width: sidebarWidth,
             flexShrink: 0,
             borderRight: "1px solid",
             borderColor: "divider",
             bgcolor: "background.paper",
             display: "flex",
             flexDirection: "column",
+            position: "relative",
           }}
         >
           <Box
@@ -908,6 +933,22 @@ export function EditorPage() {
           </Box>
           <RootTabs />
           <Sidebar activePath={activeFile?.path} onSelect={handleSelect} />
+          <Box
+            onMouseDown={handleResizeMouseDown}
+            data-testid="sidebar-resize-handle"
+            role="separator"
+            aria-orientation="vertical"
+            sx={{
+              position: "absolute",
+              top: 0,
+              right: 0,
+              bottom: 0,
+              width: "5px",
+              cursor: "col-resize",
+              zIndex: 1,
+              "&:hover": { bgcolor: "action.hover" },
+            }}
+          />
         </Box>
       )}
 
@@ -1081,67 +1122,78 @@ export function EditorPage() {
           }}
           data-testid="editor-tabs"
         >
-          {files.map((f) => (
-            <Tab
-              key={f.id}
-              value={f.id}
-              data-testid={`editor-tab-${f.path}`}
-              onContextMenu={(e) => {
-                e.preventDefault();
-                setTabMenu({ x: e.clientX, y: e.clientY, id: f.id });
-              }}
-              label={
-                <Box
-                  sx={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 0.5,
-                    width: "100%",
-                    minWidth: 0,
-                  }}
-                >
-                  {reviewFiles.has(keyOf(f.root, f.path)) && (
-                    <Tooltip title="レビュー中">
-                      <RateReviewIcon
-                        sx={{ fontSize: 14, color: "success.main", flexShrink: 0 }}
-                        data-testid={`editor-tab-review-${f.path}`}
-                      />
-                    </Tooltip>
-                  )}
+          {files.map((f) => {
+            const isReview = reviewFiles.has(keyOf(f.root, f.path));
+            return (
+              <Tab
+                key={f.id}
+                value={f.id}
+                data-testid={`editor-tab-${f.path}`}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  setTabMenu({ x: e.clientX, y: e.clientY, id: f.id });
+                }}
+                sx={{
+                  position: "relative",
+                  overflow: "hidden",
+                  ...(isReview && {
+                    "&::before": {
+                      content: '""',
+                      position: "absolute",
+                      top: 0,
+                      left: 0,
+                      borderStyle: "solid",
+                      borderWidth: "10px 10px 0 0",
+                      borderColor: (theme) =>
+                        `${theme.palette.success.main} transparent transparent transparent`,
+                    },
+                  }),
+                }}
+                label={
                   <Box
-                    component="span"
                     sx={{
-                      flex: 1,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 0.5,
+                      width: "100%",
                       minWidth: 0,
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                      textAlign: "left",
                     }}
                   >
-                    {f.name}
-                    {f.isDirty ? " •" : ""}
+                    <Box
+                      component="span"
+                      sx={{
+                        flex: 1,
+                        minWidth: 0,
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                        textAlign: "left",
+                      }}
+                    >
+                      {f.name}
+                      {f.isDirty ? " •" : ""}
+                    </Box>
+                    <CloseIcon
+                      fontSize="inherit"
+                      role="button"
+                      aria-label={`close ${f.name}`}
+                      data-testid={`editor-tab-close-${f.path}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        closeFile(f.id);
+                      }}
+                      sx={{
+                        flexShrink: 0,
+                        ml: 0.5,
+                        opacity: 0.55,
+                        "&:hover": { opacity: 1 },
+                      }}
+                    />
                   </Box>
-                  <CloseIcon
-                    fontSize="inherit"
-                    role="button"
-                    aria-label={`close ${f.name}`}
-                    data-testid={`editor-tab-close-${f.path}`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      closeFile(f.id);
-                    }}
-                    sx={{
-                      flexShrink: 0,
-                      ml: 0.5,
-                      opacity: 0.55,
-                      "&:hover": { opacity: 1 },
-                    }}
-                  />
-                </Box>
-              }
-            />
-          ))}
+                }
+              />
+            );
+          })}
         </Tabs>
 
         <Menu
