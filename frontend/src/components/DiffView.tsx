@@ -3,6 +3,7 @@ import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
 import Select from "@mui/material/Select";
 import MenuItem from "@mui/material/MenuItem";
+import Button from "@mui/material/Button";
 import {
   lineDiff,
   hasChanges,
@@ -12,6 +13,11 @@ import {
 } from "../utils/lineDiff";
 import { formatLocalTimestamp } from "../utils/formatTimestamp";
 import type { RevisionMeta } from "../api";
+
+/** `"external"` → `"外部編集"`、それ以外はそのまま返す。 */
+function authorLabel(author: string): string {
+  return author === "external" ? "外部編集" : author;
+}
 
 interface DiffViewProps {
   /** Older revision content (left/baseline side). */
@@ -85,6 +91,33 @@ export function DiffView({
           gap: 1.5,
         }}
       >
+        {/* クイック選択ボタン */}
+        {revisions.length > 0 && (
+          <Button
+            size="small"
+            variant="text"
+            data-testid="diff-btn-latest-round"
+            disabled={selectedRevId === revisions[0].id}
+            onClick={() => onSelectRevision(revisions[0].id)}
+            sx={{ flexShrink: 0, minWidth: "auto" }}
+          >
+            前ラウンド
+          </Button>
+        )}
+        {revisions.length > 1 && (
+          <Button
+            size="small"
+            variant="text"
+            data-testid="diff-btn-first"
+            disabled={selectedRevId === revisions[revisions.length - 1].id}
+            onClick={() => onSelectRevision(revisions[revisions.length - 1].id)}
+            sx={{ flexShrink: 0, minWidth: "auto" }}
+          >
+            初版
+          </Button>
+        )}
+
+        {/* revision picker: label を id · 日時 · author に拡張 */}
         <Typography variant="caption" color="text.secondary" sx={{ flexShrink: 0 }}>
           差分: 最新 ⇔
         </Typography>
@@ -95,12 +128,38 @@ export function DiffView({
           data-testid="diff-revision-picker"
           sx={{ minWidth: 190, "& .MuiSelect-select": { py: 0.5, fontSize: 13 } }}
         >
-          {revisions.map((r) => (
-            <MenuItem key={r.id} value={r.id}>
-              {r.id} · {formatLocalTimestamp(r.ts)}
-            </MenuItem>
-          ))}
+          {revisions.map((r) => {
+            const isExternal = r.author === "external";
+            return (
+              <MenuItem key={r.id} value={r.id}>
+                {r.id} · {formatLocalTimestamp(r.ts)} ·{" "}
+                <Box
+                  component="span"
+                  sx={{ color: isExternal ? "warning.main" : "text.primary", ml: 0.5 }}
+                >
+                  {authorLabel(r.author)}
+                </Box>
+              </MenuItem>
+            );
+          })}
         </Select>
+
+        {/* 選択中 baseline の author 表示 */}
+        {selectedRevId && (() => {
+          const sel = revisions.find((r) => r.id === selectedRevId);
+          if (!sel) return null;
+          return (
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              data-testid="diff-selected-author"
+              sx={{ flexShrink: 0 }}
+            >
+              ({authorLabel(sel.author)})
+            </Typography>
+          );
+        })()}
+
         {changed && (
           <Typography
             variant="caption"

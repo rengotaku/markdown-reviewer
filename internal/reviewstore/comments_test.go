@@ -19,8 +19,8 @@ func TestHasOpenComments(t *testing.T) {
 	}
 
 	// Ingested but no comments yet → false.
-	if err := Ingest(root, rel); err != nil {
-		t.Fatalf("Ingest: %v", err)
+	if ingErr := Ingest(root, rel); ingErr != nil {
+		t.Fatalf("Ingest: %v", ingErr)
 	}
 	got, err = HasOpenComments(root, rel)
 	if err != nil {
@@ -44,8 +44,8 @@ func TestHasOpenComments(t *testing.T) {
 	}
 
 	// Resolve the only comment → false.
-	if _, err := UpdateCommentStatus(root, rel, c1.ID, StatusResolved); err != nil {
-		t.Fatalf("UpdateCommentStatus: %v", err)
+	if _, updErr := UpdateCommentStatus(root, rel, c1.ID, StatusResolved); updErr != nil {
+		t.Fatalf("UpdateCommentStatus: %v", updErr)
 	}
 	got, err = HasOpenComments(root, rel)
 	if err != nil {
