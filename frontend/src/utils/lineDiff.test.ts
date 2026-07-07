@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { lineDiff, hasChanges, charDiff, intraLineSegments } from "./lineDiff";
+import { lineDiff, hasChanges, charDiff, intraLineSegments, countChanges } from "./lineDiff";
 
 describe("lineDiff", () => {
   it("marks identical text as all-equal with no changes", () => {
@@ -80,6 +80,34 @@ describe("charDiff", () => {
     const { del, add } = charDiff("変更前のテキスト", "変更後のテキスト");
     expect(changedText(del)).toBe("前");
     expect(changedText(add)).toBe("後");
+  });
+});
+
+describe("countChanges", () => {
+  it("returns zero counts for identical texts", () => {
+    const rows = lineDiff("a\nb\nc", "a\nb\nc");
+    expect(countChanges(rows)).toEqual({ added: 0, removed: 0 });
+  });
+
+  it("counts a changed line as one del and one add", () => {
+    const rows = lineDiff("a\nb\nc", "a\nB\nc");
+    expect(countChanges(rows)).toEqual({ added: 1, removed: 1 });
+  });
+
+  it("counts inserted lines as added only", () => {
+    const rows = lineDiff("a\nc", "a\nb\nc");
+    expect(countChanges(rows)).toEqual({ added: 1, removed: 0 });
+  });
+
+  it("counts deleted lines as removed only", () => {
+    const rows = lineDiff("a\nb\nc", "a\nc");
+    expect(countChanges(rows)).toEqual({ added: 0, removed: 1 });
+  });
+
+  it("counts multiple adds and dels independently", () => {
+    const rows = lineDiff("x\ny", "a\nb\nc");
+    // x, y deleted → 2 del; a, b, c added → 3 add
+    expect(countChanges(rows)).toEqual({ added: 3, removed: 2 });
   });
 });
 
