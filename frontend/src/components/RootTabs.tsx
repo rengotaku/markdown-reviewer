@@ -4,6 +4,7 @@ import Tabs from "@mui/material/Tabs";
 import Tooltip from "@mui/material/Tooltip";
 import { useActiveRoot } from "@/hooks/useActiveRoot";
 import { useOpenFiles } from "@/hooks/useOpenFiles";
+import { BAR_HEIGHT, TAB_CONTENT_HEIGHT } from "@/theme/dimensions";
 
 /**
  * Sidebar header tabs for switching between the configured review roots.
@@ -31,10 +32,9 @@ export function RootTabs() {
       sx={{
         borderBottom: "1px solid",
         borderColor: "divider",
-        // Fixed (not min) height, matching the editor file tab bar: 36px of
-        // content + the 1px bottom border (global border-box), so the
-        // second-row divider stays one continuous line across the panes (#65).
-        height: 37,
+        // Fixed (not min) height: BAR_HEIGHT (37px, border-box) keeps the
+        // second-row divider one continuous line across all panes (#65, #90).
+        height: BAR_HEIGHT,
         flexShrink: 0,
         boxSizing: "border-box",
         overflow: "hidden",
@@ -47,9 +47,9 @@ export function RootTabs() {
         variant="scrollable"
         scrollButtons={false}
         sx={{
-          minHeight: 36,
+          minHeight: TAB_CONTENT_HEIGHT,
           "& .MuiTab-root": {
-            minHeight: 36,
+            minHeight: TAB_CONTENT_HEIGHT,
             textTransform: "none",
             py: 0.5,
             px: 1.25,

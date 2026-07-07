@@ -28,6 +28,7 @@ import { useToast } from "@/hooks/useToast";
 import { useUIStore } from "@/hooks/useUIStore";
 import { formatLocalTimestamp } from "@/utils/formatTimestamp";
 import type { DirEntryApi } from "@/api";
+import { BAR_HEIGHT } from "@/theme/dimensions";
 
 interface SidebarProps {
   activePath?: string;
@@ -124,6 +125,10 @@ export function Sidebar({ activePath, onSelect }: SidebarProps) {
       <Box
         sx={{
           p: 1,
+          // minHeight aligns with BAR_HEIGHT (37px) so the filter bar sits at
+          // the same visual row height as the file tab bar (#90).
+          minHeight: BAR_HEIGHT,
+          boxSizing: "border-box",
           borderBottom: "1px solid",
           borderColor: "divider",
           display: "flex",
