@@ -26,6 +26,9 @@ interface UIState {
   /** Sidebar listing mode (#68). Persisted so the choice survives reloads. */
   sidebarViewMode: SidebarViewMode;
   setSidebarViewMode: (mode: SidebarViewMode) => void;
+  /** Sidebar pixel width, adjustable via drag handle. Persisted across reloads. */
+  sidebarWidth: number;
+  setSidebarWidth: (w: number) => void;
 }
 
 const STORAGE_KEY = "markdown-reviewer-ui";
@@ -44,14 +47,18 @@ export const useUIStore = create<UIState>()(
       setSelectedDirPath: (path) => set({ selectedDirPath: path }),
       sidebarViewMode: "tree",
       setSidebarViewMode: (mode) => set({ sidebarViewMode: mode }),
+      sidebarWidth: 280,
+      setSidebarWidth: (w) => set({ sidebarWidth: w }),
     }),
     {
       name: STORAGE_KEY,
       version: 1,
-      // Only the view mode survives reloads. Pane visibility and the
-      // transient dir highlight intentionally reset each session — they were
-      // never persisted before this store gained the persist middleware.
-      partialize: (state) => ({ sidebarViewMode: state.sidebarViewMode }),
+      // Persist view mode and sidebar width; pane visibility and the
+      // transient dir highlight intentionally reset each session.
+      partialize: (state) => ({
+        sidebarViewMode: state.sidebarViewMode,
+        sidebarWidth: state.sidebarWidth,
+      }),
     }
   )
 );

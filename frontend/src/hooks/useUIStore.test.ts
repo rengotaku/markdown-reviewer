@@ -70,14 +70,25 @@ describe("useUIStore", () => {
     expect(useUIStore.getState().sidebarViewMode).toBe("tree");
   });
 
-  it("persists only the sidebar view mode to localStorage", () => {
+  it("defaults sidebarWidth to 280", () => {
+    useUIStore.setState({ sidebarWidth: 280 });
+    expect(useUIStore.getState().sidebarWidth).toBe(280);
+  });
+
+  it("setSidebarWidth updates the width", () => {
+    useUIStore.getState().setSidebarWidth(400);
+    expect(useUIStore.getState().sidebarWidth).toBe(400);
+  });
+
+  it("persists the sidebar view mode and width to localStorage", () => {
     useUIStore.getState().setSidebarViewMode("recent");
+    useUIStore.getState().setSidebarWidth(360);
 
     const raw = localStorage.getItem("markdown-reviewer-ui");
     expect(raw).not.toBeNull();
     const persisted = JSON.parse(raw as string) as {
       state: Record<string, unknown>;
     };
-    expect(persisted.state).toEqual({ sidebarViewMode: "recent" });
+    expect(persisted.state).toEqual({ sidebarViewMode: "recent", sidebarWidth: 360 });
   });
 });
