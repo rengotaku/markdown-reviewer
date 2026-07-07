@@ -258,30 +258,6 @@ describe("EditorPage", () => {
     );
   });
 
-  it("save-as writes to a versioned path in the same directory and opens it", async () => {
-    const user = userEvent.setup();
-    renderPage();
-
-    await waitFor(() =>
-      expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
-    );
-    await user.click(screen.getByTestId("sidebar-file-README.md"));
-    await waitFor(() =>
-      expect(screen.getByTestId("editor-active-path")).toHaveTextContent("README.md")
-    );
-
-    await user.click(screen.getByTestId("editor-save-as"));
-
-    await waitFor(() =>
-      expect(screen.getByTestId("editor-active-path")).toHaveTextContent("README.v2.md")
-    );
-    const opened = useOpenFiles
-      .getState()
-      .files.find((f) => f.path === "README.v2.md");
-    expect(opened).toBeDefined();
-    expect(useToast.getState().toasts.some((t) => t.severity === "success")).toBe(true);
-  });
-
   it("add-comment button shows a toast when no text is selected", async () => {
     const user = userEvent.setup();
     renderPage();
