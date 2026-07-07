@@ -77,11 +77,12 @@ type FileReadResponse struct {
 // without the file content so the frontend can cheaply poll for external
 // changes on the currently open file.
 type FileStatResponse struct {
-	Path     string `json:"path"`
-	Modified string `json:"modified"`
-	Created  string `json:"created"`
-	Root     string `json:"root"`
-	State    string `json:"state"`
+	Path            string `json:"path"`
+	Modified        string `json:"modified"`
+	Created         string `json:"created"`
+	Root            string `json:"root"`
+	State           string `json:"state"`
+	HasOpenComments bool   `json:"hasOpenComments"`
 }
 
 // fileTimes returns the RFC3339-UTC mtime and (best-effort) birth time
@@ -320,12 +321,22 @@ func (h *Handler) StatFile(c *gin.Context) {
 		return
 	}
 	modified, created := fileTimes(info)
+	state := reviewState(name, rel)
+	hasOpen := false
+	if state == "review" {
+		if ok, err := reviewstore.HasOpenComments(name, rel); err != nil {
+			slog.Warn("hasOpenComments check failed", "root", name, "path", rel, "err", err)
+		} else {
+			hasOpen = ok
+		}
+	}
 	c.JSON(http.StatusOK, FileStatResponse{
-		Path:     rel,
-		Modified: modified,
-		Created:  created,
-		Root:     name,
-		State:    reviewState(name, rel),
+		Path:            rel,
+		Modified:        modified,
+		Created:         created,
+		Root:            name,
+		State:           state,
+		HasOpenComments: hasOpen,
 	})
 }
 

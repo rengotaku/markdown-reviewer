@@ -5,6 +5,57 @@ import (
 	"testing"
 )
 
+func TestHasOpenComments(t *testing.T) {
+	withTempStore(t)
+	const root, rel = "rooms", "oc.md"
+
+	// Not ingested → false, no error.
+	got, err := HasOpenComments(root, rel)
+	if err != nil {
+		t.Fatalf("HasOpenComments (not ingested): %v", err)
+	}
+	if got {
+		t.Fatal("want false for not-ingested file")
+	}
+
+	// Ingested but no comments yet → false.
+	if err := Ingest(root, rel); err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	got, err = HasOpenComments(root, rel)
+	if err != nil {
+		t.Fatalf("HasOpenComments (no comments): %v", err)
+	}
+	if got {
+		t.Fatal("want false when no comments")
+	}
+
+	// Add one open comment → true.
+	c1, err := AddComment(root, rel, Comment{Scope: "global", Body: "open one"})
+	if err != nil {
+		t.Fatalf("AddComment: %v", err)
+	}
+	got, err = HasOpenComments(root, rel)
+	if err != nil {
+		t.Fatalf("HasOpenComments (open): %v", err)
+	}
+	if !got {
+		t.Fatal("want true when open comment exists")
+	}
+
+	// Resolve the only comment → false.
+	if _, err := UpdateCommentStatus(root, rel, c1.ID, StatusResolved); err != nil {
+		t.Fatalf("UpdateCommentStatus: %v", err)
+	}
+	got, err = HasOpenComments(root, rel)
+	if err != nil {
+		t.Fatalf("HasOpenComments (all resolved): %v", err)
+	}
+	if got {
+		t.Fatal("want false when all comments are resolved")
+	}
+}
+
 func TestAddCommentRequiresIngest(t *testing.T) {
 	withTempStore(t)
 	if _, err := AddComment("rooms", "draft.md", Comment{Body: "x"}); !errors.Is(err, ErrNotIngested) {
