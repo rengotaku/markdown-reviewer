@@ -188,6 +188,7 @@ export const handlers = [
       modified: "2026-05-20T00:00:00Z",
       created: "2026-05-19T00:00:00Z",
       state: "draft",
+      hasOpenComments: false,
     });
   }),
 

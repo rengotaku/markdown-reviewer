@@ -231,7 +231,7 @@ export function EditorPage() {
         if (cancelled) return;
         const state = stat.state ?? "draft";
         setReviewState(state);
-        markReviewFile(keyOf(activeFileRoot, activePath), state === "review");
+        markReviewFile(keyOf(activeFileRoot, activePath), stat.hasOpenComments ?? false);
         if (state === "review") {
           const rl = await listRevisions(activePath, activeFileRoot);
           if (!cancelled) setRevisions(rl.revisions);
@@ -314,7 +314,7 @@ export function EditorPage() {
             try {
               const stat = await statFile(f.path, f.root);
               if (!cancelled) {
-                markReviewFile(keyOf(f.root, f.path), stat.state === "review");
+                markReviewFile(keyOf(f.root, f.path), stat.hasOpenComments ?? false);
               }
             } catch {
               // silently ignore per-file errors to keep other tabs updating
@@ -369,7 +369,10 @@ export function EditorPage() {
     try {
       const res = await ingestFile(activeFile.path, activeFile.root);
       setReviewState(res.state);
-      markReviewFile(keyOf(activeFile.root, activeFile.path), res.state === "review");
+      // Ingest itself creates no comments; the green mark only lights up once
+      // an open comment exists. The full-tab sync that follows (reviewRefresh
+      // bump) will re-evaluate hasOpenComments from the server.
+      markReviewFile(keyOf(activeFile.root, activeFile.path), false);
       setReviewRefresh((n) => n + 1);
       return true;
     } catch (err) {
@@ -1104,6 +1107,7 @@ export function EditorPage() {
           onChange={(_, v) => activeRoot && setActive(activeRoot, v as string)}
           variant="scrollable"
           scrollButtons={false}
+          TabIndicatorProps={{ sx: { display: "none" } }}
           sx={{
             minHeight: 36,
             borderBottom: 1,
@@ -1118,6 +1122,20 @@ export function EditorPage() {
               width: 180,
               maxWidth: 180,
               flex: "0 0 180px",
+              borderTopLeftRadius: 6,
+              borderTopRightRadius: 6,
+              borderRight: "1px solid",
+              borderColor: "divider",
+              bgcolor: "action.hover",
+              "&:hover": {
+                bgcolor: "action.selected",
+              },
+              "&.Mui-selected": {
+                bgcolor: "background.paper",
+                borderBottom: "2px solid",
+                borderBottomColor: "background.paper",
+                mb: "-1px",
+              },
             },
           }}
           data-testid="editor-tabs"

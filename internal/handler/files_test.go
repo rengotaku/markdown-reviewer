@@ -572,6 +572,81 @@ func TestStatFile_RejectsNonMarkdown(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
+func TestStatFile_HasOpenComments_NotIngested(t *testing.T) {
+	useTempReviewStore(t)
+	h, root := setupFilesHandler(t)
+	require.NoError(t, os.WriteFile(filepath.Join(root, "draft.md"), []byte("# draft\n"), 0o644))
+
+	rec := serve(h, httptest.NewRequest(http.MethodGet, "/api/stat/draft.md", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp handler.FileStatResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	assert.Equal(t, "draft", resp.State)
+	assert.False(t, resp.HasOpenComments)
+}
+
+func TestStatFile_HasOpenComments_AllResolved(t *testing.T) {
+	useTempReviewStore(t)
+	h, root := setupFilesHandler(t)
+	require.NoError(t, os.WriteFile(filepath.Join(root, "done.md"), []byte("# done\n"), 0o644))
+
+	// Ingest the file.
+	rec := serve(h, httptest.NewRequest(http.MethodPost, "/api/ingest/done.md", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	// Add a comment via the comments API and resolve it via the patch endpoint.
+	body := `{"scope":"global","body":"check this"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/comments/done.md", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec = serve(h, req)
+	require.Equal(t, http.StatusCreated, rec.Code)
+	var cc struct {
+		ID string `json:"id"`
+	}
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&cc))
+
+	// Resolve.
+	patchBody := `{"status":"resolved"}`
+	patchReq := httptest.NewRequest(http.MethodPatch, "/api/comments/done.md?id="+cc.ID, strings.NewReader(patchBody))
+	patchReq.Header.Set("Content-Type", "application/json")
+	rec = serve(h, patchReq)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	// HasOpenComments must be false now.
+	rec = serve(h, httptest.NewRequest(http.MethodGet, "/api/stat/done.md", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	var resp handler.FileStatResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	assert.Equal(t, "review", resp.State)
+	assert.False(t, resp.HasOpenComments)
+}
+
+func TestStatFile_HasOpenComments_WithOpenComment(t *testing.T) {
+	useTempReviewStore(t)
+	h, root := setupFilesHandler(t)
+	require.NoError(t, os.WriteFile(filepath.Join(root, "open.md"), []byte("# open\n"), 0o644))
+
+	// Ingest.
+	rec := serve(h, httptest.NewRequest(http.MethodPost, "/api/ingest/open.md", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	// Add an open comment.
+	body := `{"scope":"global","body":"still open"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/comments/open.md", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec = serve(h, req)
+	require.Equal(t, http.StatusCreated, rec.Code)
+
+	// HasOpenComments must be true.
+	rec = serve(h, httptest.NewRequest(http.MethodGet, "/api/stat/open.md", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	var resp handler.FileStatResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	assert.Equal(t, "review", resp.State)
+	assert.True(t, resp.HasOpenComments)
+}
+
 // --- multi-root selection -------------------------------------------------
 
 func TestMultiRoot_DefaultsToFirstRoot(t *testing.T) {

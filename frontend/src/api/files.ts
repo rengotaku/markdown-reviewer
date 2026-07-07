@@ -32,6 +32,8 @@ export interface FileStatResponse {
   created: string;
   root: string;
   state?: ReviewState;
+  /** True when the file is under review and has at least one open comment. */
+  hasOpenComments?: boolean;
 }
 
 export interface IngestResponse {

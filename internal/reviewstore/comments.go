@@ -178,6 +178,27 @@ func AddReply(root, relPath, id string, reply Reply) (Comment, error) {
 	})
 }
 
+// HasOpenComments reports whether the ingested file has at least one comment
+// with Status == StatusOpen. Returns false (not an error) when the file is not
+// ingested or has no comments. An I/O error reading review.json is returned,
+// but the caller is expected to treat errors as false so a stat response is
+// never blocked by a transient failure.
+func HasOpenComments(root, relPath string) (bool, error) {
+	if !HasEntry(root, relPath) {
+		return false, nil
+	}
+	r, err := ReadReview(root, relPath)
+	if err != nil {
+		return false, err
+	}
+	for _, c := range r.Comments {
+		if c.Status == StatusOpen {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // DeleteComment removes a comment by id. Returns ErrCommentNotFound if absent.
 func DeleteComment(root, relPath, id string) error {
 	if !HasEntry(root, relPath) {
