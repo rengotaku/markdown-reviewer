@@ -40,7 +40,7 @@ describe("DiffView", () => {
         onSelectRevision={vi.fn()}
       />
     );
-    expect(screen.getByText(/変更なし/)).toBeInTheDocument();
+    expect(screen.getByText(/このバージョンと現在の内容に差分はありません/)).toBeInTheDocument();
     const view = screen.getByTestId("diff-view");
     expect(view.querySelectorAll('[data-diff-type="add"]')).toHaveLength(0);
     expect(view.querySelectorAll('[data-diff-type="del"]')).toHaveLength(0);
