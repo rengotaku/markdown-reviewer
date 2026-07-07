@@ -62,6 +62,7 @@ import {
 import { stripHint } from "@/utils/stripHint";
 import { formatLocalTimestamp } from "@/utils/formatTimestamp";
 import { computeAnchorFromSelection } from "@/utils/pmAnchor";
+import { lineDiff, hasChanges } from "@/utils/lineDiff";
 import type { HighlightComment } from "@/components/tiptap/extensions/CommentHighlight";
 
 function basename(path: string): string {
@@ -142,6 +143,7 @@ export function EditorPage() {
   // save/ingest changes it. `reviewRefresh` is bumped to force a refetch.
   const [reviewState, setReviewState] = useState<ReviewState | undefined>(undefined);
   const [revisions, setRevisions] = useState<RevisionMeta[]>([]);
+  const [revContents, setRevContents] = useState<Record<string, string>>({});
   const [reviewRefresh, setReviewRefresh] = useState(0);
   const [diffMode, setDiffMode] = useState(false);
   const [selectedRevId, setSelectedRevId] = useState<string | null>(null);
@@ -189,6 +191,7 @@ export function EditorPage() {
     setDiffBaseText("");
     setReviewState(undefined);
     setRevisions([]);
+    setRevContents({});
     setComments([]);
   }
 
@@ -364,9 +367,40 @@ export function EditorPage() {
       showToast("比較できる過去リビジョンがまだありません", "info");
       return;
     }
-    // Always (re)open against the most recent revision so the picker starts on
-    // "最新", regardless of any earlier selection.
-    await loadRevision(revisions[0].id);
+    // Fetch all revision contents not yet cached, so we can filter to those
+    // that actually differ from the current editor content.
+    let contents = revContents;
+    if (activePath) {
+      const missing = revisions.filter((r) => !(r.id in revContents));
+      if (missing.length > 0) {
+        const fetched = await Promise.all(
+          missing.map(async (r) => {
+            try {
+              const rev = await getRevision(activePath, r.id, activeFileRoot);
+              return [r.id, rev.content] as const;
+            } catch {
+              return null;
+            }
+          })
+        );
+        const next = { ...revContents };
+        for (const e of fetched) if (e) next[e[0]] = e[1];
+        setRevContents(next);
+        contents = next;
+      }
+    }
+    const latestText = activeFile ? stripHint(activeFile.markdown) : "";
+    const meaningful = revisions.filter((r) => {
+      const c = contents[r.id];
+      return c !== undefined && hasChanges(lineDiff(c, latestText));
+    });
+    if (meaningful.length === 0) {
+      showToast("差分のある過去バージョンはありません", "info");
+      return;
+    }
+    // Always (re)open against the most recent meaningful revision so the picker
+    // starts on "最新差分あり", regardless of any earlier selection.
+    await loadRevision(meaningful[0].id);
     setDiffMode(true);
   };
 
@@ -377,6 +411,18 @@ export function EditorPage() {
     () => (activeFile ? stripHint(activeFile.markdown) : ""),
     [activeFile]
   );
+
+  // Revisions that actually differ from the current editor content. Content
+  // for a revision is only available after it has been fetched (via
+  // fetchAllRevisionContents on diff-open), so revisions whose content is not
+  // yet cached are excluded until the next fetch resolves.
+  // Note: diffLatestText is computed separately below, but we derive the same
+  // value here to avoid entangling that useMemo with this filter.
+  const currentEditorText = activeFile ? stripHint(activeFile.markdown) : "";
+  const meaningfulRevisions = revisions.filter((r) => {
+    const c = revContents[r.id];
+    return c !== undefined && hasChanges(lineDiff(c, currentEditorText));
+  });
 
   // Migrate any persisted legacy single-root files onto the default root
   // the first time we learn which root that is. Idempotent — subsequent
@@ -1131,7 +1177,7 @@ export function EditorPage() {
             <DiffView
               oldText={diffBaseText}
               newText={diffLatestText}
-              revisions={revisions}
+              revisions={meaningfulRevisions}
               selectedRevId={selectedRevId}
               onSelectRevision={(id) => void loadRevision(id)}
             />
