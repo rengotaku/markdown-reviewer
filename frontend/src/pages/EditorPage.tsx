@@ -63,6 +63,7 @@ import { formatLocalTimestamp } from "@/utils/formatTimestamp";
 import { computeAnchorFromSelection } from "@/utils/pmAnchor";
 import { lineDiff, hasChanges } from "@/utils/lineDiff";
 import type { HighlightComment } from "@/components/tiptap/extensions/CommentHighlight";
+import { BAR_HEIGHT, TAB_CONTENT_HEIGHT } from "@/theme/dimensions";
 
 function basename(path: string): string {
   const idx = path.lastIndexOf("/");
@@ -892,8 +893,8 @@ export function EditorPage() {
               pr: 1.5,
               // Fixed (not min) height, shared by all three pane headers, so
               // the header divider stays one continuous line regardless of
-              // which pane holds the tallest control (#65).
-              height: 48,
+              // which pane holds the tallest control (#65, #90). BAR_HEIGHT = 37px.
+              height: BAR_HEIGHT,
               flexShrink: 0,
               boxSizing: "border-box",
               borderBottom: "1px solid",
@@ -964,8 +965,8 @@ export function EditorPage() {
             gap: 1,
             px: 2,
             // Fixed height shared with the sidebar / comment pane headers so
-            // the three dividers form one continuous line (#65).
-            height: 48,
+            // the three dividers form one continuous line (#65, #90). BAR_HEIGHT = 37px.
+            height: BAR_HEIGHT,
             flexShrink: 0,
             boxSizing: "border-box",
             borderBottom: "1px solid",
@@ -1109,12 +1110,12 @@ export function EditorPage() {
           scrollButtons={false}
           TabIndicatorProps={{ sx: { display: "none" } }}
           sx={{
-            minHeight: 36,
+            minHeight: TAB_CONTENT_HEIGHT,
             borderBottom: 1,
             borderColor: "divider",
             flexShrink: 0,
             "& .MuiTab-root": {
-              minHeight: 36,
+              minHeight: TAB_CONTENT_HEIGHT,
               textTransform: "none",
               py: 0.5,
               px: 1,

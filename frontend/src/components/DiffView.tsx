@@ -13,6 +13,7 @@ import {
 } from "../utils/lineDiff";
 import { formatLocalTimestamp } from "../utils/formatTimestamp";
 import type { RevisionMeta } from "../api";
+import { BAR_HEIGHT } from "@/theme/dimensions";
 
 /** `"external"` → `"外部編集"`、それ以外はそのまま返す。 */
 function authorLabel(author: string): string {
@@ -80,6 +81,10 @@ export function DiffView({
         sx={{
           px: 2,
           py: 1,
+          // minHeight aligns the diff header with BAR_HEIGHT (37px); expands
+          // naturally if the revision picker wraps (#90).
+          minHeight: BAR_HEIGHT,
+          boxSizing: "border-box",
           position: "sticky",
           top: 0,
           bgcolor: "background.paper",
