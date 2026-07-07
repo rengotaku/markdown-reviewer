@@ -13,7 +13,6 @@ import ListItemText from "@mui/material/ListItemText";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import SaveIcon from "@mui/icons-material/Save";
-import SaveAsIcon from "@mui/icons-material/SaveAs";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import MenuOpenIcon from "@mui/icons-material/MenuOpen";
 import MenuIcon from "@mui/icons-material/Menu";
@@ -46,10 +45,8 @@ import { useEditorInstance } from "@/hooks/useEditorInstance";
 import { useEditorPrefs } from "@/hooks/useEditorPrefs";
 import { useCommentAuthor } from "@/hooks/useCommentAuthor";
 import { useActiveRoot } from "@/hooks/useActiveRoot";
-import { dirQueryKey } from "@/hooks/useDir";
 import { useQueryClient } from "@tanstack/react-query";
 import {
-  listDir,
   statFile,
   ingestFile,
   listRevisions,
@@ -66,7 +63,6 @@ import {
 } from "@/api";
 import { stripHint } from "@/utils/stripHint";
 import { formatLocalTimestamp } from "@/utils/formatTimestamp";
-import { nextVersionedPath } from "@/utils/versionedPath";
 import { computeAnchorFromSelection } from "@/utils/pmAnchor";
 import type { HighlightComment } from "@/components/tiptap/extensions/CommentHighlight";
 
@@ -535,39 +531,6 @@ export function EditorPage() {
     }
   };
 
-  const handleSaveAs = async () => {
-    if (!activeFile) return;
-    const slash = activeFile.path.lastIndexOf("/");
-    const dir = slash === -1 ? "" : activeFile.path.slice(0, slash);
-    try {
-      const siblings = await listDir(dir, activeFile.root);
-      const siblingPaths = siblings.entries.map((e) => e.path);
-      const newPath = nextVersionedPath(activeFile.path, siblingPaths);
-      const res = await writeFile.mutateAsync({
-        path: newPath,
-        content: activeFile.markdown,
-        root: activeFile.root,
-      });
-      await queryClient.invalidateQueries({
-        queryKey: dirQueryKey(activeFile.root, dir),
-      });
-      openServerFile({
-        name: basename(res.path),
-        path: res.path,
-        root: activeFile.root,
-        markdown: res.content,
-        modified: res.modified,
-        created: res.created,
-      });
-      showToast(`「${basename(res.path)}」として保存しました`, "success");
-    } catch (err) {
-      showToast(
-        `別名保存に失敗しました: ${(err as Error).message ?? "unknown error"}`,
-        "error"
-      );
-    }
-  };
-
   // Copy the displayed document as raw Markdown. The AI hint is stripped so
   // the clipboard holds the clean canonical text the user sees, ready to paste
   // elsewhere (e.g. into a chat) without the internal hint comment.
@@ -900,11 +863,11 @@ export function EditorPage() {
             <Typography
               variant="body2"
               sx={{
-                flexGrow: 1,
                 overflow: "hidden",
                 textOverflow: "ellipsis",
                 whiteSpace: "nowrap",
                 minWidth: 0,
+                flexShrink: 1,
               }}
               data-testid="editor-active-path"
             >
@@ -989,28 +952,17 @@ export function EditorPage() {
               </IconButton>
             </span>
           </Tooltip>
-          <Button
-            variant="contained"
-            size="small"
-            startIcon={<SaveIcon />}
-            disabled={!canSave || isSaving}
-            onClick={handleSave}
-            data-testid="editor-save"
-          >
-            {isSaving ? "保存中..." : "保存"}
-          </Button>
-          <Tooltip title="同じディレクトリに .vN.md 形式でバージョニング保存">
+          <Tooltip title={isSaving ? "保存中..." : "保存"}>
             <span>
-              <Button
-                variant="outlined"
+              <IconButton
                 size="small"
-                startIcon={<SaveAsIcon />}
+                onClick={handleSave}
                 disabled={!canSave || isSaving}
-                onClick={handleSaveAs}
-                data-testid="editor-save-as"
+                aria-label="save"
+                data-testid="editor-save"
               >
-                別名保存
-              </Button>
+                <SaveIcon fontSize="small" />
+              </IconButton>
             </span>
           </Tooltip>
         </Box>
