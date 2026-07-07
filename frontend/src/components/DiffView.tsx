@@ -7,6 +7,7 @@ import {
   lineDiff,
   hasChanges,
   intraLineSegments,
+  countChanges,
   type DiffRow,
 } from "../utils/lineDiff";
 import { formatLocalTimestamp } from "../utils/formatTimestamp";
@@ -54,6 +55,7 @@ export function DiffView({
   const rows = useMemo(() => lineDiff(oldText, newText), [oldText, newText]);
   const segsByRow = useMemo(() => intraLineSegments(rows), [rows]);
   const changed = hasChanges(rows);
+  const { added, removed } = useMemo(() => countChanges(rows), [rows]);
 
   return (
     <Box
@@ -99,9 +101,20 @@ export function DiffView({
             </MenuItem>
           ))}
         </Select>
+        {changed && (
+          <Typography
+            variant="caption"
+            data-testid="diff-change-stats"
+            sx={{ flexShrink: 0 }}
+          >
+            <Box component="span" sx={{ color: "success.main" }}>+{added}</Box>
+            {" "}
+            <Box component="span" sx={{ color: "error.main" }}>-{removed}</Box>
+          </Typography>
+        )}
         {!changed && (
           <Typography variant="caption" color="text.secondary">
-            （変更なし）
+            このバージョンと現在の内容に差分はありません
           </Typography>
         )}
       </Box>

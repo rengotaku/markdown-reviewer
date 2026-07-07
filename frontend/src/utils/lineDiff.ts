@@ -76,6 +76,17 @@ export function hasChanges(rows: DiffRow[]): boolean {
   return rows.some((r) => r.type !== "equal");
 }
 
+/** countChanges returns the number of added and deleted lines in a diff. */
+export function countChanges(rows: DiffRow[]): { added: number; removed: number } {
+  let added = 0;
+  let removed = 0;
+  for (const row of rows) {
+    if (row.type === "add") added++;
+    else if (row.type === "del") removed++;
+  }
+  return { added, removed };
+}
+
 /** A run of characters within a line, flagged as changed or unchanged. */
 export interface CharSeg {
   text: string;

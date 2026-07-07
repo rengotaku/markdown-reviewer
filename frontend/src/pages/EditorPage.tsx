@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import Box from "@mui/material/Box";
-import Button from "@mui/material/Button";
 import IconButton from "@mui/material/IconButton";
 import Menu from "@mui/material/Menu";
 import MenuItem from "@mui/material/MenuItem";
@@ -21,7 +20,6 @@ import AddCommentIcon from "@mui/icons-material/AddComment";
 import CommentIcon from "@mui/icons-material/Comment";
 import FormatAlignCenterIcon from "@mui/icons-material/FormatAlignCenter";
 import UnfoldMoreIcon from "@mui/icons-material/UnfoldMore";
-import Chip from "@mui/material/Chip";
 import RateReviewIcon from "@mui/icons-material/RateReview";
 import CompareArrowsIcon from "@mui/icons-material/CompareArrows";
 import { TiptapEditor } from "@/components/tiptap/TiptapEditor";
@@ -263,6 +261,50 @@ export function EditorPage() {
     return () => window.clearInterval(handle);
   }, [activePath, activeFileRoot, reviewState]);
 
+  // Poll review state for all open tabs at a fixed interval so external
+  // ingest (mr CLI / API) is reflected without a manual file-switch.
+  // Uses the same cadence as comment polling to avoid extra requests.
+  useEffect(() => {
+    const handle = window.setInterval(() => {
+      if (document.visibilityState === "visible") {
+        setReviewRefresh((n) => n + 1);
+      }
+    }, COMMENTS_POLL_MS);
+    return () => window.clearInterval(handle);
+  }, []);
+
+  // Sync review badge for all open tabs whenever reviewRefresh bumps. Capture
+  // a snapshot of the file list at effect-run time to avoid stale-closure
+  // issues; the effect re-runs on reviewRefresh changes and when the number
+  // of open files changes.
+  useEffect(() => {
+    if (allFiles.length === 0) return;
+    const snapshot = allFiles.slice();
+    let cancelled = false;
+    void (async () => {
+      try {
+        await Promise.all(
+          snapshot.map(async (f) => {
+            try {
+              const stat = await statFile(f.path, f.root);
+              if (!cancelled) {
+                markReviewFile(keyOf(f.root, f.path), stat.state === "review");
+              }
+            } catch {
+              // silently ignore per-file errors to keep other tabs updating
+            }
+          })
+        );
+      } catch {
+        // ignore top-level errors
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allFiles.length, reviewRefresh]);
+
   // Push the current comments into the editor as inline highlight decorations.
   // Re-runs whenever the list changes or a new file is loaded; passing [] when
   // there are none clears stale highlights.
@@ -348,9 +390,11 @@ export function EditorPage() {
   const handleRefreshTree = () => {
     // The sidebar has two data sources — the lazy tree ("dir") and the flat
     // recent list ("files") — refresh both so the button works in either
-    // view mode (#68).
+    // view mode (#68). Also bump reviewRefresh so tab badges reflect any
+    // out-of-band review-state changes that happened since the last poll.
     void queryClient.invalidateQueries({ queryKey: ["dir"] });
     void queryClient.invalidateQueries({ queryKey: ["files"] });
+    setReviewRefresh((n) => n + 1);
   };
 
   useDirChangeWatcher({
@@ -893,37 +937,33 @@ export function EditorPage() {
                 )}
               </Typography>
             )}
+            {activeFile && reviewState === "review" && hasOpenComments && (
+              <Typography
+                variant="caption"
+                sx={{ color: "success.main", flexShrink: 0, whiteSpace: "nowrap" }}
+                data-testid="editor-review-indicator"
+              >
+                レビュー中
+              </Typography>
+            )}
           </Box>
           {/* No explicit "取り込む" action: a file is ingested transparently the
               first time the user comments on it (see handleIngest / ingestThenOpen).
               Ingesting is internal bookkeeping the user shouldn't have to think about. */}
           {activeFile && reviewState === "review" && (
-            <>
-              {hasOpenComments && (
-                <Chip
+            <Tooltip title={diffMode ? "差分表示を閉じる" : "前回保存との差分を表示"}>
+              <span>
+                <IconButton
                   size="small"
-                  color="success"
-                  variant="outlined"
-                  icon={<RateReviewIcon />}
-                  label="review 中"
-                  data-testid="editor-review-indicator"
-                />
-              )}
-              <Tooltip title={diffMode ? "差分表示を閉じる" : "前回保存との差分を表示"}>
-                <span>
-                  <Button
-                    variant={diffMode ? "contained" : "outlined"}
-                    size="small"
-                    startIcon={<CompareArrowsIcon />}
-                    disabled={revisions.length === 0}
-                    onClick={handleToggleDiff}
-                    data-testid="editor-diff-toggle"
-                  >
-                    差分
-                  </Button>
-                </span>
-              </Tooltip>
-            </>
+                  disabled={revisions.length === 0}
+                  onClick={handleToggleDiff}
+                  data-testid="editor-diff-toggle"
+                  {...(diffMode ? { color: "primary" as const } : {})}
+                >
+                  <CompareArrowsIcon fontSize="small" />
+                </IconButton>
+              </span>
+            </Tooltip>
           )}
           <Tooltip title={centered ? "全幅表示に切替" : "中央寄せに切替"}>
             <IconButton
