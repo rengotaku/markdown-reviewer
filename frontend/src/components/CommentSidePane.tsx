@@ -25,6 +25,7 @@ import ReplyIcon from "@mui/icons-material/Reply";
 import OpenInFullIcon from "@mui/icons-material/OpenInFull";
 import type { SxProps, Theme } from "@mui/material/styles";
 import type { CommentJSON } from "@/api";
+import { BAR_HEIGHT } from "@/theme/dimensions";
 
 /** Comment/reply bodies longer than this are collapsed to a preview in the
  *  side-pane row, each with its own inline link to expand/collapse. The detail
@@ -175,8 +176,8 @@ export function CommentSidePane({
           pl: 2,
           pr: 0.5,
           // Fixed height shared with the sidebar / editor headers so the
-          // three dividers form one continuous line (#65).
-          height: 48,
+          // three dividers form one continuous line (#65, #90). BAR_HEIGHT = 37px.
+          height: BAR_HEIGHT,
           flexShrink: 0,
           boxSizing: "border-box",
           borderBottom: "1px solid",
@@ -206,10 +207,10 @@ export function CommentSidePane({
       <Box
         sx={{
           px: 1.5,
-          // Same fixed height as the editor file tab bar: 36px of content +
-          // the 1px bottom border (global border-box), so the three
-          // second-row dividers form one continuous line across the panes (#65).
-          height: 37,
+          // Fixed height matching the editor file tab bar (BAR_HEIGHT = 37px,
+          // border-box), so the second-row dividers form one continuous line
+          // across the panes (#65, #90).
+          height: BAR_HEIGHT,
           flexShrink: 0,
           boxSizing: "border-box",
           display: "flex",
@@ -257,6 +258,10 @@ export function CommentSidePane({
         sx={{
           px: 1.5,
           py: 1,
+          // minHeight keeps the toolbar aligned with BAR_HEIGHT (37px) when
+          // content fits; wraps naturally if buttons overflow (#90).
+          minHeight: BAR_HEIGHT,
+          boxSizing: "border-box",
           borderBottom: "1px solid",
           borderColor: "divider",
           display: "flex",
