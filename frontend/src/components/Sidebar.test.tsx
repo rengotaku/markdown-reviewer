@@ -159,7 +159,8 @@ describe("Sidebar recent view (#68)", () => {
       expect(screen.getByTestId("sidebar-dir-docs")).toBeInTheDocument()
     );
 
-    await user.click(screen.getByTestId("sidebar-view-recent"));
+    // Click the single toggle button to switch tree → recent.
+    await user.click(screen.getByTestId("sidebar-view-mode"));
     await waitFor(() =>
       expect(
         screen.getByTestId("sidebar-recent-file-docs/intro.md")
@@ -168,7 +169,8 @@ describe("Sidebar recent view (#68)", () => {
     // Tree entries are gone while the flat list is shown.
     expect(screen.queryByTestId("sidebar-dir-docs")).not.toBeInTheDocument();
 
-    await user.click(screen.getByTestId("sidebar-view-tree"));
+    // Click again to switch recent → tree.
+    await user.click(screen.getByTestId("sidebar-view-mode"));
     await waitFor(() =>
       expect(screen.getByTestId("sidebar-dir-docs")).toBeInTheDocument()
     );
@@ -184,7 +186,7 @@ describe("Sidebar recent view (#68)", () => {
       expect(screen.getByTestId("sidebar-dir-docs")).toBeInTheDocument()
     );
 
-    await user.click(screen.getByTestId("sidebar-view-recent"));
+    await user.click(screen.getByTestId("sidebar-view-mode"));
     expect(useUIStore.getState().sidebarViewMode).toBe("recent");
 
     const raw = localStorage.getItem("markdown-reviewer-ui");

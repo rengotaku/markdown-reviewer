@@ -11,8 +11,6 @@ import ListItemText from "@mui/material/ListItemText";
 import Menu from "@mui/material/Menu";
 import MenuItem from "@mui/material/MenuItem";
 import TextField from "@mui/material/TextField";
-import ToggleButton from "@mui/material/ToggleButton";
-import ToggleButtonGroup from "@mui/material/ToggleButtonGroup";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import AccountTreeIcon from "@mui/icons-material/AccountTree";
@@ -27,7 +25,7 @@ import { useDir } from "@/hooks/useDir";
 import { useFiles } from "@/hooks/useFiles";
 import { useActiveRoot } from "@/hooks/useActiveRoot";
 import { useToast } from "@/hooks/useToast";
-import { useUIStore, type SidebarViewMode } from "@/hooks/useUIStore";
+import { useUIStore } from "@/hooks/useUIStore";
 import { formatLocalTimestamp } from "@/utils/formatTimestamp";
 import type { DirEntryApi } from "@/api";
 
@@ -159,38 +157,20 @@ export function Sidebar({ activePath, onSelect }: SidebarProps) {
             ) : null,
           }}
         />
-        <ToggleButtonGroup
-          value={viewMode}
-          exclusive
-          size="small"
-          onChange={(_, next) => {
-            // null = click on the already-active button; keep the mode.
-            if (next !== null) setSidebarViewMode(next as SidebarViewMode);
-          }}
-          aria-label="サイドバーの表示モード"
-          data-testid="sidebar-view-mode"
-        >
-          <ToggleButton
-            value="tree"
-            aria-label="ツリー表示"
-            sx={{ py: 0.25 }}
-            data-testid="sidebar-view-tree"
+        <Tooltip title={viewMode === "tree" ? "更新順表示に切替" : "ツリー表示に切替"}>
+          <IconButton
+            size="small"
+            onClick={() => setSidebarViewMode(viewMode === "tree" ? "recent" : "tree")}
+            aria-label="表示モード切替"
+            data-testid="sidebar-view-mode"
           >
-            <Tooltip title="ツリー表示">
+            {viewMode === "tree" ? (
               <AccountTreeIcon fontSize="small" />
-            </Tooltip>
-          </ToggleButton>
-          <ToggleButton
-            value="recent"
-            aria-label="更新順表示"
-            sx={{ py: 0.25 }}
-            data-testid="sidebar-view-recent"
-          >
-            <Tooltip title="更新順表示">
+            ) : (
               <ScheduleIcon fontSize="small" />
-            </Tooltip>
-          </ToggleButton>
-        </ToggleButtonGroup>
+            )}
+          </IconButton>
+        </Tooltip>
       </Box>
 
       <Box sx={{ flex: 1, overflow: "auto" }}>
@@ -333,7 +313,8 @@ function TreeItem({
           </ListItemIcon>
           <ListItemText
             primary={entry.name}
-            slotProps={{ primary: { variant: "body2" } }}
+            slotProps={{ primary: { variant: "body2", noWrap: true } }}
+            sx={{ minWidth: 0 }}
           />
         </ListItemButton>
         {expanded && (
@@ -364,7 +345,8 @@ function TreeItem({
       </ListItemIcon>
       <ListItemText
         primary={entry.name}
-        slotProps={{ primary: { variant: "body2" } }}
+        slotProps={{ primary: { variant: "body2", noWrap: true } }}
+        sx={{ minWidth: 0 }}
       />
     </ListItemButton>
   );
