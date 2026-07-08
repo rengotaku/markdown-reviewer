@@ -147,3 +147,35 @@ export async function replyToComment(
     )
     .json<CommentJSON>();
 }
+
+/** Edit one threaded reply's body, addressed by its 0-based index. */
+export async function editReply(
+  path: string,
+  id: string,
+  index: number,
+  body: string,
+  root?: string
+): Promise<CommentJSON> {
+  const sep = root ? "&" : "?";
+  return apiClient
+    .patch(
+      `api/replies/${encodePath(path)}${rootQuery(root, "?")}${sep}id=${encodeURIComponent(id)}&index=${index}`,
+      { json: { body } }
+    )
+    .json<CommentJSON>();
+}
+
+/** Delete one threaded reply, addressed by its 0-based index. */
+export async function deleteReply(
+  path: string,
+  id: string,
+  index: number,
+  root?: string
+): Promise<CommentJSON> {
+  const sep = root ? "&" : "?";
+  return apiClient
+    .delete(
+      `api/replies/${encodePath(path)}${rootQuery(root, "?")}${sep}id=${encodeURIComponent(id)}&index=${index}`
+    )
+    .json<CommentJSON>();
+}

@@ -24,7 +24,7 @@ import ReplayIcon from "@mui/icons-material/Replay";
 import ReplyIcon from "@mui/icons-material/Reply";
 import OpenInFullIcon from "@mui/icons-material/OpenInFull";
 import type { SxProps, Theme } from "@mui/material/styles";
-import type { CommentJSON } from "@/api";
+import type { CommentJSON, CommentReply } from "@/api";
 import { BAR_HEIGHT } from "@/theme/dimensions";
 
 /** Comment/reply bodies longer than this are collapsed to a preview in the
@@ -87,6 +87,10 @@ interface Props {
   onResolveToggle: (id: string, next: "open" | "resolved") => void;
   onReply: (id: string, body: string) => void;
   onEdit: (id: string, body: string) => void;
+  /** Edit one threaded reply's body, addressed by its 0-based index. */
+  onEditReply: (id: string, index: number, body: string) => void;
+  /** Delete one threaded reply, addressed by its 0-based index. */
+  onDeleteReply: (id: string, index: number) => void;
   /** Scroll to + flash the comment's highlight in the editor. */
   onJump: (id: string) => void;
 }
@@ -141,6 +145,8 @@ export function CommentSidePane({
   onResolveToggle,
   onReply,
   onEdit,
+  onEditReply,
+  onDeleteReply,
   onJump,
 }: Props) {
   const [filter, setFilter] = useState<StatusFilter>("all");
@@ -257,15 +263,16 @@ export function CommentSidePane({
       <Box
         sx={{
           px: 1.5,
-          py: 1,
-          // minHeight keeps the toolbar aligned with BAR_HEIGHT (37px) when
-          // content fits; wraps naturally if buttons overflow (#90).
-          minHeight: BAR_HEIGHT,
+          // Fixed height matching the other pane bars (BAR_HEIGHT = 37px,
+          // border-box) so this row sits at the same visual height as the
+          // sidebar filter / editor tab bar (#94). Single row, no wrap.
+          height: BAR_HEIGHT,
+          flexShrink: 0,
           boxSizing: "border-box",
           borderBottom: "1px solid",
           borderColor: "divider",
           display: "flex",
-          flexWrap: "wrap",
+          alignItems: "center",
           gap: 0.75,
         }}
         data-testid="comment-add-toolbar"
@@ -329,6 +336,8 @@ export function CommentSidePane({
               onResolveToggle={onResolveToggle}
               onReply={onReply}
               onEdit={onEdit}
+              onEditReply={onEditReply}
+              onDeleteReply={onDeleteReply}
               onJump={onJump}
               onOpenDetail={setDetailId}
             />
@@ -346,6 +355,8 @@ export function CommentSidePane({
         onResolveToggle={onResolveToggle}
         onReply={onReply}
         onEdit={onEdit}
+        onEditReply={onEditReply}
+        onDeleteReply={onDeleteReply}
         onJump={(id) => {
           onJump(id);
           setDetailId(null);
@@ -361,6 +372,8 @@ interface RowProps {
   onResolveToggle: (id: string, next: "open" | "resolved") => void;
   onReply: (id: string, body: string) => void;
   onEdit: (id: string, body: string) => void;
+  onEditReply: (id: string, index: number, body: string) => void;
+  onDeleteReply: (id: string, index: number) => void;
   onJump: (id: string) => void;
   onOpenDetail: (id: string) => void;
 }
@@ -371,6 +384,8 @@ function CommentRow({
   onResolveToggle,
   onReply,
   onEdit,
+  onEditReply,
+  onDeleteReply,
   onJump,
   onOpenDetail,
 }: RowProps) {
@@ -517,16 +532,16 @@ function CommentRow({
       {c.replies && c.replies.length > 0 && (
         <Box sx={{ mt: 1, pl: 1, borderLeft: "2px solid", borderColor: "divider" }}>
           {c.replies.map((r, i) => (
-            <Box key={i} sx={{ mb: 0.5 }} data-testid="comment-reply">
-              <Typography variant="caption" color="text.secondary">
-                {r.author || "?"} {r.date ? `· ${r.date}` : ""}
-              </Typography>
-              <CollapsibleText
-                text={r.body}
-                testid="comment-reply-body"
-                sx={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}
-              />
-            </Box>
+            <ReplyRow
+              key={i}
+              reply={r}
+              index={i}
+              commentId={c.id}
+              resolved={resolved}
+              collapsible
+              onEditReply={onEditReply}
+              onDeleteReply={onDeleteReply}
+            />
           ))}
         </Box>
       )}
@@ -629,6 +644,136 @@ function CommentRow({
   );
 }
 
+interface ReplyRowProps {
+  reply: CommentReply;
+  /** 0-based position of this reply under its comment (the address the API uses). */
+  index: number;
+  commentId: string;
+  /** A resolved comment is read-only, so its replies can't be edited/deleted. */
+  resolved: boolean;
+  /** Side-pane rows collapse long bodies; the detail dialog shows them in full. */
+  collapsible: boolean;
+  /** Test id for the row container (defaults to the side-pane reply id). */
+  outerTestid?: string;
+  onEditReply: (id: string, index: number, body: string) => void;
+  onDeleteReply: (id: string, index: number) => void;
+}
+
+/** One threaded reply with its own inline edit form + edit/delete toolbar, so
+ *  each reply is operable individually (not just the top-level comment). */
+function ReplyRow({
+  reply: r,
+  index,
+  commentId,
+  resolved,
+  collapsible,
+  outerTestid = "comment-reply",
+  onEditReply,
+  onDeleteReply,
+}: ReplyRowProps) {
+  const [editOpen, setEditOpen] = useState(false);
+  const [editBody, setEditBody] = useState(r.body);
+
+  const startEdit = () => {
+    setEditBody(r.body);
+    setEditOpen(true);
+  };
+  const submitEdit = () => {
+    const body = editBody.trim();
+    if (!body || body === r.body) {
+      setEditOpen(false);
+      return;
+    }
+    onEditReply(commentId, index, body);
+    setEditOpen(false);
+  };
+
+  return (
+    <Box sx={{ mb: 0.5 }} data-testid={outerTestid}>
+      <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
+        <Typography variant="caption" color="text.secondary" sx={{ flexGrow: 1 }}>
+          {r.author || "?"} {r.date ? `· ${r.date}` : ""}
+        </Typography>
+        {!editOpen && (
+          <>
+            <Tooltip title={resolved ? "解決済みのため編集できません" : "返信を編集"}>
+              <span>
+                <IconButton
+                  size="small"
+                  disabled={resolved}
+                  onClick={startEdit}
+                  aria-label="edit reply"
+                  data-testid="comment-reply-edit"
+                  sx={{ p: 0.25 }}
+                >
+                  <EditOutlinedIcon sx={{ fontSize: 15 }} />
+                </IconButton>
+              </span>
+            </Tooltip>
+            <Tooltip title={resolved ? "解決済みのため削除できません" : "返信を削除"}>
+              <span>
+                <IconButton
+                  size="small"
+                  disabled={resolved}
+                  onClick={() => onDeleteReply(commentId, index)}
+                  aria-label="delete reply"
+                  data-testid="comment-reply-delete"
+                  sx={{ p: 0.25 }}
+                >
+                  <DeleteOutlineIcon sx={{ fontSize: 15 }} />
+                </IconButton>
+              </span>
+            </Tooltip>
+          </>
+        )}
+      </Box>
+
+      {editOpen && !resolved ? (
+        <Box>
+          <TextField
+            value={editBody}
+            onChange={(e) => setEditBody(e.target.value)}
+            multiline
+            minRows={2}
+            fullWidth
+            size="small"
+            autoFocus
+            inputProps={{ "data-testid": "comment-reply-edit-input" }}
+          />
+          <Box sx={{ display: "flex", justifyContent: "flex-end", gap: 0.5, mt: 0.5 }}>
+            <Button size="small" onClick={() => setEditOpen(false)}>
+              キャンセル
+            </Button>
+            <Button
+              size="small"
+              variant="contained"
+              onClick={submitEdit}
+              disabled={!editBody.trim()}
+              data-testid="comment-reply-edit-submit"
+            >
+              更新
+            </Button>
+          </Box>
+        </Box>
+      ) : collapsible ? (
+        <CollapsibleText
+          text={r.body}
+          testid="comment-reply-body"
+          sx={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}
+        />
+      ) : (
+        <Typography
+          variant="body2"
+          sx={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}
+          data-testid="comment-detail-reply-body"
+        >
+          {r.body}
+        </Typography>
+      )}
+    </Box>
+  );
+}
+
 interface DetailDialogProps {
   comment: CommentJSON | null;
   onClose: () => void;
@@ -636,6 +781,8 @@ interface DetailDialogProps {
   onResolveToggle: (id: string, next: "open" | "resolved") => void;
   onReply: (id: string, body: string) => void;
   onEdit: (id: string, body: string) => void;
+  onEditReply: (id: string, index: number, body: string) => void;
+  onDeleteReply: (id: string, index: number) => void;
   onJump: (id: string) => void;
 }
 
@@ -649,6 +796,8 @@ function CommentDetailDialog({
   onResolveToggle,
   onReply,
   onEdit,
+  onEditReply,
+  onDeleteReply,
   onJump,
 }: DetailDialogProps) {
   const [replyBody, setReplyBody] = useState("");
@@ -785,17 +934,17 @@ function CommentDetailDialog({
         {c.replies && c.replies.length > 0 && (
           <Box sx={{ mt: 2, pl: 1.5, borderLeft: "3px solid", borderColor: "divider" }}>
             {c.replies.map((r, i) => (
-              <Box key={i} sx={{ mb: 1 }} data-testid="comment-detail-reply">
-                <Typography variant="caption" color="text.secondary">
-                  {r.author || "?"} {r.date ? `· ${r.date}` : ""}
-                </Typography>
-                <Typography
-                  variant="body2"
-                  sx={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}
-                >
-                  {r.body}
-                </Typography>
-              </Box>
+              <ReplyRow
+                key={i}
+                reply={r}
+                index={i}
+                commentId={c.id}
+                resolved={resolved}
+                collapsible={false}
+                outerTestid="comment-detail-reply"
+                onEditReply={onEditReply}
+                onDeleteReply={onDeleteReply}
+              />
             ))}
           </Box>
         )}

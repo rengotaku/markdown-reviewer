@@ -13,10 +13,12 @@ import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import SaveIcon from "@mui/icons-material/Save";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
+import RateReviewOutlinedIcon from "@mui/icons-material/RateReviewOutlined";
 import MenuOpenIcon from "@mui/icons-material/MenuOpen";
 import MenuIcon from "@mui/icons-material/Menu";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import AddCommentIcon from "@mui/icons-material/AddComment";
+import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import CommentIcon from "@mui/icons-material/Comment";
 import FormatAlignCenterIcon from "@mui/icons-material/FormatAlignCenter";
 import UnfoldMoreIcon from "@mui/icons-material/UnfoldMore";
@@ -55,6 +57,8 @@ import {
   editCommentBody,
   deleteComment,
   replyToComment,
+  editReply,
+  deleteReply,
   type ReviewState,
   type RevisionMeta,
   type CommentJSON,
@@ -518,7 +522,14 @@ export function EditorPage() {
      */
     range?: { from: number; to: number };
   }>({ open: false, mode: "anchored", snippet: "" });
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+  // Editor context menu. Without commentId → "コメント追加" for the current
+  // selection; with commentId → "このコメントを削除" for the highlight that was
+  // right-clicked.
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    commentId?: string;
+  } | null>(null);
 
   // Re-render the toolbar Add-Comment button when selection / doc changes.
   const [, setSelectionTick] = useState(0);
@@ -551,6 +562,16 @@ export function EditorPage() {
       }
       const handler = (e: Event) => {
         const ev = e as MouseEvent;
+        // Right-click on a comment highlight → offer to delete that comment,
+        // taking priority over the selection-based "コメント追加" path.
+        const target = ev.target as HTMLElement | null;
+        const markEl = target?.closest?.("[data-comment-id]") as HTMLElement | null;
+        const commentId = markEl?.getAttribute("data-comment-id") ?? undefined;
+        if (commentId) {
+          ev.preventDefault();
+          setContextMenu({ x: ev.clientX, y: ev.clientY, commentId });
+          return;
+        }
         const sel = editor.state.selection;
         if (sel.empty || sel.from === sel.to) return;
         ev.preventDefault();
@@ -666,6 +687,28 @@ export function EditorPage() {
     }
   };
 
+  // Build `mr comments <abs-path>` for the active file and copy it, so the user
+  // can paste one command to have the AI check this file's review comments —
+  // no need to retype the file name + "コメント確認して" each time. An absolute
+  // path (root abs path + root-relative file path) is used so it resolves
+  // regardless of the AI's working directory.
+  const handleCopyReviewCommand = async () => {
+    if (!activeFile) return;
+    const rootPath = roots.find((r) => r.name === activeFile.root)?.path ?? "";
+    const base = rootPath.replace(/\/+$/, "");
+    const abs = base ? `${base}/${activeFile.path}` : activeFile.path;
+    const cmd = `mr comments ${abs}`;
+    try {
+      await navigator.clipboard.writeText(cmd);
+      showToast("コメント確認コマンドをコピーしました", "success");
+    } catch (err) {
+      showToast(
+        `コピーに失敗しました: ${(err as Error).message ?? "unknown error"}`,
+        "error"
+      );
+    }
+  };
+
   const canAddComment = (() => {
     if (!editor) return false;
     const { from, to, empty } = editor.state.selection;
@@ -729,6 +772,12 @@ export function EditorPage() {
   const handleContextAddComment = () => {
     closeContextMenu();
     handleAddCommentClick();
+  };
+
+  const handleContextDeleteComment = () => {
+    const id = contextMenu?.commentId;
+    closeContextMenu();
+    if (id) void handleDeleteComment(id);
   };
 
   const closeCommentDialog = () =>
@@ -818,6 +867,26 @@ export function EditorPage() {
       refreshComments();
     } catch (err) {
       commentErr("返信の追加", err);
+    }
+  };
+
+  const handleEditReply = async (id: string, index: number, nextBody: string) => {
+    if (!activeFile) return;
+    try {
+      await editReply(activeFile.path, id, index, nextBody, activeFile.root);
+      refreshComments();
+    } catch (err) {
+      commentErr("返信の編集", err);
+    }
+  };
+
+  const handleDeleteReply = async (id: string, index: number) => {
+    if (!activeFile) return;
+    try {
+      await deleteReply(activeFile.path, id, index, activeFile.root);
+      refreshComments();
+    } catch (err) {
+      commentErr("返信の削除", err);
     }
   };
 
@@ -1077,6 +1146,19 @@ export function EditorPage() {
               )}
             </IconButton>
           </Tooltip>
+          <Tooltip title="AI にコメント確認させる mr コマンドをコピー（mr comments <path>）">
+            <span>
+              <IconButton
+                size="small"
+                onClick={handleCopyReviewCommand}
+                disabled={!activeFile}
+                aria-label="copy review command"
+                data-testid="editor-copy-review-command"
+              >
+                <RateReviewOutlinedIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
           <Tooltip title="表示中の素の Markdown をクリップボードにコピー">
             <span>
               <IconButton
@@ -1303,6 +1385,8 @@ export function EditorPage() {
             onResolveToggle={handleResolveToggle}
             onReply={handleReplyComment}
             onEdit={handleEditComment}
+            onEditReply={handleEditReply}
+            onDeleteReply={handleDeleteReply}
             onJump={handleJumpToComment}
           />
         </Box>
@@ -1346,12 +1430,21 @@ export function EditorPage() {
           root: { "data-testid": "editor-context-menu" } as Record<string, unknown>,
         }}
       >
-        <MenuItem onClick={handleContextAddComment} data-testid="ctx-add-comment">
-          <ListItemIcon>
-            <AddCommentIcon fontSize="small" />
-          </ListItemIcon>
-          <ListItemText>コメント追加</ListItemText>
-        </MenuItem>
+        {contextMenu?.commentId ? (
+          <MenuItem onClick={handleContextDeleteComment} data-testid="ctx-delete-comment">
+            <ListItemIcon>
+              <DeleteOutlineIcon fontSize="small" />
+            </ListItemIcon>
+            <ListItemText>このコメントを削除</ListItemText>
+          </MenuItem>
+        ) : (
+          <MenuItem onClick={handleContextAddComment} data-testid="ctx-add-comment">
+            <ListItemIcon>
+              <AddCommentIcon fontSize="small" />
+            </ListItemIcon>
+            <ListItemText>コメント追加</ListItemText>
+          </MenuItem>
+        )}
       </Menu>
 
       <AddCommentDialog

@@ -251,6 +251,29 @@ describe("EditorPage", () => {
     );
   });
 
+  it("copies the `mr comments <abs-path>` review command for the active file", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.spyOn(navigator.clipboard, "writeText");
+    renderPage();
+
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
+    );
+    await user.click(screen.getByTestId("sidebar-file-README.md"));
+    await waitFor(() =>
+      expect(screen.getByTestId("editor-active-path")).toHaveTextContent("README.md")
+    );
+
+    await user.click(screen.getByTestId("editor-copy-review-command"));
+
+    await waitFor(() =>
+      expect(writeText).toHaveBeenCalledWith("mr comments /tmp/mock-root/README.md")
+    );
+    expect(useToast.getState().toasts.some((t) => t.severity === "success")).toBe(
+      true
+    );
+  });
+
   it("displays REVIEW_ROOT basename in the sidebar header (from /api/config)", async () => {
     renderPage();
     await waitFor(() =>

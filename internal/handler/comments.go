@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 
@@ -257,6 +258,85 @@ func (h *Handler) AddReply(c *gin.Context) {
 	c.JSON(http.StatusOK, buildCommentJSON(string(content), updated))
 }
 
+// replyIndexParam parses the required `index` query param (0-based reply
+// position). ok=false means an error response was already written.
+func (h *Handler) replyIndexParam(c *gin.Context) (int, bool) {
+	raw := c.Query("index")
+	if raw == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "index query param required"})
+		return 0, false
+	}
+	idx, err := strconv.Atoi(raw)
+	if err != nil || idx < 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "index must be a non-negative integer"})
+		return 0, false
+	}
+	return idx, true
+}
+
+// EditReplyRequest is the body for PATCH /api/replies/*path?id=...&index=...
+type EditReplyRequest struct {
+	Body string `json:"body"`
+}
+
+// EditReply updates a single threaded reply's body, addressed by its 0-based
+// index under the comment.
+func (h *Handler) EditReply(c *gin.Context) {
+	full, rel, name, ok := h.resolveRequest(c)
+	if !ok {
+		return
+	}
+	id := c.Query("id")
+	if id == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "id query param required"})
+		return
+	}
+	index, ok := h.replyIndexParam(c)
+	if !ok {
+		return
+	}
+	var req EditReplyRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+	if req.Body == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "body is required"})
+		return
+	}
+	updated, err := reviewstore.UpdateReplyBody(name, rel, id, index, req.Body)
+	if err != nil {
+		h.writeCommentErr(c, err)
+		return
+	}
+	content, _ := os.ReadFile(full)
+	c.JSON(http.StatusOK, buildCommentJSON(string(content), updated))
+}
+
+// DeleteReply removes a single threaded reply by its 0-based index.
+func (h *Handler) DeleteReply(c *gin.Context) {
+	full, rel, name, ok := h.resolveRequest(c)
+	if !ok {
+		return
+	}
+	id := c.Query("id")
+	if id == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "id query param required"})
+		return
+	}
+	index, ok := h.replyIndexParam(c)
+	if !ok {
+		return
+	}
+	updated, err := reviewstore.DeleteReply(name, rel, id, index)
+	if err != nil {
+		h.writeCommentErr(c, err)
+		return
+	}
+	content, _ := os.ReadFile(full)
+	c.JSON(http.StatusOK, buildCommentJSON(string(content), updated))
+}
+
 // readCanonical reads the canonical file, writing the proper error response on
 // failure. ok=false means a response was already written.
 func (h *Handler) readCanonical(c *gin.Context, full string) (string, bool) {
@@ -293,6 +373,8 @@ func (h *Handler) writeCommentErr(c *gin.Context, err error) {
 		c.JSON(http.StatusConflict, gin.H{"error": "file is not under review; ingest it first"})
 	case errors.Is(err, reviewstore.ErrCommentNotFound):
 		c.JSON(http.StatusNotFound, gin.H{"error": "comment not found"})
+	case errors.Is(err, reviewstore.ErrReplyNotFound):
+		c.JSON(http.StatusNotFound, gin.H{"error": "reply not found"})
 	case errors.Is(err, reviewstore.ErrCommentResolved):
 		c.JSON(http.StatusConflict, gin.H{"error": "comment is resolved; reopen it first"})
 	default:

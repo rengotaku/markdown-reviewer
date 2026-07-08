@@ -30,6 +30,8 @@ export {
   editCommentBody,
   deleteComment,
   replyToComment,
+  editReply,
+  deleteReply,
   type CommentAnchor,
   type CommentReply,
   type CommentContext,

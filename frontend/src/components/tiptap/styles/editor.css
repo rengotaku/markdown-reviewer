@@ -1,7 +1,9 @@
 .ProseMirror {
   min-height: 100%;
   width: 100%;
-  padding: 40px 48px;
+  /* Top padding halved (was 40px) to tighten the gap below the Frontmatter
+     panel / above the body (#94). */
+  padding: 20px 48px 40px;
   box-sizing: border-box;
   outline: none;
   font-size: 1rem;
@@ -182,9 +184,10 @@
   text-decoration: line-through;
 }
 
-/* Frontmatter panel — read-only YAML frontmatter surfaced above the editor. */
+/* Frontmatter panel — read-only YAML frontmatter surfaced above the editor.
+   Top padding halved (was 24px) to tighten the gap above the panel (#94). */
 .frontmatter-panel {
-  padding: 24px 48px 0;
+  padding: 12px 48px 0;
   box-sizing: border-box;
 }
 
