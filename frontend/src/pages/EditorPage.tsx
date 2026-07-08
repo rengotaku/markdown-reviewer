@@ -21,6 +21,7 @@ import CommentIcon from "@mui/icons-material/Comment";
 import FormatAlignCenterIcon from "@mui/icons-material/FormatAlignCenter";
 import UnfoldMoreIcon from "@mui/icons-material/UnfoldMore";
 import CompareArrowsIcon from "@mui/icons-material/CompareArrows";
+import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
 import { TiptapEditor } from "@/components/tiptap/TiptapEditor";
 import {
   Sidebar,
@@ -1010,23 +1011,29 @@ export function EditorPage() {
               {activeFile?.isDirty && " •"}
             </Typography>
             {activeFile && (activeFile.serverCreated || activeFile.serverModified) && (
-              <Typography
-                variant="caption"
-                color="text.secondary"
-                sx={{
-                  flexShrink: 0,
-                  whiteSpace: "nowrap",
-                }}
-                data-testid="editor-active-timestamps"
+              <Tooltip
+                title={
+                  <span data-testid="editor-active-timestamps-tooltip">
+                    {activeFile.serverCreated && (
+                      <>作成: {formatLocalTimestamp(activeFile.serverCreated)}</>
+                    )}
+                    {activeFile.serverCreated && activeFile.serverModified && (
+                      <br />
+                    )}
+                    {activeFile.serverModified && (
+                      <>更新: {formatLocalTimestamp(activeFile.serverModified)}</>
+                    )}
+                  </span>
+                }
               >
-                {activeFile.serverCreated && (
-                  <>作成: {formatLocalTimestamp(activeFile.serverCreated)}</>
-                )}
-                {activeFile.serverCreated && activeFile.serverModified && " · "}
-                {activeFile.serverModified && (
-                  <>更新: {formatLocalTimestamp(activeFile.serverModified)}</>
-                )}
-              </Typography>
+                <IconButton
+                  size="small"
+                  sx={{ flexShrink: 0, color: "text.secondary" }}
+                  data-testid="editor-active-timestamps"
+                >
+                  <InfoOutlinedIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
             )}
             {activeFile && reviewState === "review" && hasOpenComments && (
               <Typography
