@@ -124,10 +124,13 @@ export function Sidebar({ activePath, onSelect }: SidebarProps) {
     >
       <Box
         sx={{
-          p: 1,
-          // minHeight aligns with BAR_HEIGHT (37px) so the filter bar sits at
-          // the same visual row height as the file tab bar (#90).
-          minHeight: BAR_HEIGHT,
+          px: 1,
+          // Fixed height (not min) so the filter bar sits at exactly the same
+          // visual row height as the other pane bars (BAR_HEIGHT = 37px). The
+          // TextField is shrunk (see below) to fit inside without growing the
+          // row (#94).
+          height: BAR_HEIGHT,
+          flexShrink: 0,
           boxSizing: "border-box",
           borderBottom: "1px solid",
           borderColor: "divider",
@@ -145,7 +148,14 @@ export function Sidebar({ activePath, onSelect }: SidebarProps) {
               : "直下のディレクトリ名でフィルタ"
           }
           size="small"
-          sx={{ flex: 1, minWidth: 0 }}
+          sx={{
+            flex: 1,
+            minWidth: 0,
+            // Keep the input inside the 37px bar: shrink the field + font so it
+            // doesn't force the row taller than the other pane bars.
+            "& .MuiInputBase-root": { height: 28 },
+            "& .MuiInputBase-input": { py: 0, fontSize: "0.8125rem" },
+          }}
           inputProps={{ "data-testid": "sidebar-filter" }}
           InputProps={{
             endAdornment: filter ? (

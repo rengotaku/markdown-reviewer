@@ -115,6 +115,56 @@ func TestCommentCRUD(t *testing.T) {
 	}
 }
 
+func TestReplyEditAndDeleteByIndex(t *testing.T) {
+	withTempStore(t)
+	const root, rel = "rooms", "doc.md"
+	if err := Ingest(root, rel); err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if _, err := AddComment(root, rel, Comment{Scope: "global", Body: "全体"}); err != nil {
+		t.Fatalf("AddComment: %v", err)
+	}
+	for _, b := range []string{"r0", "r1", "r2"} {
+		if _, err := AddReply(root, rel, "c-001", Reply{Author: "ai", Body: b}); err != nil {
+			t.Fatalf("AddReply %s: %v", b, err)
+		}
+	}
+
+	// Edit the middle reply.
+	if _, err := UpdateReplyBody(root, rel, "c-001", 1, "r1-edited"); err != nil {
+		t.Fatalf("UpdateReplyBody: %v", err)
+	}
+	// Delete the first reply; the remaining ones shift down.
+	updated, err := DeleteReply(root, rel, "c-001", 0)
+	if err != nil {
+		t.Fatalf("DeleteReply: %v", err)
+	}
+	if len(updated.Replies) != 2 ||
+		updated.Replies[0].Body != "r1-edited" ||
+		updated.Replies[1].Body != "r2" {
+		t.Fatalf("unexpected replies after edit+delete: %+v", updated.Replies)
+	}
+
+	// Out-of-range index → ErrReplyNotFound.
+	if _, err := UpdateReplyBody(root, rel, "c-001", 5, "x"); !errors.Is(err, ErrReplyNotFound) {
+		t.Fatalf("want ErrReplyNotFound (edit), got %v", err)
+	}
+	if _, err := DeleteReply(root, rel, "c-001", -1); !errors.Is(err, ErrReplyNotFound) {
+		t.Fatalf("want ErrReplyNotFound (delete), got %v", err)
+	}
+
+	// Resolved comment is read-only for reply mutations.
+	if _, err := UpdateCommentStatus(root, rel, "c-001", StatusResolved); err != nil {
+		t.Fatalf("UpdateCommentStatus: %v", err)
+	}
+	if _, err := UpdateReplyBody(root, rel, "c-001", 0, "y"); !errors.Is(err, ErrCommentResolved) {
+		t.Fatalf("want ErrCommentResolved (edit), got %v", err)
+	}
+	if _, err := DeleteReply(root, rel, "c-001", 0); !errors.Is(err, ErrCommentResolved) {
+		t.Fatalf("want ErrCommentResolved (delete), got %v", err)
+	}
+}
+
 func TestReadReviewEmptyWhenNotIngested(t *testing.T) {
 	withTempStore(t)
 	r, err := ReadReview("rooms", "missing.md")

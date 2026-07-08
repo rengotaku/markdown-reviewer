@@ -54,6 +54,8 @@ func (h *Handler) Routes(staticHandler http.Handler) http.Handler {
 		api.PATCH("/comments/*path", h.UpdateComment)
 		api.DELETE("/comments/*path", h.DeleteComment)
 		api.POST("/replies/*path", h.AddReply)
+		api.PATCH("/replies/*path", h.EditReply)
+		api.DELETE("/replies/*path", h.DeleteReply)
 		api.GET("/review/*path", h.ReviewMarkdown)
 		api.POST("/ingest/*path", h.IngestFile)
 		api.GET("/revisions/*path", h.Revisions)

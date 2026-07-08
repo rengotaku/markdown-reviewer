@@ -33,6 +33,10 @@ var ErrCommentNotFound = errors.New("reviewstore: comment not found")
 // caller must set status back to open first.
 var ErrCommentResolved = errors.New("reviewstore: comment is resolved")
 
+// ErrReplyNotFound is returned when a reply index is out of range for its
+// comment (replies are addressed by 0-based position, not by id).
+var ErrReplyNotFound = errors.New("reviewstore: reply not found")
+
 // Anchor locates a comment inside the clean canonical markdown by content,
 // not by position — the canonical file carries no review markers (#50). On
 // load the snippet is searched under heading_path; the occurrence index
@@ -174,6 +178,38 @@ func AddReply(root, relPath, id string, reply Reply) (Comment, error) {
 			return ErrCommentResolved
 		}
 		c.Replies = append(c.Replies, reply)
+		return nil
+	})
+}
+
+// UpdateReplyBody edits a threaded reply's body, addressed by its 0-based
+// index under the comment. A resolved comment is read-only (ErrCommentResolved);
+// an out-of-range index yields ErrReplyNotFound.
+func UpdateReplyBody(root, relPath, id string, index int, body string) (Comment, error) {
+	return mutateComment(root, relPath, id, func(c *Comment) error {
+		if c.Status == StatusResolved {
+			return ErrCommentResolved
+		}
+		if index < 0 || index >= len(c.Replies) {
+			return ErrReplyNotFound
+		}
+		c.Replies[index].Body = body
+		return nil
+	})
+}
+
+// DeleteReply removes a threaded reply by its 0-based index under the comment.
+// A resolved comment is read-only (ErrCommentResolved); an out-of-range index
+// yields ErrReplyNotFound.
+func DeleteReply(root, relPath, id string, index int) (Comment, error) {
+	return mutateComment(root, relPath, id, func(c *Comment) error {
+		if c.Status == StatusResolved {
+			return ErrCommentResolved
+		}
+		if index < 0 || index >= len(c.Replies) {
+			return ErrReplyNotFound
+		}
+		c.Replies = append(c.Replies[:index], c.Replies[index+1:]...)
 		return nil
 	})
 }
