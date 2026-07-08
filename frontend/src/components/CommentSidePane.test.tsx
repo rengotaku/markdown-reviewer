@@ -26,6 +26,8 @@ function renderPane(props: Partial<React.ComponentProps<typeof CommentSidePane>>
     onResolveToggle: vi.fn(),
     onReply: vi.fn(),
     onEdit: vi.fn(),
+    onEditReply: vi.fn(),
+    onDeleteReply: vi.fn(),
     onJump: vi.fn(),
   };
   render(
@@ -185,6 +187,59 @@ describe("CommentSidePane", () => {
     await user.type(screen.getByTestId("comment-reply-input"), "返信です");
     await user.click(screen.getByTestId("comment-reply-submit"));
     expect(h.onReply).toHaveBeenCalledWith("c1", "返信です");
+  });
+
+  it("edits an individual reply by its index", async () => {
+    const user = userEvent.setup();
+    const h = renderPane({
+      comments: [
+        comment("c1", {
+          replies: [
+            { author: "ai", date: "2026-05-20", body: "reply0" },
+            { author: "ai", date: "2026-05-21", body: "reply1" },
+          ],
+        }),
+      ],
+    });
+    // Each reply has its own edit button; operate on the second one (index 1).
+    const editButtons = screen.getAllByTestId("comment-reply-edit");
+    expect(editButtons).toHaveLength(2);
+    await user.click(editButtons[1]);
+    const input = screen.getByTestId("comment-reply-edit-input");
+    await user.clear(input);
+    await user.type(input, "reply1-edited");
+    await user.click(screen.getByTestId("comment-reply-edit-submit"));
+    expect(h.onEditReply).toHaveBeenCalledWith("c1", 1, "reply1-edited");
+  });
+
+  it("deletes an individual reply by its index", async () => {
+    const user = userEvent.setup();
+    const h = renderPane({
+      comments: [
+        comment("c1", {
+          replies: [
+            { author: "ai", date: "2026-05-20", body: "reply0" },
+            { author: "ai", date: "2026-05-21", body: "reply1" },
+          ],
+        }),
+      ],
+    });
+    const deleteButtons = screen.getAllByTestId("comment-reply-delete");
+    await user.click(deleteButtons[0]);
+    expect(h.onDeleteReply).toHaveBeenCalledWith("c1", 0);
+  });
+
+  it("disables per-reply edit/delete for a resolved comment", () => {
+    renderPane({
+      comments: [
+        comment("c1", {
+          status: "resolved",
+          replies: [{ author: "ai", date: "2026-05-20", body: "reply0" }],
+        }),
+      ],
+    });
+    expect(screen.getByTestId("comment-reply-edit")).toBeDisabled();
+    expect(screen.getByTestId("comment-reply-delete")).toBeDisabled();
   });
 
   it("filters the list by status via the toggle", async () => {

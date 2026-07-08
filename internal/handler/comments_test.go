@@ -120,6 +120,46 @@ func TestComments_CRUDLifecycle(t *testing.T) {
 	assert.Empty(t, list.Comments)
 }
 
+func TestReplies_EditAndDeleteByIndex(t *testing.T) {
+	useTempReviewStore(t)
+	h, root := setupFilesHandler(t)
+	require.NoError(t, os.WriteFile(filepath.Join(root, "doc.md"), []byte("# 見出し\n\n本文\n"), 0o644))
+	require.Equal(t, http.StatusOK, serve(h, httptest.NewRequest(http.MethodPost, "/api/ingest/doc.md", nil)).Code)
+
+	require.Equal(t, http.StatusCreated, postJSON(t, h, http.MethodPost, "/api/comments/doc.md",
+		handler.CreateCommentRequest{Scope: "global", Body: "全体"}).Code)
+	for _, b := range []string{"r0", "r1", "r2"} {
+		require.Equal(t, http.StatusOK, postJSON(t, h, http.MethodPost, "/api/replies/doc.md?id=c-001",
+			handler.ReplyRequest{Author: "ai", Body: b}).Code)
+	}
+
+	// Edit reply at index 1.
+	require.Equal(t, http.StatusOK, postJSON(t, h, http.MethodPatch, "/api/replies/doc.md?id=c-001&index=1",
+		handler.EditReplyRequest{Body: "r1-edited"}).Code)
+	// Delete reply at index 0; the rest shift down.
+	rec := serve(h, httptest.NewRequest(http.MethodDelete, "/api/replies/doc.md?id=c-001&index=0", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	var updated handler.CommentJSON
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&updated))
+	require.Len(t, updated.Replies, 2)
+	assert.Equal(t, "r1-edited", updated.Replies[0].Body)
+	assert.Equal(t, "r2", updated.Replies[1].Body)
+
+	// Missing / bad index → 400; out-of-range → 404.
+	assert.Equal(t, http.StatusBadRequest, postJSON(t, h, http.MethodPatch, "/api/replies/doc.md?id=c-001",
+		handler.EditReplyRequest{Body: "x"}).Code)
+	assert.Equal(t, http.StatusNotFound, serve(h,
+		httptest.NewRequest(http.MethodDelete, "/api/replies/doc.md?id=c-001&index=9", nil)).Code)
+
+	// Resolved comment → reply mutations 409.
+	require.Equal(t, http.StatusOK, postJSON(t, h, http.MethodPatch, "/api/comments/doc.md?id=c-001",
+		handler.UpdateRequest{Status: "resolved"}).Code)
+	assert.Equal(t, http.StatusConflict, postJSON(t, h, http.MethodPatch, "/api/replies/doc.md?id=c-001&index=0",
+		handler.EditReplyRequest{Body: "y"}).Code)
+	assert.Equal(t, http.StatusConflict, serve(h,
+		httptest.NewRequest(http.MethodDelete, "/api/replies/doc.md?id=c-001&index=0", nil)).Code)
+}
+
 func TestComments_OrphanWhenSnippetMissing(t *testing.T) {
 	useTempReviewStore(t)
 	h, root := setupFilesHandler(t)
