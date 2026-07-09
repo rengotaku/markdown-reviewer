@@ -30,16 +30,17 @@ function buildDeco(
 ): DecorationSet {
   const decos: Decoration[] = [];
   for (const c of comments) {
+    // Resolved comments carry no highlight: the body stays clean once a comment
+    // is dealt with. Reopening flips status back to "open", so the decoration
+    // reappears the next time comments are pushed in.
+    if (c.status === "resolved") continue;
     const anchors = c.anchor ? [c.anchor] : (c.anchors ?? []);
     for (const a of anchors) {
       const range = resolveAnchorInDoc(doc, a);
       if (!range || range.from >= range.to) continue;
       decos.push(
         Decoration.inline(range.from, range.to, {
-          class:
-            c.status === "resolved"
-              ? "comment-mark comment-mark--resolved"
-              : "comment-mark",
+          class: "comment-mark",
           "data-comment-id": c.id,
         })
       );
