@@ -125,19 +125,29 @@ API 全仕様は `GET /api/help` が `text/markdown` で配信する（`internal
 `service` サブコマンドで launchd エージェントとして登録できる。brew でインストールしたバイナリでも、ソースから `make build` した `bin/markdown-review-server` でも同じ。
 
 ```bash
-# 単一ルート
-markdown-review-server service install --review-root "$HOME/notes"
+# 単一ルート（名前はディレクトリ名になる）
+markdown-review-server service install --root ~/notes
 
-# 複数ルート + ポート指定
+# 複数ルート + ポート指定（name=path 形式で名前を明示できる）
 markdown-review-server service install --port 15174 \
-  --review-roots '[{"name":"notes","path":"'"$HOME"'/notes"}]'
+  --root ~/works --root notes=~/notes
 
 # 状態確認 / 解除
 markdown-review-server service status
 markdown-review-server service uninstall
 ```
 
-- `--review-roots` / `--review-root` 未指定時は env `REVIEW_ROOTS` / `REVIEW_ROOT` にフォールバックする
+### 更新（brew upgrade 後の反映）
+
+引数なしの `service install` は**既存 plist の設定（ルート・ポート）を引き継いで再ロード**する。
+
+```bash
+brew upgrade markdown-reviewer
+markdown-review-server service install   # 設定そのままで新バイナリに入れ替え
+```
+
+- ルート指定の優先順位: フラグ > env（`REVIEW_ROOTS` / `REVIEW_ROOT`）> 既存 plist
+- JSON 形式の `--review-roots '[{"name":...,"path":...}]'` / `--review-root DIR` も後方互換で使える
 - ラベル: `com.user.markdown-reviewer`（`--label` で変更可）
 - ポート: デフォルト `15174`
 - ログ: `~/Library/Logs/markdown-reviewer/markdown-reviewer.{out,err}.log`
