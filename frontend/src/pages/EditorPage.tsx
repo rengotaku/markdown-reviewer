@@ -67,6 +67,7 @@ import { stripHint } from "@/utils/stripHint";
 import { formatLocalTimestamp } from "@/utils/formatTimestamp";
 import { computeAnchorFromSelection } from "@/utils/pmAnchor";
 import { lineDiff, hasChanges } from "@/utils/lineDiff";
+import { dirOf } from "@/utils/dirOf";
 import type { HighlightComment } from "@/components/tiptap/extensions/CommentHighlight";
 import { BAR_HEIGHT, TAB_CONTENT_HEIGHT } from "@/theme/dimensions";
 
@@ -149,10 +150,21 @@ export function EditorPage() {
   const closeFile = useOpenFiles((s) => s.closeFile);
   const closeOthers = useOpenFiles((s) => s.closeOthers);
   const closeToRight = useOpenFiles((s) => s.closeToRight);
+  const reorderFiles = useOpenFiles((s) => s.reorderFiles);
 
   // Right-click tab menu: anchor position + the tab the menu was opened on.
   const [tabMenu, setTabMenu] = useState<{ x: number; y: number; id: string } | null>(
     null
+  );
+
+  // Drag-to-reorder: id of the tab currently being dragged (null when idle).
+  const [dragTabId, setDragTabId] = useState<string | null>(null);
+
+  // Directory of the active file. Other open tabs sharing this directory get a
+  // colored frame so siblings of what you're looking at are easy to spot.
+  const activeDir = useMemo(
+    () => (activeFile ? dirOf(activeFile.path) : null),
+    [activeFile]
   );
 
   const readFile = useReadFile();
@@ -1230,13 +1242,40 @@ export function EditorPage() {
           }}
           data-testid="editor-tabs"
         >
-          {files.map((f) => {
+          {files.map((f, index) => {
             const isReview = reviewFiles.has(keyOf(f.root, f.path));
+            // A tab is a "sibling" when it shares the active file's directory
+            // but isn't the active file itself — highlight its frame so files
+            // living next to what you're looking at stand out.
+            const isSibling =
+              activeDir !== null &&
+              f.id !== activeFile?.id &&
+              dirOf(f.path) === activeDir;
+            const isDragging = dragTabId === f.id;
             return (
               <Tab
                 key={f.id}
                 value={f.id}
                 data-testid={`editor-tab-${f.path}`}
+                draggable
+                onDragStart={(e) => {
+                  setDragTabId(f.id);
+                  e.dataTransfer.effectAllowed = "move";
+                }}
+                onDragOver={(e) => {
+                  if (dragTabId && dragTabId !== f.id) {
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = "move";
+                  }
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  if (!activeRoot || !dragTabId || dragTabId === f.id) return;
+                  const fromIndex = files.findIndex((x) => x.id === dragTabId);
+                  if (fromIndex !== -1) reorderFiles(activeRoot, fromIndex, index);
+                  setDragTabId(null);
+                }}
+                onDragEnd={() => setDragTabId(null)}
                 onContextMenu={(e) => {
                   e.preventDefault();
                   setTabMenu({ x: e.clientX, y: e.clientY, id: f.id });
@@ -1244,6 +1283,14 @@ export function EditorPage() {
                 sx={{
                   position: "relative",
                   overflow: "hidden",
+                  cursor: isDragging ? "grabbing" : "pointer",
+                  opacity: isDragging ? 0.5 : 1,
+                  ...(isSibling && {
+                    // Inset frame so the colored border doesn't shift layout
+                    // or fight the existing 1px right/bottom borders.
+                    boxShadow: (theme) =>
+                      `inset 0 0 0 2px ${theme.palette.info.main}`,
+                  }),
                   ...(isReview && {
                     "&::before": {
                       content: '""',
