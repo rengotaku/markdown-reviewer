@@ -11,6 +11,14 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "service" {
+		if err := runService(os.Args[2:]); err != nil {
+			slog.Error("service command failed", "error", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 

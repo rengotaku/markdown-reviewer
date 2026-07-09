@@ -122,19 +122,25 @@ API 全仕様は `GET /api/help` が `text/markdown` で配信する（`internal
 
 ## macOS で常駐 (launchd)
 
-ソースから `make build` した後、launchd エージェントとして登録できる。
+`service` サブコマンドで launchd エージェントとして登録できる。brew でインストールしたバイナリでも、ソースから `make build` した `bin/markdown-review-server` でも同じ。
 
 ```bash
-make build
-REVIEW_ROOT=$HOME/notes ./scripts/install-launchd.sh
+# 単一ルート
+markdown-review-server service install --review-root "$HOME/notes"
 
 # 複数ルート + ポート指定
-PORT=15174 REVIEW_ROOTS='[{"name":"notes","path":"'"$HOME"'/notes"}]' ./scripts/install-launchd.sh
+markdown-review-server service install --port 15174 \
+  --review-roots '[{"name":"notes","path":"'"$HOME"'/notes"}]'
+
+# 状態確認 / 解除
+markdown-review-server service status
+markdown-review-server service uninstall
 ```
 
-- ラベル: `com.user.markdown-reviewer`
+- `--review-roots` / `--review-root` 未指定時は env `REVIEW_ROOTS` / `REVIEW_ROOT` にフォールバックする
+- ラベル: `com.user.markdown-reviewer`（`--label` で変更可）
+- ポート: デフォルト `15174`
 - ログ: `~/Library/Logs/markdown-reviewer/markdown-reviewer.{out,err}.log`
-- アンロード: `launchctl bootout gui/$UID/com.user.markdown-reviewer`
 
 ## 開発
 
