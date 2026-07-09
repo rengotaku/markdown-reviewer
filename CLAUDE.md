@@ -61,4 +61,4 @@ mr reopen   <path> <id>                                  # resolved を open に
 - 設定: `internal/config/config.go`, `internal/server/server.go`
 - 動作確認は `make run`（要 `REVIEW_ROOTS` または `REVIEW_ROOT`）。CI は `make ci`。
 - 複数ルート対応の env 形式: `REVIEW_ROOTS='[{"name":"works","path":"/abs/works"},{"name":"rooms","path":"/abs/rooms"}]'`。単一ルートのみ使う場合は引き続き `REVIEW_ROOT=<dir>` でよい（その場合 `name` は basename になる）。
-- リリース: `v*` タグ push で GoReleaser が Releases + homebrew-tap を更新（`.goreleaser.yaml` / `.github/workflows/release.yml`）。
+- リリース: `v*` タグ push で GoReleaser が Releases + homebrew-tap を更新（`.goreleaser.yaml` / `.github/workflows/release.yml`）。実行手順は `/release` スキル（`.claude/skills/release/SKILL.md`）に従うこと。

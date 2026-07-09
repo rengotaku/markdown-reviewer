@@ -10,3 +10,7 @@ frontend/dist/
 frontend/coverage/
 internal/static/dist/*
 !internal/static/dist/.gitkeep
+
+# Track project skills even when a global gitignore excludes .claude/
+!.claude/
+.claude/settings.local.json

@@ -161,6 +161,8 @@ make stop       # dev サーバ停止
 git tag v0.1.0 && git push origin v0.1.0
 ```
 
+前提確認・バージョン決定基準・検証・失敗時リカバリを含む実行手順は [`.claude/skills/release/SKILL.md`](.claude/skills/release/SKILL.md) に定義されている。Claude Code からは `/release` で呼び出せる。
+
 ## ライセンス
 
 [MIT](LICENSE)
