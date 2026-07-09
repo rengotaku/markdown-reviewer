@@ -34,8 +34,7 @@ func (f *RootFlag) String() string {
 // if it contains no path separator; otherwise (or when there's no '=' at
 // all) the whole argument is the path and the name defaults to
 // filepath.Base(path). This lets "rooms=~/ot/rooms" and "~/ot/works" (no '=')
-// both work, while "C:\path=x" (path separator before '=') doesn't misparse
-// the drive/path as a name.
+// both work, and a path like "/tmp/a=b" (separator before '=') stays a path.
 func (f *RootFlag) Set(raw string) error {
 	name, path := splitNamePath(raw)
 
