@@ -511,4 +511,54 @@ describe("useOpenFiles guards and recovery", () => {
     await useOpenFiles.persist.rehydrate();
     expect(useOpenFiles.getState().activeIdByRoot["works"]).toBeNull();
   });
+
+  describe("reorderFiles", () => {
+    function names() {
+      return useOpenFiles
+        .getState()
+        .files.filter((f) => f.root === ROOT)
+        .map((f) => f.name);
+    }
+
+    beforeEach(() => {
+      useOpenFiles.getState().addFiles([
+        { name: "a.md", root: ROOT, markdown: "# A" },
+        { name: "b.md", root: ROOT, markdown: "# B" },
+        { name: "c.md", root: ROOT, markdown: "# C" },
+      ]);
+    });
+
+    it("moves a tab to the right", () => {
+      useOpenFiles.getState().reorderFiles(ROOT, 0, 2);
+      expect(names()).toEqual(["b.md", "c.md", "a.md"]);
+    });
+
+    it("moves a tab to the left", () => {
+      useOpenFiles.getState().reorderFiles(ROOT, 2, 0);
+      expect(names()).toEqual(["c.md", "a.md", "b.md"]);
+    });
+
+    it("is a no-op when from === to", () => {
+      useOpenFiles.getState().reorderFiles(ROOT, 1, 1);
+      expect(names()).toEqual(["a.md", "b.md", "c.md"]);
+    });
+
+    it("is a no-op when an index is out of range", () => {
+      useOpenFiles.getState().reorderFiles(ROOT, 0, 9);
+      expect(names()).toEqual(["a.md", "b.md", "c.md"]);
+    });
+
+    it("leaves other roots' files untouched", () => {
+      useOpenFiles
+        .getState()
+        .addFiles([{ name: "x.md", root: "other", markdown: "# X" }]);
+      useOpenFiles.getState().reorderFiles(ROOT, 0, 2);
+      const other = useOpenFiles
+        .getState()
+        .files.filter((f) => f.root === "other")
+        .map((f) => f.name);
+      expect(names()).toEqual(["b.md", "c.md", "a.md"]);
+      expect(other).toEqual(["x.md"]);
+    });
+  });
 });

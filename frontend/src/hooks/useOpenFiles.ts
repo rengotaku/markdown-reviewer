@@ -57,6 +57,13 @@ interface OpenFilesState {
   overwriteFiles: (root: string, incoming: IncomingFile[]) => void;
   updateActiveMarkdown: (root: string, markdown: string) => void;
   setActive: (root: string, id: string) => void;
+  /**
+   * Reorder the tab at `fromIndex` to `toIndex` within a single root's tab
+   * order (both are indices into that root's files, in display order). Files
+   * belonging to other roots keep their positions in the flat `files` array.
+   * No-op when the move wouldn't change anything.
+   */
+  reorderFiles: (root: string, fromIndex: number, toIndex: number) => void;
   closeFile: (id: string) => void;
   /** Close every other file in the same root, keeping only id (made active). */
   closeOthers: (id: string) => void;
@@ -201,6 +208,30 @@ export const useOpenFiles = create<OpenFilesState>()(
           return {
             activeIdByRoot: { ...state.activeIdByRoot, [root]: id },
           };
+        }),
+
+      reorderFiles: (root, fromIndex, toIndex) =>
+        set((state) => {
+          const sameRoot = state.files.filter((f) => f.root === root);
+          if (
+            fromIndex < 0 ||
+            fromIndex >= sameRoot.length ||
+            toIndex < 0 ||
+            toIndex >= sameRoot.length ||
+            fromIndex === toIndex
+          ) {
+            return state;
+          }
+          const reordered = [...sameRoot];
+          const [moved] = reordered.splice(fromIndex, 1);
+          reordered.splice(toIndex, 0, moved);
+          // Splice the reordered same-root files back into the flat array,
+          // leaving other roots' entries exactly where they were.
+          let cursor = 0;
+          const files = state.files.map((f) =>
+            f.root === root ? reordered[cursor++] : f
+          );
+          return { files };
         }),
 
       closeFile: (id) =>
