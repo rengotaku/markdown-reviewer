@@ -28,14 +28,26 @@ func runService(args []string) error {
 		reviewRoots := fs.String("review-roots", "", "REVIEW_ROOTS JSON array (falls back to the REVIEW_ROOTS env var)")
 		reviewRoot := fs.String("review-root", "", "REVIEW_ROOT single directory (falls back to the REVIEW_ROOT env var)")
 		label := fs.String("label", "", "launchd agent label (default: "+launchd.DefaultLabel+")")
+		var root launchd.RootFlag
+		fs.Var(&root, "root", "review root as [name=]path (repeatable, e.g. --root notes=~/notes)")
 		if err := fs.Parse(rest); err != nil {
 			return err
+		}
+		rootJSON, err := root.JSON()
+		if err != nil {
+			return err
+		}
+		if rootJSON != "" && (*reviewRoots != "" || *reviewRoot != "") {
+			return fmt.Errorf("--root cannot be combined with --review-roots/--review-root")
 		}
 		opts := launchd.Options{
 			Label:       *label,
 			Port:        *port,
 			ReviewRoots: *reviewRoots,
 			ReviewRoot:  *reviewRoot,
+		}
+		if rootJSON != "" {
+			opts.ReviewRoots = rootJSON
 		}
 		return launchd.Install(opts, os.Args[0], runner, os.Stdout)
 

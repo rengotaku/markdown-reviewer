@@ -59,6 +59,54 @@ func requireGOOS(goos string) error {
 	return nil
 }
 
+// reuseExistingConfig fills opts.ReviewRoots/ReviewRoot from a previously
+// installed plist when neither flags nor the REVIEW_ROOTS/REVIEW_ROOT env
+// vars supply a root config, so `service install` with no arguments can
+// re-apply the currently-running configuration (e.g. after `brew upgrade`).
+// PORT is reused the same way, but only when opts.Port is empty (--port
+// always wins over the existing plist, matching the flag > env > plist
+// priority order).
+//
+// It's a no-op (returns opts unchanged) whenever any root source is already
+// present, or when no plist exists yet for opts.Label — in the latter case
+// ResolveOptions' own missing-roots error (with its usage example) applies.
+func reuseExistingConfig(opts Options, home string, out io.Writer) Options {
+	if opts.ReviewRoots != "" || opts.ReviewRoot != "" {
+		return opts
+	}
+	if os.Getenv("REVIEW_ROOTS") != "" || os.Getenv("REVIEW_ROOT") != "" {
+		return opts
+	}
+
+	label := opts.Label
+	if label == "" {
+		label = DefaultLabel
+	}
+	plistFile := plistPath(home, label)
+	content, err := os.ReadFile(plistFile)
+	if err != nil {
+		// No existing plist to reuse; ResolveOptions will surface the
+		// standard "REVIEW_ROOTS or REVIEW_ROOT must be set" error.
+		return opts
+	}
+
+	reviewRoots := extractPlistValue(string(content), "REVIEW_ROOTS")
+	reviewRoot := extractPlistValue(string(content), "REVIEW_ROOT")
+	if reviewRoots == "" && reviewRoot == "" {
+		return opts
+	}
+
+	reused := opts
+	reused.ReviewRoots = reviewRoots
+	reused.ReviewRoot = reviewRoot
+	if reused.Port == "" {
+		reused.Port = extractPlistValue(string(content), "PORT")
+	}
+
+	_, _ = fmt.Fprintf(out, "reusing existing configuration from %s\n", plistFile)
+	return reused
+}
+
 // Install renders the launchd plist for opts, writes it to
 // ~/Library/LaunchAgents/<label>.plist, and (re)loads it via runner. argv0
 // is os.Args[0] from the invoking process, used to resolve the binary path
@@ -67,6 +115,14 @@ func Install(opts Options, argv0 string, runner Runner, out io.Writer) error {
 	if err := requireDarwin(); err != nil {
 		return err
 	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("resolve home directory: %w", err)
+	}
+
+	opts = reuseExistingConfig(opts, home, out)
+
 	resolved, err := ResolveOptions(opts, true)
 	if err != nil {
 		return err
@@ -75,10 +131,6 @@ func Install(opts Options, argv0 string, runner Runner, out io.Writer) error {
 	program, err := ProgramPath(argv0)
 	if err != nil {
 		return err
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("resolve home directory: %w", err)
 	}
 
 	logDir := logDirPath(home)

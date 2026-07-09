@@ -240,6 +240,63 @@ func TestStatus_InstalledButStopped(t *testing.T) {
 	assert.Contains(t, out.String(), "state: stopped")
 }
 
+func TestInstall_BareReusesExistingPlistConfig(t *testing.T) {
+	isolateHome(t)
+	t.Setenv("REVIEW_ROOTS", "")
+	t.Setenv("REVIEW_ROOT", "")
+	runner := launchd.NewFakeRunner()
+
+	first := launchd.Options{
+		Label:       "com.test.markdown-reviewer",
+		Port:        "12345",
+		ReviewRoots: `[{"name":"works","path":"/tmp/works"}]`,
+	}
+	require.NoError(t, launchd.Install(first, "markdown-review-server", runner, &bytes.Buffer{}))
+
+	// A bare reinstall (no flags, no env) must carry over both the roots and
+	// the port of the previous install — the `brew upgrade` reload case.
+	var out bytes.Buffer
+	require.NoError(t, launchd.Install(launchd.Options{Label: first.Label}, "markdown-review-server", runner, &out))
+
+	assert.Contains(t, out.String(), "reusing existing configuration")
+	assert.Contains(t, out.String(), "port: 12345")
+	assert.Contains(t, out.String(), `REVIEW_ROOTS: [{"name":"works","path":"/tmp/works"}]`)
+}
+
+func TestInstall_ReuseKeepsExplicitPort(t *testing.T) {
+	isolateHome(t)
+	t.Setenv("REVIEW_ROOTS", "")
+	t.Setenv("REVIEW_ROOT", "")
+	runner := launchd.NewFakeRunner()
+
+	first := launchd.Options{Label: "com.test.markdown-reviewer", Port: "12345", ReviewRoot: "/tmp/notes"}
+	require.NoError(t, launchd.Install(first, "markdown-review-server", runner, &bytes.Buffer{}))
+
+	var out bytes.Buffer
+	second := launchd.Options{Label: first.Label, Port: "17000"}
+	require.NoError(t, launchd.Install(second, "markdown-review-server", runner, &out))
+
+	assert.Contains(t, out.String(), "reusing existing configuration")
+	assert.Contains(t, out.String(), "port: 17000")
+	assert.Contains(t, out.String(), "REVIEW_ROOT: /tmp/notes")
+}
+
+func TestInstall_EnvWinsOverExistingPlist(t *testing.T) {
+	isolateHome(t)
+	runner := launchd.NewFakeRunner()
+
+	first := launchd.Options{Label: "com.test.markdown-reviewer", ReviewRoot: "/tmp/old"}
+	require.NoError(t, launchd.Install(first, "markdown-review-server", runner, &bytes.Buffer{}))
+
+	t.Setenv("REVIEW_ROOTS", "")
+	t.Setenv("REVIEW_ROOT", "/tmp/new")
+	var out bytes.Buffer
+	require.NoError(t, launchd.Install(launchd.Options{Label: first.Label}, "markdown-review-server", runner, &out))
+
+	assert.NotContains(t, out.String(), "reusing existing configuration")
+	assert.Contains(t, out.String(), "REVIEW_ROOT: /tmp/new")
+}
+
 func uidString() string {
 	return strconv.Itoa(os.Getuid())
 }

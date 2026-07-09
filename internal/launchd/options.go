@@ -23,13 +23,14 @@ type Options struct {
 	ReviewRoot string
 }
 
-// usageExample is shown when install is invoked with neither
-// --review-roots/--review-root nor the corresponding env vars set.
+// usageExample is shown when install is invoked with neither --root (nor the
+// legacy --review-roots/--review-root) flags, the corresponding env vars,
+// nor a previously installed plist to reuse.
 const usageExample = `REVIEW_ROOTS or REVIEW_ROOT must be set (as a flag or environment variable).
 
 Examples:
-  markdown-review-server service install --review-root "$HOME/notes"
-  markdown-review-server service install --review-roots '[{"name":"notes","path":"'"$HOME"'/notes"}]'
+  markdown-review-server service install --root "$HOME/notes"
+  markdown-review-server service install --root notes="$HOME/notes" --root works="$HOME/works"
   REVIEW_ROOT="$HOME/notes" markdown-review-server service install`
 
 // ResolveOptions fills unset fields of opts with defaults and environment
