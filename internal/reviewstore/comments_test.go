@@ -71,7 +71,7 @@ func TestCommentCRUD(t *testing.T) {
 	}
 
 	c1, err := AddComment(root, rel, Comment{
-		Scope: "inline", Author: "kishira", Body: "直して",
+		Scope: "inline", Author: "reviewer", Body: "直して",
 		Anchor: &Anchor{HeadingPath: []string{"## A"}, Snippet: "foo", Occurrence: 0},
 	})
 	if err != nil {

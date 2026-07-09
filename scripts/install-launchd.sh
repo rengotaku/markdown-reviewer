@@ -3,13 +3,13 @@
 # install it under ~/Library/LaunchAgents/. Idempotent: bootstrap → unload
 # existing first; kickstart at the end to guarantee the agent actually runs.
 #
-# Override defaults via env:
+# Configure via env (REVIEW_ROOTS or REVIEW_ROOT is required):
 #   PORT=15174                                   (default)
-#   REVIEW_ROOTS=''                              (default; falls back to REVIEW_ROOT below)
-#   REVIEW_ROOT=$HOME/ot/works                   (default; used only when REVIEW_ROOTS is empty)
+#   REVIEW_ROOTS=''                              (preferred; JSON array, see below)
+#   REVIEW_ROOT=$HOME/notes                      (single directory; used only when REVIEW_ROOTS is empty)
 #
 # REVIEW_ROOTS is a JSON array of {name, path} objects, e.g.:
-#   REVIEW_ROOTS='[{"name":"works","path":"'"$HOME"'/ot/works"},{"name":"rooms","path":"'"$HOME"'/ot/rooms"}]'
+#   REVIEW_ROOTS='[{"name":"works","path":"'"$HOME"'/works"},{"name":"notes","path":"'"$HOME"'/notes"}]'
 set -euo pipefail
 
 PROJECT_DIR="${0:A:h:h}"
@@ -19,7 +19,13 @@ LOG_DIR="$HOME/Library/Logs/markdown-reviewer"
 
 PORT="${PORT:-15174}"
 REVIEW_ROOTS="${REVIEW_ROOTS:-}"
-REVIEW_ROOT="${REVIEW_ROOT:-$HOME/ot/works}"
+REVIEW_ROOT="${REVIEW_ROOT:-}"
+
+if [[ -z "$REVIEW_ROOTS" && -z "$REVIEW_ROOT" ]]; then
+    echo "ERROR: REVIEW_ROOTS または REVIEW_ROOT を指定してください" >&2
+    echo "  例: REVIEW_ROOT=\$HOME/notes $0" >&2
+    exit 1
+fi
 
 # launchctl は /bin にしか無い場合があるので絶対パスを優先
 LAUNCHCTL="$(command -v launchctl || true)"

@@ -69,7 +69,7 @@ func TestComments_CRUDLifecycle(t *testing.T) {
 
 	// Create an anchored comment.
 	rec := postJSON(t, h, http.MethodPost, "/api/comments/doc.md", handler.CreateCommentRequest{
-		Scope: "inline", Author: "kishira", Body: "36 時間では？",
+		Scope: "inline", Author: "reviewer", Body: "36 時間では？",
 		Anchor: anchor("## トークンの期限", "24 時間", 0),
 	})
 	require.Equal(t, http.StatusCreated, rec.Code)

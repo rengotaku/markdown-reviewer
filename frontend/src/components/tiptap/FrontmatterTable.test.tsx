@@ -22,7 +22,7 @@ describe("FrontmatterTable", () => {
           { key: "tags", value: ["infra", "staging"] },
           { key: "empty", value: [] },
           { key: "missing", value: null },
-          { key: "meta", value: { author: "kishira", count: 3 } },
+          { key: "meta", value: { author: "alice", count: 3 } },
         ]}
       />
     );
@@ -35,7 +35,7 @@ describe("FrontmatterTable", () => {
     expect(screen.getByText("staging")).toBeInTheDocument();
     // nested object renders its keys/values
     expect(screen.getByText("author:")).toBeInTheDocument();
-    expect(screen.getByText("kishira")).toBeInTheDocument();
+    expect(screen.getByText("alice")).toBeInTheDocument();
     expect(screen.getByText("3")).toBeInTheDocument();
   });
 
