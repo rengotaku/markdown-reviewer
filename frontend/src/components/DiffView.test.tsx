@@ -53,7 +53,7 @@ describe("DiffView", () => {
 // ---------------------------------------------------------------------------
 
 const multiRevs: RevisionMeta[] = [
-  { id: "r-003", ts: "2026-07-01T10:00:00+09:00", author: "kishira" },
+  { id: "r-003", ts: "2026-07-01T10:00:00+09:00", author: "alice" },
   { id: "r-002", ts: "2026-06-30T10:00:00+09:00", author: "external" },
   { id: "r-001", ts: "2026-06-29T10:00:00+09:00", author: "external" },
 ];
@@ -91,7 +91,7 @@ describe("DiffView – Issue #88 author display", () => {
       />
     );
     const picker = screen.getByTestId("diff-revision-picker");
-    expect(picker.textContent).toContain("kishira");
+    expect(picker.textContent).toContain("alice");
   });
 
   it("shows selected author in the header caption", () => {
@@ -120,7 +120,7 @@ describe("DiffView – Issue #88 author display", () => {
       />
     );
     const caption = screen.getByTestId("diff-selected-author");
-    expect(caption.textContent).toContain("kishira");
+    expect(caption.textContent).toContain("alice");
   });
 });
 
@@ -161,7 +161,7 @@ describe("DiffView – Issue #88 quick-select buttons", () => {
 
   it('revisions.length === 1 のとき「初版」ボタンは表示されない', () => {
     const singleRev: RevisionMeta[] = [
-      { id: "r-001", ts: "2026-06-29T10:00:00+09:00", author: "kishira" },
+      { id: "r-001", ts: "2026-06-29T10:00:00+09:00", author: "alice" },
     ];
     render(
       <DiffView

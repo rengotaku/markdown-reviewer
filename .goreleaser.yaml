@@ -1,0 +1,79 @@
+version: 2
+
+project_name: markdown-reviewer
+
+# The SPA must be built first: cmd/server go:embeds internal/static/dist.
+before:
+  hooks:
+    - sh -c "cd frontend && npm ci && npm run build"
+
+builds:
+  - id: server
+    main: ./cmd/server
+    binary: markdown-review-server
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+  - id: mr
+    main: ./cmd/mr
+    binary: mr
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+homebrew_casks:
+  - name: markdown-reviewer
+    repository:
+      owner: rengotaku
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    homepage: https://github.com/rengotaku/markdown-reviewer
+    description: >-
+      Review local Markdown in a web editor with sidecar comments,
+      AI-friendly via the bundled mr CLI
+    license: MIT
+    binaries:
+      - markdown-review-server
+      - mr
+    caveats: |
+      起動例:
+        REVIEW_ROOT=$HOME/notes markdown-review-server
+      コメントの読み書き (AI 向け CLI):
+        mr inbox / mr review <path> / mr reply / mr resolve
+    # Unsigned binaries: strip the quarantine attribute so Gatekeeper
+    # doesn't block the first run.
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/markdown-review-server"]
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/mr"]
+          end
