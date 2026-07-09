@@ -41,7 +41,7 @@ describe("CommentHighlight", () => {
     expect(m[0].classList.contains("comment-mark--resolved")).toBe(false);
   });
 
-  it("uses the resolved style for resolved comments", () => {
+  it("paints no decoration for resolved comments", () => {
     const ed = makeEditor("<p>some target text</p>");
     ed.commands.setCommentHighlights([
       {
@@ -50,9 +50,20 @@ describe("CommentHighlight", () => {
         anchor: { heading_path: [], snippet: "target", occurrence: 0 },
       },
     ]);
+    expect(marks(ed)).toHaveLength(0);
+  });
+
+  it("restores the highlight when a comment is reopened", () => {
+    const ed = makeEditor("<p>some target text</p>");
+    const anchor = { heading_path: [], snippet: "target", occurrence: 0 };
+    // Resolved: no highlight.
+    ed.commands.setCommentHighlights([{ id: "c1", status: "resolved", anchor }]);
+    expect(marks(ed)).toHaveLength(0);
+    // Reopened: highlight returns on the next push.
+    ed.commands.setCommentHighlights([{ id: "c1", status: "open", anchor }]);
     const m = marks(ed);
     expect(m).toHaveLength(1);
-    expect(m[0].classList.contains("comment-mark--resolved")).toBe(true);
+    expect(m[0].getAttribute("data-comment-id")).toBe("c1");
   });
 
   it("paints one decoration per anchor for multi-anchor (cross-section) comments", () => {
