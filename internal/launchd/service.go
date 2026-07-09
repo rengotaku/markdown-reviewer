@@ -38,10 +38,15 @@ func target(label string) string {
 	return domain() + "/" + label
 }
 
+// goos mirrors runtime.GOOS but is a package var so tests can pin it to
+// "darwin" and exercise the install/uninstall/status flows (which only ever
+// talk to a FakeRunner there) on non-darwin CI runners.
+var goos = runtime.GOOS
+
 // requireDarwin returns an error on any platform other than darwin, since
 // launchd (and thus every operation in this package) is macOS-only.
 func requireDarwin() error {
-	return requireGOOS(runtime.GOOS)
+	return requireGOOS(goos)
 }
 
 // requireGOOS is requireDarwin's logic with GOOS injected, so the

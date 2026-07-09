@@ -24,6 +24,9 @@ func isolateHome(t *testing.T) string {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Cleanup(launchd.SetCheckPortFreeForTest(func(string) error { return nil }))
+	// The flows only talk to the FakeRunner here, so let them run on the
+	// linux CI runner too instead of failing the darwin-only guard.
+	t.Cleanup(launchd.SetGOOSForTest("darwin"))
 	return home
 }
 
