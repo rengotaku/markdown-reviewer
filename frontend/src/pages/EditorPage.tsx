@@ -1072,7 +1072,7 @@ export function EditorPage() {
               flexGrow: 1,
               minWidth: 0,
               display: "flex",
-              alignItems: "baseline",
+              alignItems: "center",
               gap: 1.5,
               overflow: "hidden",
             }}
