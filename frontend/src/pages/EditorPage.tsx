@@ -38,6 +38,8 @@ import { useOpenFiles, reattachLegacyFilesToRoot } from "@/hooks/useOpenFiles";
 import { useReadFile, useWriteFile } from "@/hooks/useFileContent";
 import { useFileWatcher } from "@/hooks/useFileWatcher";
 import { useDirChangeWatcher } from "@/hooks/useDirChangeWatcher";
+import { useServerEvents } from "@/hooks/useServerEvents";
+import { useServerConnection } from "@/hooks/useServerConnection";
 import { useConfirm } from "@/hooks/useConfirm";
 import { useToast } from "@/hooks/useToast";
 import { useUIStore } from "@/hooks/useUIStore";
@@ -220,6 +222,35 @@ export function EditorPage() {
     });
   };
 
+  // --- Server-push events (#112) --------------------------------------------
+  // Bumped every time an SSE `file` event matches the active file, so
+  // useFileWatcher can run its external-edit reconcile immediately instead
+  // of waiting for its own interval (which is disabled once SSE is
+  // connected — see the `paused` arg passed to useFileWatcher below).
+  const [fileEventTrigger, setFileEventTrigger] = useState(0);
+  const setSseConnected = useServerConnection((s) => s.setConnected);
+  const { connected: sseConnected } = useServerEvents({
+    onTree: () => {
+      void queryClient.invalidateQueries({ queryKey: ["dir"] });
+      void queryClient.invalidateQueries({ queryKey: ["files"] });
+    },
+    onFile: (ev) => {
+      if (ev.root !== activeFileRoot || ev.path !== activePath) return;
+      setFileEventTrigger((n) => n + 1);
+    },
+    onComments: (ev) => {
+      // Tab badge (hasOpenComments) covers every open tab, not just the
+      // active one, so re-sync it regardless of which file changed.
+      setReviewRefresh((n) => n + 1);
+      if (ev.root === activeFileRoot && ev.path === activePath) {
+        setCommentsRefresh((n) => n + 1);
+      }
+    },
+  });
+  useEffect(() => {
+    setSseConnected(sseConnected);
+  }, [sseConnected, setSseConnected]);
+
   // Reset all review/diff view-state the instant the active file changes —
   // done during render (React's recommended pattern over an effect) so the
   // next file never opens stuck in a stale diff. prevFileKey is the guard that
@@ -295,27 +326,36 @@ export function EditorPage() {
   // refetches on file-switch or a local mutation. Bump commentsRefresh on an
   // interval (active review file only, paused when the tab is hidden) to reuse
   // the fetch effect above.
+  //
+  // This is the fallback path only (issue #112): once the SSE channel is
+  // connected, a `comments` event for the active file bumps commentsRefresh
+  // directly (see the useServerEvents callbacks below) and this interval is
+  // disabled so out-of-band changes aren't discovered twice.
   useEffect(() => {
     if (!activePath || reviewState !== "review") return;
+    if (sseConnected) return;
     const handle = window.setInterval(() => {
       if (document.visibilityState === "visible") {
         setCommentsRefresh((n) => n + 1);
       }
     }, COMMENTS_POLL_MS);
     return () => window.clearInterval(handle);
-  }, [activePath, activeFileRoot, reviewState]);
+  }, [activePath, activeFileRoot, reviewState, sseConnected]);
 
   // Poll review state for all open tabs at a fixed interval so external
   // ingest (mr CLI / API) is reflected without a manual file-switch.
   // Uses the same cadence as comment polling to avoid extra requests.
+  // Disabled once SSE is connected — a `comments` event bumps reviewRefresh
+  // directly instead (see the useServerEvents callbacks below).
   useEffect(() => {
+    if (sseConnected) return;
     const handle = window.setInterval(() => {
       if (document.visibilityState === "visible") {
         setReviewRefresh((n) => n + 1);
       }
     }, COMMENTS_POLL_MS);
     return () => window.clearInterval(handle);
-  }, []);
+  }, [sseConnected]);
 
   // Sync review badge for all open tabs whenever reviewRefresh bumps. Capture
   // a snapshot of the file list at effect-run time to avoid stale-closure
@@ -475,7 +515,9 @@ export function EditorPage() {
     if (roots.length > 0) reattachLegacyFilesToRoot(roots[0].name);
   }, [roots]);
 
-  useFileWatcher();
+  // Fallback poll is disabled while SSE is connected; the onFile callback
+  // above bumps fileEventTrigger to drive the same reconcile logic instead.
+  useFileWatcher(undefined, { paused: sseConnected, trigger: fileEventTrigger });
 
   const handleRefreshTree = () => {
     // The sidebar has two data sources — the lazy tree ("dir") and the flat

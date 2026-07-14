@@ -23,11 +23,24 @@ export const FILE_WATCHER_INTERVAL_MS = 5000;
  *     re-open on every subsequent tick).
  *
  * Untitled / unsaved buffers (serverModified === "") are skipped.
+ *
+ * `opts.paused` stops the interval entirely (issue #112: once the SSE
+ * channel is connected, the push-driven `file` event replaces this poll —
+ * see `opts.trigger` below — so re-polling every intervalMs would just be
+ * redundant /api/stat traffic). `opts.trigger` fires one immediate tick
+ * each time it changes to a new value, letting a caller (EditorPage's
+ * useServerEvents onFile handler) drive the exact same reconcile logic
+ * on demand instead of waiting for the next interval.
  */
-export function useFileWatcher(intervalMs: number = FILE_WATCHER_INTERVAL_MS) {
+export function useFileWatcher(
+  intervalMs: number = FILE_WATCHER_INTERVAL_MS,
+  opts?: { paused?: boolean; trigger?: number }
+) {
   const confirm = useConfirm((s) => s.confirm);
   const showToast = useToast((s) => s.show);
   const { active: activeRoot } = useActiveRoot();
+  const paused = opts?.paused ?? false;
+  const trigger = opts?.trigger ?? 0;
 
   // The dialog is async. Without this guard the next tick can stack a
   // second dialog on top while the first one is still awaiting user input.
@@ -139,6 +152,20 @@ export function useFileWatcher(intervalMs: number = FILE_WATCHER_INTERVAL_MS) {
       }
     };
 
+    // trigger > 0 means a caller (useServerEvents' onFile handler) asked for
+    // an out-of-cycle check right now, on top of (or instead of) the
+    // interval below — e.g. the SSE channel just told us this exact file
+    // changed, so there's no reason to wait for the next interval tick.
+    if (trigger > 0) {
+      void tick();
+    }
+
+    if (paused) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
     const handle = window.setInterval(() => {
       void tick();
     }, intervalMs);
@@ -147,5 +174,5 @@ export function useFileWatcher(intervalMs: number = FILE_WATCHER_INTERVAL_MS) {
       cancelled = true;
       window.clearInterval(handle);
     };
-  }, [activeRoot, confirm, showToast, intervalMs]);
+  }, [activeRoot, confirm, showToast, intervalMs, paused, trigger]);
 }

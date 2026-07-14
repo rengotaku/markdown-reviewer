@@ -3,6 +3,7 @@ module markdown-reviewer
 go 1.24.0
 
 require (
+	github.com/fsnotify/fsnotify v1.10.1
 	github.com/gin-gonic/gin v1.11.0
 	github.com/glebarez/sqlite v1.11.0
 	github.com/go-ozzo/ozzo-validation/v4 v4.3.0

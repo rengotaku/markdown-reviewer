@@ -43,7 +43,7 @@ func setupMultiRootHandler(t *testing.T) (h *handler.Handler, works, rooms strin
 
 	repo := repository.NewUserRepository(testutil.NewTestDB(t))
 	svc := service.NewUserService(repo)
-	return handler.NewHandler(svc, roots), worksResolved, roomsResolved
+	return handler.NewHandler(svc, roots, nil), worksResolved, roomsResolved
 }
 
 // setupFilesHandler returns a Handler with a single configured root at a
@@ -60,7 +60,7 @@ func setupFilesHandler(t *testing.T) (*handler.Handler, string) {
 
 	repo := repository.NewUserRepository(testutil.NewTestDB(t))
 	svc := service.NewUserService(repo)
-	return handler.NewHandler(svc, roots), resolved
+	return handler.NewHandler(svc, roots, nil), resolved
 }
 
 func TestFiles_List_Empty(t *testing.T) {
@@ -99,7 +99,7 @@ func TestFiles_List_RecursesAndFiltersMarkdown(t *testing.T) {
 func TestFiles_List_NotConfigured(t *testing.T) {
 	repo := repository.NewUserRepository(testutil.NewTestDB(t))
 	svc := service.NewUserService(repo)
-	h := handler.NewHandler(svc, nil)
+	h := handler.NewHandler(svc, nil, nil)
 
 	rec := serve(h, httptest.NewRequest(http.MethodGet, "/api/files", nil))
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
@@ -312,7 +312,7 @@ func TestListDir_NotConfigured(t *testing.T) {
 	t.Parallel()
 	repo := repository.NewUserRepository(testutil.NewTestDB(t))
 	svc := service.NewUserService(repo)
-	h := handler.NewHandler(svc, nil)
+	h := handler.NewHandler(svc, nil, nil)
 
 	rec := serve(h, httptest.NewRequest(http.MethodGet, "/api/dirs", nil))
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
