@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
+import { HTTPError } from "ky";
 import Box from "@mui/material/Box";
 import IconButton from "@mui/material/IconButton";
 import Menu from "@mui/material/Menu";
@@ -149,9 +150,9 @@ export function EditorPage() {
   const markActiveSaved = useOpenFiles((s) => s.markActiveSaved);
   const discardActiveChanges = useOpenFiles((s) => s.discardActiveChanges);
   const setActive = useOpenFiles((s) => s.setActive);
-  const closeFile = useOpenFiles((s) => s.closeFile);
-  const closeOthers = useOpenFiles((s) => s.closeOthers);
-  const closeToRight = useOpenFiles((s) => s.closeToRight);
+  const closeFileRaw = useOpenFiles((s) => s.closeFile);
+  const closeOthersRaw = useOpenFiles((s) => s.closeOthers);
+  const closeToRightRaw = useOpenFiles((s) => s.closeToRight);
   const reorderFiles = useOpenFiles((s) => s.reorderFiles);
 
   // Right-click tab menu: anchor position + the tab the menu was opened on.
@@ -211,6 +212,21 @@ export function EditorPage() {
   const keyOf = (root: string | undefined, path: string) => `${root ?? ""}:${path}`;
   const fileKey = activePath ? keyOf(activeFileRoot, activePath) : "";
 
+  // The *currently* active tab's key, read fresh from the store rather than
+  // the `activeFile` closure above. Used by the sweep effect to guard
+  // against a race (#114 review follow-up): a sweep's statFile for a tab
+  // can resolve 404 *after* the user has since activated that very tab (the
+  // per-active-file stat effect re-checks and may have already cleared it
+  // from missing) — without this guard the sweep's late `add` would
+  // immediately undo that re-check.
+  const currentActiveKey = () => {
+    if (!activeRoot) return null;
+    const id = useOpenFiles.getState().activeIdByRoot[activeRoot];
+    if (!id) return null;
+    const active = useOpenFiles.getState().files.find((f) => f.id === id);
+    return active ? keyOf(active.root, active.path) : null;
+  };
+
   // Record/clear a file's review membership for the tab badge.
   const markReviewFile = (key: string, inReview: boolean) => {
     setReviewFiles((prev) => {
@@ -222,6 +238,55 @@ export function EditorPage() {
     });
   };
 
+  // Tabs whose `statFile` returned 404 (#114) — typically a stale tab left
+  // over from a directory rename, still persisted in localStorage but no
+  // longer resolvable on the server. Kept in a ref (not state) since it's
+  // read/written only inside effects and never drives a render directly;
+  // the badge sweep effect below reads it synchronously without waiting for
+  // a re-render. Cleared when: the tab is activated (the per-active-file
+  // stat effect below re-checks), a `file`/`tree` SSE event names it (the
+  // canonical path may have reappeared), or the tab is closed (nothing left
+  // to sweep, and reusing the key for a future re-open of the same path
+  // should get a fresh check rather than inherit a stale miss).
+  const missingStatFilesRef = useRef<Set<string>>(new Set());
+
+  // True when some open tab (any root) already has this root/path — used to
+  // decide whether an SSE `comments` event should bump the tab-badge sweep
+  // (#114: a review.json change for a file nobody has open shouldn't trigger
+  // a statFile round-trip for every other open tab).
+  const isPathOpen = (root: string, path: string) =>
+    useOpenFiles.getState().files.some((f) => f.root === root && f.path === path);
+
+  // Wrap every close-tab action (close button / "他のタブを閉じる" /
+  // "右側のタブを閉じる") so the closed tab(s) drop out of the missing-stat
+  // set (#114 review follow-up). Without this, re-opening the same path
+  // later would inherit a stale "give up on this one" mark from before the
+  // close, permanently hiding its badge even though it's a fresh tab.
+  const closeFile = (id: string) => {
+    const target = useOpenFiles.getState().files.find((f) => f.id === id);
+    closeFileRaw(id);
+    if (target) missingStatFilesRef.current.delete(keyOf(target.root, target.path));
+  };
+  const closeOthers = (id: string) => {
+    const target = useOpenFiles.getState().files.find((f) => f.id === id);
+    const closed = target
+      ? useOpenFiles.getState().files.filter((f) => f.root === target.root && f.id !== id)
+      : [];
+    closeOthersRaw(id);
+    for (const f of closed) missingStatFilesRef.current.delete(keyOf(f.root, f.path));
+  };
+  const closeToRight = (id: string) => {
+    const target = useOpenFiles.getState().files.find((f) => f.id === id);
+    const closed = (() => {
+      if (!target) return [];
+      const sameRoot = useOpenFiles.getState().files.filter((f) => f.root === target.root);
+      const index = sameRoot.findIndex((f) => f.id === id);
+      return index === -1 ? [] : sameRoot.slice(index + 1);
+    })();
+    closeToRightRaw(id);
+    for (const f of closed) missingStatFilesRef.current.delete(keyOf(f.root, f.path));
+  };
+
   // --- Server-push events (#112) --------------------------------------------
   // Bumped every time an SSE `file` event matches the active file, so
   // useFileWatcher can run its external-edit reconcile immediately instead
@@ -230,21 +295,48 @@ export function EditorPage() {
   const [fileEventTrigger, setFileEventTrigger] = useState(0);
   const setSseConnected = useServerConnection((s) => s.setConnected);
   const { connected: sseConnected } = useServerEvents({
-    onTree: () => {
+    onTree: (ev) => {
       void queryClient.invalidateQueries({ queryKey: ["dir"] });
       void queryClient.invalidateQueries({ queryKey: ["files"] });
+      // The path this event names may be a tab we'd previously given up on
+      // (#114) — clear it from the missing set so the badge sweep resumes
+      // checking it. Set.delete only returns true when the key was actually
+      // present, so this only fires a sweep for tabs that were genuinely
+      // stuck missing — a `tree` event for any other file (the overwhelming
+      // common case) stays a no-op here, same as before #114.
+      const wasMissing = missingStatFilesRef.current.delete(keyOf(ev.root, ev.path));
+      if (wasMissing) setReviewRefresh((n) => n + 1);
     },
     onFile: (ev) => {
+      // A stat-404'd tab (#114) becoming valid again is signaled by its own
+      // `file` event even when it isn't the active tab, so clear it here
+      // regardless of the active-file guard below (which only gates the
+      // fileEventTrigger bump used for the external-edit reconcile). As with
+      // onTree, only re-trigger the sweep when this path was actually the
+      // one we'd given up on — not on every `file` event.
+      const wasMissing = missingStatFilesRef.current.delete(keyOf(ev.root, ev.path));
+      if (wasMissing) setReviewRefresh((n) => n + 1);
       if (ev.root !== activeFileRoot || ev.path !== activePath) return;
       setFileEventTrigger((n) => n + 1);
     },
     onComments: (ev) => {
-      // Tab badge (hasOpenComments) covers every open tab, not just the
-      // active one, so re-sync it regardless of which file changed.
-      setReviewRefresh((n) => n + 1);
       if (ev.root === activeFileRoot && ev.path === activePath) {
         setCommentsRefresh((n) => n + 1);
       }
+      // Only bump the tab-badge sweep when the changed file is actually one
+      // of the open tabs (#114) — otherwise a review.json change for a file
+      // nobody has open triggers a needless statFile sweep across every tab.
+      //
+      // Deliberately does NOT clear missingStatFilesRef the way onFile/onTree
+      // do: a `comments` event only proves the sidecar (review.json) was
+      // written, not that the canonical file path itself exists again. A tab
+      // stat-404'd because its file was renamed away could still get a
+      // `comments` event (e.g. the old sidecar being cleaned up) without the
+      // canonical path having come back — clearing missing here would just
+      // reopen the request storm this fix removes. Only `file`/`tree`
+      // events (which are emitted for the canonical path) or reactivating
+      // the tab lift the exclusion.
+      if (isPathOpen(ev.root, ev.path)) setReviewRefresh((n) => n + 1);
     },
   });
   useEffect(() => {
@@ -273,6 +365,11 @@ export function EditorPage() {
   // not trigger the synchronous-setState-in-effect lint.
   useEffect(() => {
     if (!activePath) return;
+    // Activating a tab is one of the two conditions (#114) that lets a
+    // previously stat-404'd tab back into the badge sweep — clear it
+    // up-front so this fetch is the fresh recheck, not a skip.
+    const activeKey = keyOf(activeFileRoot, activePath);
+    missingStatFilesRef.current.delete(activeKey);
     let cancelled = false;
     void (async () => {
       try {
@@ -280,14 +377,17 @@ export function EditorPage() {
         if (cancelled) return;
         const state = stat.state ?? "draft";
         setReviewState(state);
-        markReviewFile(keyOf(activeFileRoot, activePath), stat.hasOpenComments ?? false);
+        markReviewFile(activeKey, stat.hasOpenComments ?? false);
         if (state === "review") {
           const rl = await listRevisions(activePath, activeFileRoot);
           if (!cancelled) setRevisions(rl.revisions);
         } else {
           setRevisions([]);
         }
-      } catch {
+      } catch (err) {
+        if (err instanceof HTTPError && err.response.status === 404) {
+          missingStatFilesRef.current.add(activeKey);
+        }
         if (!cancelled) {
           setReviewState("draft");
           setRevisions([]);
@@ -361,21 +461,49 @@ export function EditorPage() {
   // a snapshot of the file list at effect-run time to avoid stale-closure
   // issues; the effect re-runs on reviewRefresh changes and when the number
   // of open files changes.
+  //
+  // Tabs previously stat-404'd (#114 — typically a stale path left over from
+  // a directory rename) are skipped entirely: retrying them every sweep is
+  // exactly the request storm this fix exists to stop. They rejoin the sweep
+  // once activated (the per-active-file stat effect above clears them via
+  // markReviewFile / the try below) or once a `file`/`tree` SSE event names
+  // them again (cleared in the useServerEvents callbacks).
   useEffect(() => {
     if (allFiles.length === 0) return;
-    const snapshot = allFiles.slice();
+    const snapshot = allFiles.filter(
+      (f) => !missingStatFilesRef.current.has(keyOf(f.root, f.path))
+    );
+    if (snapshot.length === 0) return;
     let cancelled = false;
     void (async () => {
       try {
         await Promise.all(
           snapshot.map(async (f) => {
+            const key = keyOf(f.root, f.path);
             try {
               const stat = await statFile(f.path, f.root);
               if (!cancelled) {
-                markReviewFile(keyOf(f.root, f.path), stat.hasOpenComments ?? false);
+                markReviewFile(key, stat.hasOpenComments ?? false);
               }
-            } catch {
-              // silently ignore per-file errors to keep other tabs updating
+            } catch (err) {
+              // A 404 means this tab's path no longer exists server-side —
+              // remember it so future sweeps skip it (#114). Any other
+              // error (network blip, 5xx) is transient, so it's ignored
+              // without marking the tab missing.
+              //
+              // Guard against the activation race: if the user activated
+              // this exact tab while this request was in flight, the
+              // per-active-file stat effect owns its missing/present state
+              // from here on — recording a late 404 here would immediately
+              // re-exclude a tab that effect just decided to (re)check.
+              if (
+                err instanceof HTTPError &&
+                err.response.status === 404 &&
+                key !== currentActiveKey()
+              ) {
+                missingStatFilesRef.current.add(key);
+                if (!cancelled) markReviewFile(key, false);
+              }
             }
           })
         );
