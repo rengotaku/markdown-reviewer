@@ -6,6 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"markdown-reviewer/internal/events"
 	"markdown-reviewer/internal/files"
 	"markdown-reviewer/internal/service"
 )
@@ -13,13 +14,16 @@ import (
 type Handler struct {
 	userService *service.UserService
 	roots       *files.Roots
+	hub         *events.Hub
 }
 
 // NewHandler builds a Handler. roots may be nil when the files API is not
 // configured (e.g. user-CRUD-only tests); the files endpoints respond with
-// 500 in that case.
-func NewHandler(userService *service.UserService, roots *files.Roots) *Handler {
-	return &Handler{userService: userService, roots: roots}
+// 500 in that case. hub may also be nil (e.g. existing tests that don't
+// exercise SSE); GET /api/events responds with 500 in that case, same
+// pattern as the unconfigured-roots files endpoints.
+func NewHandler(userService *service.UserService, roots *files.Roots, hub *events.Hub) *Handler {
+	return &Handler{userService: userService, roots: roots, hub: hub}
 }
 
 func (h *Handler) Routes(staticHandler http.Handler) http.Handler {
@@ -59,6 +63,7 @@ func (h *Handler) Routes(staticHandler http.Handler) http.Handler {
 		api.GET("/review/*path", h.ReviewMarkdown)
 		api.POST("/ingest/*path", h.IngestFile)
 		api.GET("/revisions/*path", h.Revisions)
+		api.GET("/events", h.Events)
 	}
 
 	r.NoRoute(gin.WrapH(staticHandler))

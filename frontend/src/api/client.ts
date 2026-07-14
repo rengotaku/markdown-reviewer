@@ -1,7 +1,10 @@
 import ky from "ky";
 import { logger } from "../lib/logger";
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8080";
+// Exported so non-ky consumers (e.g. useServerEvents' EventSource, which ky
+// doesn't wrap) can build the same base URL without duplicating the env
+// lookup + fallback.
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8080";
 
 export const apiClient = ky.create({
   prefixUrl: API_BASE_URL,

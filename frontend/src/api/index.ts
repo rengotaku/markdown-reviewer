@@ -1,4 +1,4 @@
-export { apiClient } from "./client";
+export { apiClient, API_BASE_URL } from "./client";
 export {
   getConfig,
   listDir,

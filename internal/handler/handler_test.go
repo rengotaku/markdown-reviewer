@@ -29,7 +29,7 @@ func setupTestHandler(t *testing.T) *handler.Handler {
 	t.Helper()
 	repo := repository.NewUserRepository(testutil.NewTestDB(t))
 	svc := service.NewUserService(repo)
-	return handler.NewHandler(svc, nil)
+	return handler.NewHandler(svc, nil, nil)
 }
 
 func serve(h *handler.Handler, req *http.Request) *httptest.ResponseRecorder {
@@ -244,7 +244,7 @@ func TestConfig_MultipleRoots(t *testing.T) {
 	require.NoError(t, err)
 	repo := repository.NewUserRepository(testutil.NewTestDB(t))
 	svc := service.NewUserService(repo)
-	h := handler.NewHandler(svc, roots)
+	h := handler.NewHandler(svc, roots, nil)
 
 	rec := serve(h, httptest.NewRequest(http.MethodGet, "/api/config", nil))
 	require.Equal(t, http.StatusOK, rec.Code)

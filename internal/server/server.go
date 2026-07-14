@@ -22,6 +22,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
+	"markdown-reviewer/internal/events"
 	"markdown-reviewer/internal/files"
 	"markdown-reviewer/internal/handler"
 	"markdown-reviewer/internal/model"
@@ -97,7 +98,28 @@ func Run(ctx context.Context) error {
 		slog.Warn("neither REVIEW_ROOTS nor REVIEW_ROOT set; /api/files endpoints will return 500")
 	}
 
-	h := handler.NewHandler(svc, roots)
+	hub := events.NewHub()
+	if roots != nil {
+		watcher, werr := events.NewWatcher(hub, roots)
+		if werr != nil {
+			return fmt.Errorf("init file watcher: %w", werr)
+		}
+		go func() {
+			if rerr := watcher.Run(ctx); rerr != nil {
+				slog.Warn("events: watcher stopped", "err", rerr)
+			}
+		}()
+		// Log once the initial watch registration (every root's WalkDir +
+		// fsnotify.Add) has actually completed, so "server started" log
+		// output reflects when file-change push notifications become live
+		// rather than just when the goroutine was spawned.
+		go func() {
+			<-watcher.Ready()
+			slog.Info("events: file watcher ready")
+		}()
+	}
+
+	h := handler.NewHandler(svc, roots, hub)
 
 	srv := &http.Server{
 		Addr:         ":" + cfg.Port,

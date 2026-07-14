@@ -199,4 +199,61 @@ describe("useFileWatcher", () => {
     await new Promise((r) => setTimeout(r, POLL_MS * 5));
     expect(statSpy).not.toHaveBeenCalled();
   });
+
+  it("does not poll on an interval when paused (SSE connected)", async () => {
+    const statSpy = vi.fn(() =>
+      HttpResponse.json({ path: "a.md", modified: "2026-05-20T00:00:00Z" })
+    );
+    server.use(http.get(`${API_BASE}/api/stat/a.md`, statSpy));
+
+    seedActiveFile({
+      name: "a.md",
+      path: "a.md",
+      markdown: "old content",
+      serverModified: "2026-05-20T00:00:00Z",
+    });
+
+    renderHook(() => useFileWatcher(POLL_MS, { paused: true }), { wrapper });
+
+    await new Promise((r) => setTimeout(r, POLL_MS * 5));
+    expect(statSpy).not.toHaveBeenCalled();
+  });
+
+  it("fires an immediate check when trigger changes, even while paused", async () => {
+    const id = seedActiveFile({
+      name: "a.md",
+      path: "a.md",
+      markdown: "old content",
+      serverModified: "2026-05-20T00:00:00Z",
+    });
+
+    server.use(
+      http.get(`${API_BASE}/api/stat/a.md`, () =>
+        HttpResponse.json({ path: "a.md", modified: "2026-05-21T00:00:00Z" })
+      ),
+      http.get(`${API_BASE}/api/files/a.md`, () =>
+        HttpResponse.json({
+          path: "a.md",
+          content: "pushed content",
+          modified: "2026-05-21T00:00:00Z",
+        })
+      )
+    );
+
+    const { rerender } = renderHook(
+      ({ trigger }: { trigger: number }) =>
+        useFileWatcher(POLL_MS, { paused: true, trigger }),
+      { wrapper, initialProps: { trigger: 0 } }
+    );
+
+    rerender({ trigger: 1 });
+
+    await waitFor(
+      () => {
+        const f = useOpenFiles.getState().files.find((x) => x.id === id)!;
+        expect(f.markdown).toBe("pushed content");
+      },
+      { timeout: 2000 }
+    );
+  });
 });
