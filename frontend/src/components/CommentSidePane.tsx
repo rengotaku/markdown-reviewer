@@ -23,9 +23,16 @@ import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutline";
 import ReplayIcon from "@mui/icons-material/Replay";
 import ReplyIcon from "@mui/icons-material/Reply";
 import OpenInFullIcon from "@mui/icons-material/OpenInFull";
+import RefreshIcon from "@mui/icons-material/Refresh";
 import type { SxProps, Theme } from "@mui/material/styles";
 import type { CommentJSON, CommentReply } from "@/api";
 import { BAR_HEIGHT } from "@/theme/dimensions";
+
+/** AI-authored comments/replies are read-only to the human reviewer: they can
+ *  reply, resolve, and jump to them, but not edit the body or delete them. The
+ *  marker is the "ai" author (mr CLI default; see cmd/mr/inbox.go). */
+const AI_AUTHOR = "ai";
+const isAiAuthored = (author?: string): boolean => author === AI_AUTHOR;
 
 /** Comment/reply bodies longer than this are collapsed to a preview in the
  *  side-pane row, each with its own inline link to expand/collapse. The detail
@@ -79,6 +86,9 @@ interface Props {
   /** The active file is under review (draft files cannot take comments). */
   reviewActive: boolean;
   onClose?: () => void;
+  /** Re-fetch the comment list from the sidecar (e.g. to pick up AI replies
+   *  added out-of-band). */
+  onRefresh: () => void;
   /** Whether the current editor selection can take an anchored comment. */
   canAddComment: boolean;
   onAddComment: () => void;
@@ -138,6 +148,7 @@ export function CommentSidePane({
   comments,
   reviewActive,
   onClose,
+  onRefresh,
   canAddComment,
   onAddComment,
   onAddGlobal,
@@ -196,6 +207,16 @@ export function CommentSidePane({
         <Typography variant="subtitle2" sx={{ flexGrow: 1 }}>
           Comments ({openCount}/{comments.length})
         </Typography>
+        <Tooltip title="コメントを再取得">
+          <IconButton
+            size="small"
+            onClick={onRefresh}
+            aria-label="refresh comments"
+            data-testid="comment-pane-refresh"
+          >
+            <RefreshIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
         {onClose && (
           <Tooltip title="コメントペインを閉じる">
             <IconButton
@@ -397,6 +418,7 @@ function CommentRow({
   const badge = SCOPE_BADGE[c.scope];
   const resolved = c.status === "resolved";
   const canJump = c.scope !== "global" && !c.orphan;
+  const aiOwned = isAiAuthored(c.author);
 
   const submitReply = () => {
     const body = replyBody.trim();
@@ -591,11 +613,19 @@ function CommentRow({
             </IconButton>
           </span>
         </Tooltip>
-        <Tooltip title={resolved ? "解決済みのため編集できません" : "コメントを編集"}>
+        <Tooltip
+          title={
+            aiOwned
+              ? "AI のコメントは編集できません"
+              : resolved
+                ? "解決済みのため編集できません"
+                : "コメントを編集"
+          }
+        >
           <span>
             <IconButton
               size="small"
-              disabled={resolved}
+              disabled={resolved || aiOwned}
               onClick={startEdit}
               aria-label="edit comment"
               data-testid="comment-edit"
@@ -629,15 +659,18 @@ function CommentRow({
           </IconButton>
         </Tooltip>
         <Box sx={{ flexGrow: 1 }} />
-        <Tooltip title="コメントを削除">
-          <IconButton
-            size="small"
-            onClick={() => onDelete(c.id)}
-            aria-label="delete comment"
-            data-testid="comment-delete"
-          >
-            <DeleteOutlineIcon fontSize="small" />
-          </IconButton>
+        <Tooltip title={aiOwned ? "AI のコメントは削除できません" : "コメントを削除"}>
+          <span>
+            <IconButton
+              size="small"
+              disabled={aiOwned}
+              onClick={() => onDelete(c.id)}
+              aria-label="delete comment"
+              data-testid="comment-delete"
+            >
+              <DeleteOutlineIcon fontSize="small" />
+            </IconButton>
+          </span>
         </Tooltip>
       </Box>
     </Box>
@@ -673,6 +706,7 @@ function ReplyRow({
 }: ReplyRowProps) {
   const [editOpen, setEditOpen] = useState(false);
   const [editBody, setEditBody] = useState(r.body);
+  const aiOwned = isAiAuthored(r.author);
 
   const startEdit = () => {
     setEditBody(r.body);
@@ -696,11 +730,19 @@ function ReplyRow({
         </Typography>
         {!editOpen && (
           <>
-            <Tooltip title={resolved ? "解決済みのため編集できません" : "返信を編集"}>
+            <Tooltip
+              title={
+                aiOwned
+                  ? "AI の返信は編集できません"
+                  : resolved
+                    ? "解決済みのため編集できません"
+                    : "返信を編集"
+              }
+            >
               <span>
                 <IconButton
                   size="small"
-                  disabled={resolved}
+                  disabled={resolved || aiOwned}
                   onClick={startEdit}
                   aria-label="edit reply"
                   data-testid="comment-reply-edit"
@@ -710,11 +752,19 @@ function ReplyRow({
                 </IconButton>
               </span>
             </Tooltip>
-            <Tooltip title={resolved ? "解決済みのため削除できません" : "返信を削除"}>
+            <Tooltip
+              title={
+                aiOwned
+                  ? "AI の返信は削除できません"
+                  : resolved
+                    ? "解決済みのため削除できません"
+                    : "返信を削除"
+              }
+            >
               <span>
                 <IconButton
                   size="small"
-                  disabled={resolved}
+                  disabled={resolved || aiOwned}
                   onClick={() => onDeleteReply(commentId, index)}
                   aria-label="delete reply"
                   data-testid="comment-reply-delete"
@@ -823,6 +873,7 @@ function CommentDetailDialog({
   const canJump = c.scope !== "global" && !c.orphan;
   const ctx = contextLabel(c);
   const badge = SCOPE_BADGE[c.scope];
+  const aiOwned = isAiAuthored(c.author);
 
   const submitReply = () => {
     const body = replyBody.trim();
@@ -977,11 +1028,19 @@ function CommentDetailDialog({
       </DialogContent>
       <DialogActions sx={{ justifyContent: "space-between", px: 2 }}>
         <Box>
-          <Tooltip title={resolved ? "解決済みのため編集できません" : "コメントを編集"}>
+          <Tooltip
+            title={
+              aiOwned
+                ? "AI のコメントは編集できません"
+                : resolved
+                  ? "解決済みのため編集できません"
+                  : "コメントを編集"
+            }
+          >
             <span>
               <IconButton
                 size="small"
-                disabled={resolved}
+                disabled={resolved || aiOwned}
                 onClick={() => setEditOpen((v) => !v)}
                 aria-label="edit comment"
                 data-testid="comment-detail-edit"
@@ -990,15 +1049,18 @@ function CommentDetailDialog({
               </IconButton>
             </span>
           </Tooltip>
-          <Tooltip title="コメントを削除">
-            <IconButton
-              size="small"
-              onClick={() => onDelete(c.id)}
-              aria-label="delete comment"
-              data-testid="comment-detail-delete"
-            >
-              <DeleteOutlineIcon fontSize="small" />
-            </IconButton>
+          <Tooltip title={aiOwned ? "AI のコメントは削除できません" : "コメントを削除"}>
+            <span>
+              <IconButton
+                size="small"
+                disabled={aiOwned}
+                onClick={() => onDelete(c.id)}
+                aria-label="delete comment"
+                data-testid="comment-detail-delete"
+              >
+                <DeleteOutlineIcon fontSize="small" />
+              </IconButton>
+            </span>
           </Tooltip>
         </Box>
         <Box>
