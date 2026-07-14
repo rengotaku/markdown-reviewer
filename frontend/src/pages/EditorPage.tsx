@@ -786,10 +786,16 @@ export function EditorPage() {
     handleAddCommentClick();
   };
 
+  // AI-authored comments are read-only to the human reviewer (they can't be
+  // deleted from the right-click menu either); see CommentSidePane's
+  // isAiAuthored for the same "ai" author marker.
+  const contextMenuCommentIsAiAuthored =
+    comments.find((c) => c.id === contextMenu?.commentId)?.author === "ai";
+
   const handleContextDeleteComment = () => {
     const id = contextMenu?.commentId;
     closeContextMenu();
-    if (id) void handleDeleteComment(id);
+    if (id && !contextMenuCommentIsAiAuthored) void handleDeleteComment(id);
   };
 
   const closeCommentDialog = () =>
@@ -1425,6 +1431,7 @@ export function EditorPage() {
             comments={comments}
             reviewActive={reviewActive}
             onClose={toggleCommentPane}
+            onRefresh={refreshComments}
             canAddComment={canAddComment}
             onAddComment={handleAddCommentClick}
             onAddGlobal={handleAddGlobalClick}
@@ -1478,11 +1485,17 @@ export function EditorPage() {
         }}
       >
         {contextMenu?.commentId ? (
-          <MenuItem onClick={handleContextDeleteComment} data-testid="ctx-delete-comment">
+          <MenuItem
+            onClick={handleContextDeleteComment}
+            disabled={contextMenuCommentIsAiAuthored}
+            data-testid="ctx-delete-comment"
+          >
             <ListItemIcon>
               <DeleteOutlineIcon fontSize="small" />
             </ListItemIcon>
-            <ListItemText>このコメントを削除</ListItemText>
+            <ListItemText>
+              {contextMenuCommentIsAiAuthored ? "AI のコメントは削除できません" : "このコメントを削除"}
+            </ListItemText>
           </MenuItem>
         ) : (
           <MenuItem onClick={handleContextAddComment} data-testid="ctx-add-comment">

@@ -20,6 +20,7 @@ const comment = (id: string, overrides: Partial<CommentJSON> = {}): CommentJSON 
 function renderPane(props: Partial<React.ComponentProps<typeof CommentSidePane>> = {}) {
   const handlers = {
     onClose: vi.fn(),
+    onRefresh: vi.fn(),
     onAddComment: vi.fn(),
     onAddGlobal: vi.fn(),
     onDelete: vi.fn(),
@@ -162,6 +163,46 @@ describe("CommentSidePane", () => {
     expect(screen.getByTestId("comment-delete")).toBeEnabled();
   });
 
+  it("disables edit/delete for an AI-authored comment but keeps reply/resolve enabled", () => {
+    renderPane({ comments: [comment("c1", { author: "ai", status: "open" })] });
+    expect(screen.getByTestId("comment-edit")).toBeDisabled();
+    expect(screen.getByTestId("comment-delete")).toBeDisabled();
+    expect(screen.getByTestId("comment-reply-toggle")).toBeEnabled();
+    expect(screen.getByTestId("comment-resolve-toggle")).toBeEnabled();
+  });
+
+  it("keeps edit/delete enabled for a human-authored comment", () => {
+    renderPane({ comments: [comment("c1", { author: "reviewer", status: "open" })] });
+    expect(screen.getByTestId("comment-edit")).toBeEnabled();
+    expect(screen.getByTestId("comment-delete")).toBeEnabled();
+  });
+
+  it("disables edit/delete for an AI-authored reply but keeps human replies editable", () => {
+    renderPane({
+      comments: [
+        comment("c1", {
+          replies: [
+            { author: "ai", date: "2026-05-20", body: "ai reply" },
+            { author: "reviewer", date: "2026-05-21", body: "human reply" },
+          ],
+        }),
+      ],
+    });
+    const editButtons = screen.getAllByTestId("comment-reply-edit");
+    const deleteButtons = screen.getAllByTestId("comment-reply-delete");
+    expect(editButtons[0]).toBeDisabled();
+    expect(deleteButtons[0]).toBeDisabled();
+    expect(editButtons[1]).toBeEnabled();
+    expect(deleteButtons[1]).toBeEnabled();
+  });
+
+  it("calls onRefresh when the refresh button is clicked", async () => {
+    const user = userEvent.setup();
+    const h = renderPane();
+    await user.click(screen.getByTestId("comment-pane-refresh"));
+    expect(h.onRefresh).toHaveBeenCalledTimes(1);
+  });
+
   it("reopens a resolved comment via the toggle", async () => {
     const user = userEvent.setup();
     const h = renderPane({ comments: [comment("c1", { status: "resolved" })] });
@@ -195,8 +236,8 @@ describe("CommentSidePane", () => {
       comments: [
         comment("c1", {
           replies: [
-            { author: "ai", date: "2026-05-20", body: "reply0" },
-            { author: "ai", date: "2026-05-21", body: "reply1" },
+            { author: "reviewer", date: "2026-05-20", body: "reply0" },
+            { author: "reviewer", date: "2026-05-21", body: "reply1" },
           ],
         }),
       ],
@@ -218,8 +259,8 @@ describe("CommentSidePane", () => {
       comments: [
         comment("c1", {
           replies: [
-            { author: "ai", date: "2026-05-20", body: "reply0" },
-            { author: "ai", date: "2026-05-21", body: "reply1" },
+            { author: "reviewer", date: "2026-05-20", body: "reply0" },
+            { author: "reviewer", date: "2026-05-21", body: "reply1" },
           ],
         }),
       ],
@@ -499,6 +540,14 @@ describe("CommentSidePane", () => {
     await waitFor(() =>
       expect(screen.queryByTestId("comment-detail-dialog")).not.toBeInTheDocument()
     );
+  });
+
+  it("disables edit/delete in the detail dialog for an AI-authored comment", async () => {
+    const user = userEvent.setup();
+    renderPane({ comments: [comment("c1", { author: "ai", status: "open" })] });
+    await user.click(screen.getByTestId("comment-open-detail"));
+    expect(screen.getByTestId("comment-detail-edit")).toBeDisabled();
+    expect(screen.getByTestId("comment-detail-delete")).toBeDisabled();
   });
 
   it("reopens a resolved comment from the detail dialog", async () => {
