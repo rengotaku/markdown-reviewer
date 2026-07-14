@@ -37,9 +37,10 @@ type Watcher struct {
 	// about to enter its event loop. See Ready.
 	ready chan struct{}
 
-	mu      sync.Mutex
 	timers  map[string]*time.Timer
 	pending map[string]Event
+
+	mu sync.Mutex
 }
 
 // NewWatcher creates a Watcher for the given roots, broadcasting through
