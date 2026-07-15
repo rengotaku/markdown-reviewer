@@ -37,7 +37,7 @@ describe("EditorPage", () => {
     localStorage.clear();
     useOpenFiles.setState({ files: [], activeIdByRoot: {} });
     useToast.setState({ toasts: [] });
-    useConfirm.setState({ pending: null });
+    useConfirm.setState({ pending: null, queue: [] });
   });
 
   it("shows the empty-state placeholder when no file is active", () => {

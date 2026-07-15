@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { useOpenFiles, reattachLegacyFilesToRoot } from "./useOpenFiles";
-import { simpleHash } from "@/utils/hash";
 
 // All tests pin a single root name so they keep exercising the same
 // behaviors that mattered pre-multi-root, just routed through the per-root
@@ -256,7 +255,6 @@ describe("useOpenFiles", () => {
           savedMarkdown: "# A",
           isDirty: false,
           reloadToken: 0,
-          initialHash: simpleHash("# A"),
           serverModified: "",
           serverCreated: "",
         },
@@ -269,7 +267,6 @@ describe("useOpenFiles", () => {
           savedMarkdown: "# B",
           isDirty: false,
           reloadToken: 0,
-          initialHash: simpleHash("# B"),
           serverModified: "",
           serverCreated: "",
         },
@@ -301,7 +298,6 @@ describe("useOpenFiles", () => {
           savedMarkdown: "x",
           isDirty: false,
           reloadToken: 0,
-          initialHash: simpleHash("x"),
           serverModified: "",
           serverCreated: "",
         },
@@ -327,7 +323,6 @@ describe("useOpenFiles", () => {
           savedMarkdown: "y",
           isDirty: false,
           reloadToken: 0,
-          initialHash: simpleHash("y"),
           serverModified: "",
           serverCreated: "",
         },
@@ -443,31 +438,47 @@ describe("useOpenFiles guards and recovery", () => {
     expect(f.reloadToken).toBe(1);
   });
 
-  it("applyExternalReload swaps content and records the new server mtime", () => {
+  it("applyExternalReload swaps content and records the new server mtime + sha", () => {
     useOpenFiles.getState().addFiles([{ name: "a.md", root: ROOT, markdown: "# A" }]);
     const id = useOpenFiles.getState().files[0].id;
     useOpenFiles
       .getState()
-      .applyExternalReload(id, "# external", "2026-06-01T00:00:00Z", "2026-05-01T00:00:00Z");
+      .applyExternalReload(
+        id,
+        "# external",
+        "2026-06-01T00:00:00Z",
+        "2026-05-01T00:00:00Z",
+        "sha-external"
+      );
     const f = useOpenFiles.getState().files[0];
     expect(f.markdown).toBe("# external");
     expect(f.savedMarkdown).toBe("# external");
     expect(f.isDirty).toBe(false);
     expect(f.reloadToken).toBe(1);
-    expect(f.initialHash).toBe(simpleHash("# external"));
     expect(f.serverModified).toBe("2026-06-01T00:00:00Z");
     expect(f.serverCreated).toBe("2026-05-01T00:00:00Z");
+    expect(f.serverSha).toBe("sha-external");
   });
 
-  it("acknowledgeExternalChange records the mtime without touching content", () => {
+  it("acknowledgeExternalChange records the mtime (+ sha) without touching content", () => {
     useOpenFiles.getState().addFiles([{ name: "a.md", root: ROOT, markdown: "# A" }]);
     useOpenFiles.getState().updateActiveMarkdown(ROOT, "# keep my edit");
     const id = useOpenFiles.getState().files[0].id;
-    useOpenFiles.getState().acknowledgeExternalChange(id, "2026-06-02T00:00:00Z");
+    useOpenFiles.getState().acknowledgeExternalChange(id, "2026-06-02T00:00:00Z", "sha-2");
     const f = useOpenFiles.getState().files[0];
     expect(f.serverModified).toBe("2026-06-02T00:00:00Z");
+    expect(f.serverSha).toBe("sha-2");
     expect(f.markdown).toBe("# keep my edit");
     expect(f.isDirty).toBe(true);
+  });
+
+  it("acknowledgeExternalChange without a sha leaves the existing serverSha untouched", () => {
+    useOpenFiles
+      .getState()
+      .addFiles([{ name: "a.md", root: ROOT, markdown: "# A", sha: "sha-1" }]);
+    const id = useOpenFiles.getState().files[0].id;
+    useOpenFiles.getState().acknowledgeExternalChange(id, "2026-06-02T00:00:00Z");
+    expect(useOpenFiles.getState().files[0].serverSha).toBe("sha-1");
   });
 
   it("migrates a version-1 persisted payload onto the placeholder root", async () => {
@@ -491,10 +502,45 @@ describe("useOpenFiles guards and recovery", () => {
     expect(f.root).toBe("");
     expect(f.path).toBe("old.md");
     expect(f.savedMarkdown).toBe("# Old");
-    expect(f.initialHash).toBe(simpleHash("# Old"));
     expect(f.serverModified).toBe("");
     expect(f.serverCreated).toBe("");
     expect(state.activeIdByRoot[""]).toBe("legacy-1");
+  });
+
+  it("migrates a version-2 persisted payload by dropping the dead initialHash field", async () => {
+    localStorage.setItem(
+      "markdown-reviewer-open-files",
+      JSON.stringify({
+        version: 2,
+        state: {
+          files: [
+            {
+              id: "v2-1",
+              name: "old.md",
+              path: "old.md",
+              root: "works",
+              markdown: "# Old",
+              savedMarkdown: "# Old",
+              isDirty: false,
+              reloadToken: 0,
+              initialHash: "some-legacy-hash",
+              serverModified: "2026-01-01T00:00:00Z",
+              serverCreated: "",
+            },
+          ],
+          activeIdByRoot: { works: "v2-1" },
+        },
+      })
+    );
+    await useOpenFiles.persist.rehydrate();
+
+    const f = useOpenFiles.getState().files[0];
+    expect(f).not.toHaveProperty("initialHash");
+    // No sha was ever recorded for this legacy entry — undefined, not
+    // fabricated — so the watcher falls back to mtime comparison for it
+    // until the next successful read/write/stat.
+    expect(f.serverSha).toBeUndefined();
+    expect(f.serverModified).toBe("2026-01-01T00:00:00Z");
   });
 
   it("drops stale active ids whose files are gone on rehydrate", async () => {

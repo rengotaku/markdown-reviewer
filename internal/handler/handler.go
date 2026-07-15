@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 	"path/filepath"
+	"sync"
 
 	"github.com/gin-gonic/gin"
 
@@ -15,6 +16,15 @@ type Handler struct {
 	userService *service.UserService
 	roots       *files.Roots
 	hub         *events.Hub
+	// ready gates GET /api/events (see SetWatcherReady). nil means "don't
+	// wait" — the historical behavior every existing caller keeps by default.
+	ready <-chan struct{}
+	// writeLocks serializes WriteFile's read-check(If-Match)-then-write
+	// section per resolved path (map[string]*sync.Mutex) so two concurrent
+	// PUTs targeting the same file can't both pass the If-Match check before
+	// either has written (see lockPath in files.go). Zero value is ready to
+	// use — no constructor wiring needed.
+	writeLocks sync.Map
 }
 
 // NewHandler builds a Handler. roots may be nil when the files API is not
@@ -24,6 +34,18 @@ type Handler struct {
 // pattern as the unconfigured-roots files endpoints.
 func NewHandler(userService *service.UserService, roots *files.Roots, hub *events.Hub) *Handler {
 	return &Handler{userService: userService, roots: roots, hub: hub}
+}
+
+// SetWatcherReady wires a file watcher's readiness signal (events.Watcher's
+// Ready()) into the handler. When set, GET /api/events blocks — before
+// writing any response headers/bytes — until ready is closed or the request
+// is canceled, so a browser's EventSource never fires `onopen` (and the
+// frontend never stops its polling fallback) before the watcher is actually
+// observing filesystem changes (issue #119, case 3: the SSE listener and the
+// watcher's initial fsnotify registration otherwise race). Passing a nil
+// channel (or never calling this) disables the gate.
+func (h *Handler) SetWatcherReady(ready <-chan struct{}) {
+	h.ready = ready
 }
 
 func (h *Handler) Routes(staticHandler http.Handler) http.Handler {

@@ -133,21 +133,49 @@ open コメントを **AI 向けに整形した Markdown** で返す（`?status=
 
 ## GET /api/files/*path
 
-ファイル内容を返す（先頭の AI hint コメント込み）。
+ファイル内容を返す（先頭の AI hint コメント込み）。レスポンスには `sha`（返した `content` の
+生バイト列の sha256 hex ダイジェスト、64 文字小文字）が含まれる。この値を次の `PUT` の
+`If-Match` にそのまま渡せる。
 
 ## PUT /api/files/*path
 
 ファイルを保存する。リクエストボディは `{ "content": "..." }`。
 **サーバが先頭の AI hint コメントを強制注入**し、保存・レスポンスとも hint 込みになる。
-保存は tmp ファイル + rename によるアトミック書き込み。レスポンスには `state`（`"draft"` | `"review"`）が含まれる。
+保存は tmp ファイル + rename によるアトミック書き込み。レスポンスには `state`（`"draft"` | `"review"`）と
+`sha`（実際に書き込んだ最終バイト列の sha256 hex）が含まれる。
 
 **保存時に「前回保存内容」をリビジョン履歴へスナップショット**する（`review` 状態のファイルのみ）:
 hint を除去した上で `~/.config/reviewer/<root>/<path>/history.jsonl` へ追記し、直前と同一内容なら dedupe、上限 20 件。
 `?author=ai`（または `human`）でスナップショットの作成者を記録できる（省略時 `unknown`）。
 
+### 競合検知（任意・`If-Match`）
+
+`GET /api/files` または `GET /api/stat` で取得した `sha` をリクエストヘッダー
+`If-Match: <sha256hex>`（ダブルクオート囲みも許容）として送ると、書き込み直前のディスク上の
+内容がその値と一致する場合のみ保存する。ヘッダーを付けなければ従来どおり last-write-wins
+（`mr` CLI 等の既存呼び出し元は無変更で動作する）。
+
+| Status | 条件 |
+|--------|------|
+| 412 | `If-Match` を指定したが、ディスク上の現在内容の sha が一致しない（対象ファイルが未存在の場合も含む）。ボディ: `{ "error": "...", "sha": "<現在の sha（未存在時は空文字）>", "modified": "<現在の mtime>" }`。書き込みは行われない |
+
 ## GET /api/stat/*path
 
-ファイルの mtime / ctime と `state`（`"draft"` | `"review"`）のみ返す（外部更新検知用、ボディなし）。
+ファイルの mtime / ctime / `sha`（現在のディスク上バイト列の sha256 hex）と
+`state`（`"draft"` | `"review"`）を返す（外部更新検知用、`content` は含まない）。
+mtime は秒精度のため、同一秒内の 2 回の保存を区別できない — `sha` はそれでも変化するため、
+同一秒内の外部更新（同時編集競合）を検知する手段として使う。
+
+## GET /api/events
+
+`text/event-stream`。ファイル変更を `data: <json>\n\n` で push する（一定間隔ごとに
+`:keep-alive` コメント行も送る）。各イベント: `{ "kind": "tree"|"file"|"comments", "root": "...",
+"path": "...", "mtime"?: "...", "sha"?: "..." }`。`sha` は `kind:"file"` のときのみ、変更後ファイルの
+sha256 hex（読み取り失敗時は省略）。`kind:"tree"` には `sha` を含めない。
+サーバ起動直後、ファイル監視（fsnotify）の初期登録が完了するまでこのエンドポイントへの接続は
+レスポンスヘッダーも含めて何も返さない（接続はブロックされる）。クライアントが切断すればその
+まま何も送らずに終了する。この待ち合わせにより、監視開始前に発生した変更を push で見逃す窓を
+塞いでいる。
 
 ## GET /api/dirs
 

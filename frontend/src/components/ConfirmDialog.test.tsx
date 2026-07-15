@@ -6,7 +6,7 @@ import { useConfirm } from "@/hooks/useConfirm";
 
 describe("ConfirmDialog", () => {
   beforeEach(() => {
-    useConfirm.setState({ pending: null });
+    useConfirm.setState({ pending: null, queue: [] });
   });
 
   it("stays closed while nothing is pending", () => {

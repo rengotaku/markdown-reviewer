@@ -4,12 +4,14 @@ import { API_BASE_URL } from "@/api";
 /** Discriminant matching the Go side's events.Kind (internal/events/hub.go). */
 export type ServerEventKind = "tree" | "file" | "comments";
 
-/** Mirrors internal/events.Event's JSON shape (kind/root/path/mtime). */
+/** Mirrors internal/events.Event's JSON shape (kind/root/path/mtime/sha). */
 export interface ServerEvent {
   kind: ServerEventKind;
   root: string;
   path: string;
   mtime?: string;
+  /** sha256 hex of the file's on-disk bytes (#119). Only set on kind="file". */
+  sha?: string;
 }
 
 export interface UseServerEventsCallbacks {

@@ -23,6 +23,13 @@ export interface FileReadResponse {
   root: string;
   /** "draft" until ingested, then "review". Older servers omit it. */
   state?: ReviewState;
+  /**
+   * sha256 hex of the bytes written to disk (#119). For a PUT this is the
+   * hash of the *final* content — the server may inject/normalize an AI hint
+   * block, so it can differ from the hash of what was sent. Older servers
+   * omit it; callers fall back to mtime-only change detection.
+   */
+  sha?: string;
 }
 
 export interface FileStatResponse {
@@ -34,6 +41,8 @@ export interface FileStatResponse {
   state?: ReviewState;
   /** True when the file is under review and has at least one open comment. */
   hasOpenComments?: boolean;
+  /** sha256 hex of the file's on-disk bytes (#119). Older servers omit it. */
+  sha?: string;
 }
 
 export interface IngestResponse {
@@ -136,13 +145,18 @@ export async function writeFile(
   root?: string,
   // Browser saves are always human actions; label the revision snapshot as
   // such so history doesn't fall back to the server's "unknown" default.
-  author = "human"
+  author = "human",
+  // Optimistic-concurrency guard (#119): when set, the server only writes if
+  // the on-disk sha still matches, otherwise it responds 412 without writing.
+  // Omitted entirely (no header) preserves the legacy last-write-wins save.
+  ifMatch?: string
 ): Promise<FileReadResponse> {
   const rootParam = rootQuery(root, "?");
   const authorParam = `${rootParam ? "&" : "?"}author=${encodeURIComponent(author)}`;
   return apiClient
     .put(`api/files/${encodePath(path)}${rootParam}${authorParam}`, {
       json: { content },
+      ...(ifMatch ? { headers: { "If-Match": ifMatch } } : {}),
     })
     .json<FileReadResponse>();
 }

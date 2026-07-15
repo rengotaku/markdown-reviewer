@@ -7,6 +7,7 @@ import Menu from "@mui/material/Menu";
 import MenuItem from "@mui/material/MenuItem";
 import Tabs from "@mui/material/Tabs";
 import Tab from "@mui/material/Tab";
+import Chip from "@mui/material/Chip";
 import CloseIcon from "@mui/icons-material/Close";
 import ListItemIcon from "@mui/material/ListItemIcon";
 import ListItemText from "@mui/material/ListItemText";
@@ -342,6 +343,18 @@ export function EditorPage() {
   useEffect(() => {
     setSseConnected(sseConnected);
   }, [sseConnected, setSseConnected]);
+
+  // Sticky "has the SSE channel ever connected" flag (#119 case 4). Once
+  // true it stays true, so a later drop shows the disconnected badge below —
+  // but the badge never flashes before the first successful connection
+  // (e.g. jsdom / tests where EventSource is undefined, or the brief instant
+  // between mount and the first onopen). Set during render (React's
+  // recommended pattern over an effect for derived state — same approach as
+  // the fileKey reset below), not inside a useEffect body.
+  const [everConnected, setEverConnected] = useState(false);
+  if (sseConnected && !everConnected) {
+    setEverConnected(true);
+  }
 
   // Reset all review/diff view-state the instant the active file changes —
   // done during render (React's recommended pattern over an effect) so the
@@ -794,6 +807,12 @@ export function EditorPage() {
 
     if (target) {
       setActive(activeRoot, target.id);
+      // Re-activating an already-open tab (#119 case 6) can be stale if it
+      // changed on disk while some other tab was active — the file watcher
+      // was only checking whichever tab was active at the time. Bump the
+      // same trigger the SSE onFile handler uses so it revalidates this tab
+      // right now instead of waiting for the next interval/push event.
+      setFileEventTrigger((n) => n + 1);
       return;
     }
 
@@ -806,12 +825,29 @@ export function EditorPage() {
         markdown: res.content,
         modified: res.modified,
         created: res.created,
+        sha: res.sha,
       });
     } catch (err) {
       showToast(
         `ファイルの読み込みに失敗しました: ${(err as Error).message ?? "unknown error"}`,
         "error"
       );
+    }
+  };
+
+  // Tab-bar clicks switch tabs directly via MUI Tabs' onChange, bypassing
+  // handleSelect entirely — so the #119 case 6 revalidation added there
+  // (bump fileEventTrigger after reactivating an existing tab) needs its own
+  // copy here. Only bump when the active tab actually changes: MUI still
+  // fires onChange when the currently-active tab is clicked again, and
+  // re-triggering on every such click would just be redundant /api/stat
+  // traffic for a tab we already know is current.
+  const handleTabChange = (_: React.SyntheticEvent, v: string) => {
+    if (!activeRoot) return;
+    const changed = v !== (activeFile?.id ?? null);
+    setActive(activeRoot, v);
+    if (changed) {
+      setFileEventTrigger((n) => n + 1);
     }
   };
 
@@ -829,6 +865,12 @@ export function EditorPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeRoot]);
 
+  // Save conflict (#119 case 5): the server rejects the write with 412 when
+  // `If-Match` no longer matches the on-disk sha — i.e. the file changed on
+  // disk since we last read/wrote it — and writes nothing. Offer to
+  // overwrite (retry without If-Match, legacy last-write-wins) or cancel
+  // (the file watcher's next tick will independently offer to take the
+  // external change, since the on-disk sha now differs from ours).
   const handleSave = async () => {
     if (!activeFile) return;
     try {
@@ -836,13 +878,39 @@ export function EditorPage() {
         path: activeFile.path,
         content: activeFile.markdown,
         root: activeFile.root,
+        ifMatch: activeFile.serverSha,
       });
-      markActiveSaved(activeFile.root, res.modified, res.created);
+      markActiveSaved(activeFile.root, res.modified, res.created, res.sha);
       // A save snapshots the previous content into history (review state only),
       // so refresh the revision list backing the diff picker.
       setReviewRefresh((n) => n + 1);
       showToast(`「${activeFile.name}」を保存しました`, "success");
     } catch (err) {
+      if (err instanceof HTTPError && err.response.status === 412) {
+        const overwrite = await confirm({
+          title: "保存の競合",
+          message: `「${activeFile.name}」は他の場所で更新されているため、まだ保存していません。\n外部の変更を上書きして保存しますか？`,
+          confirmLabel: "上書き保存",
+          cancelLabel: "キャンセル",
+        });
+        if (!overwrite) return;
+        try {
+          const res = await writeFile.mutateAsync({
+            path: activeFile.path,
+            content: activeFile.markdown,
+            root: activeFile.root,
+          });
+          markActiveSaved(activeFile.root, res.modified, res.created, res.sha);
+          setReviewRefresh((n) => n + 1);
+          showToast(`「${activeFile.name}」を保存しました`, "success");
+        } catch (retryErr) {
+          showToast(
+            `保存に失敗しました: ${(retryErr as Error).message ?? "unknown error"}`,
+            "error"
+          );
+        }
+        return;
+      }
       showToast(
         `保存に失敗しました: ${(err as Error).message ?? "unknown error"}`,
         "error"
@@ -1371,6 +1439,22 @@ export function EditorPage() {
               </IconButton>
             </span>
           </Tooltip>
+          {/* #119 case 4: shown only after the SSE channel has connected at
+              least once and then dropped, so a poll-based fallback is
+              actually in play — never flashes on initial mount / in
+              environments without EventSource, and disappears on its own
+              once the channel reconnects. Deliberately a standalone chip
+              rather than repurposing an existing header slot (1枠1意味). */}
+          {everConnected && !sseConnected && (
+            <Tooltip title="サーバとのリアルタイム同期が切断されています。ポーリングで追随中です。">
+              <Chip
+                size="small"
+                color="warning"
+                label="未同期"
+                data-testid="sse-disconnected-badge"
+              />
+            </Tooltip>
+          )}
         </Box>
 
         {/*
@@ -1380,7 +1464,7 @@ export function EditorPage() {
          */}
         <Tabs
           value={activeFile?.id ?? false}
-          onChange={(_, v) => activeRoot && setActive(activeRoot, v as string)}
+          onChange={handleTabChange}
           variant="scrollable"
           scrollButtons={false}
           TabIndicatorProps={{ sx: { display: "none" } }}

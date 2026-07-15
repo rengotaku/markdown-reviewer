@@ -22,6 +22,7 @@ function seedActiveFile(opts: {
   path: string;
   markdown: string;
   serverModified: string;
+  serverSha?: string;
   isDirty?: boolean;
 }) {
   const id = `test-${opts.path}`;
@@ -36,7 +37,7 @@ function seedActiveFile(opts: {
         savedMarkdown: opts.isDirty ? "older" : opts.markdown,
         isDirty: !!opts.isDirty,
         reloadToken: 0,
-        initialHash: "hash",
+        serverSha: opts.serverSha,
         serverModified: opts.serverModified,
         serverCreated: "",
       },
@@ -71,7 +72,7 @@ describe("useFileWatcher", () => {
   beforeEach(() => {
     localStorage.clear();
     useOpenFiles.setState({ files: [], activeIdByRoot: {} });
-    useConfirm.setState({ pending: null });
+    useConfirm.setState({ pending: null, queue: [] });
     useToast.setState({ toasts: [] });
   });
 
@@ -255,5 +256,129 @@ describe("useFileWatcher", () => {
       },
       { timeout: 2000 }
     );
+  });
+
+  // --- sha-first comparison (#119) ------------------------------------------
+
+  it("case 1: reloads when the sha differs even though mtime is identical (same-second double save)", async () => {
+    const id = seedActiveFile({
+      name: "a.md",
+      path: "a.md",
+      markdown: "old content",
+      serverModified: "2026-05-20T00:00:00Z",
+      serverSha: "sha-old",
+    });
+
+    server.use(
+      http.get(`${API_BASE}/api/stat/a.md`, () =>
+        HttpResponse.json({
+          path: "a.md",
+          modified: "2026-05-20T00:00:00Z", // identical mtime
+          sha: "sha-new",
+        })
+      ),
+      http.get(`${API_BASE}/api/files/a.md`, () =>
+        HttpResponse.json({
+          path: "a.md",
+          content: "new content",
+          modified: "2026-05-20T00:00:00Z",
+          sha: "sha-new",
+        })
+      )
+    );
+
+    renderHook(() => useFileWatcher(POLL_MS), { wrapper });
+
+    await waitFor(
+      () => {
+        const f = useOpenFiles.getState().files.find((x) => x.id === id)!;
+        expect(f.markdown).toBe("new content");
+        expect(f.serverSha).toBe("sha-new");
+        expect(f.isDirty).toBe(false);
+      },
+      { timeout: 2000 }
+    );
+    expect(useToast.getState().toasts.some((t) => t.severity === "info")).toBe(true);
+  });
+
+  it("case 2: a touch (new mtime, same sha) silently updates serverModified without reload/dialog", async () => {
+    const id = seedActiveFile({
+      name: "a.md",
+      path: "a.md",
+      markdown: "old content",
+      serverModified: "2026-05-20T00:00:00Z",
+      serverSha: "sha-same",
+    });
+
+    let readCalled = false;
+    server.use(
+      http.get(`${API_BASE}/api/stat/a.md`, () =>
+        HttpResponse.json({
+          path: "a.md",
+          modified: "2026-05-21T00:00:00Z", // mtime bumped
+          sha: "sha-same", // content unchanged
+        })
+      ),
+      http.get(`${API_BASE}/api/files/a.md`, () => {
+        readCalled = true;
+        return HttpResponse.json({
+          path: "a.md",
+          content: "old content",
+          modified: "2026-05-21T00:00:00Z",
+          sha: "sha-same",
+        });
+      })
+    );
+
+    renderHook(() => useFileWatcher(POLL_MS), { wrapper });
+
+    await waitFor(
+      () => {
+        const f = useOpenFiles.getState().files.find((x) => x.id === id)!;
+        expect(f.serverModified).toBe("2026-05-21T00:00:00Z");
+      },
+      { timeout: 2000 }
+    );
+
+    // Give a couple more ticks a chance to (incorrectly) fire a reload.
+    await new Promise((r) => setTimeout(r, POLL_MS * 3));
+    const f = useOpenFiles.getState().files.find((x) => x.id === id)!;
+    expect(f.markdown).toBe("old content"); // unchanged buffer, no swap needed
+    expect(f.isDirty).toBe(false);
+    expect(readCalled).toBe(false);
+    expect(useConfirm.getState().pending).toBeNull();
+  });
+
+  it("backfills serverSha for a rehydrated tab (no baseline sha) once mtimes agree", async () => {
+    const id = seedActiveFile({
+      name: "a.md",
+      path: "a.md",
+      markdown: "old content",
+      serverModified: "2026-05-20T00:00:00Z",
+      // serverSha intentionally omitted — simulates a tab persisted before #119.
+    });
+
+    server.use(
+      http.get(`${API_BASE}/api/stat/a.md`, () =>
+        HttpResponse.json({
+          path: "a.md",
+          modified: "2026-05-20T00:00:00Z", // same mtime as baseline
+          sha: "sha-backfilled",
+        })
+      )
+    );
+
+    renderHook(() => useFileWatcher(POLL_MS), { wrapper });
+
+    await waitFor(
+      () => {
+        const f = useOpenFiles.getState().files.find((x) => x.id === id)!;
+        expect(f.serverSha).toBe("sha-backfilled");
+      },
+      { timeout: 2000 }
+    );
+    const f = useOpenFiles.getState().files.find((x) => x.id === id)!;
+    expect(f.markdown).toBe("old content");
+    expect(f.isDirty).toBe(false);
   });
 });

@@ -159,3 +159,113 @@ func TestEvents_UnsubscribesOnClientDisconnect(t *testing.T) {
 
 	require.Eventually(t, func() bool { return hub.SubscriberCount() == 0 }, 2*time.Second, 10*time.Millisecond)
 }
+
+// TestEvents_WaitsForWatcherReady is a regression test for issue #119 case
+// 3: a client connecting to /api/events before the file watcher has
+// finished its initial fsnotify registration must not receive `onopen` (any
+// response headers/bytes at all) until that registration completes — so the
+// frontend's polling fallback keeps running through the gap instead of
+// trusting a not-yet-live SSE stream.
+func TestEvents_WaitsForWatcherReady(t *testing.T) {
+	t.Parallel()
+	repo := repository.NewUserRepository(testutil.NewTestDB(t))
+	svc := service.NewUserService(repo)
+	hub := events.NewHub()
+	h := handler.NewHandler(svc, nil, hub)
+
+	ready := make(chan struct{})
+	h.SetWatcherReady(ready)
+
+	srv := httptest.NewServer(h.Routes(http.NotFoundHandler()))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/api/events", nil)
+	require.NoError(t, err)
+
+	respCh := make(chan *http.Response, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		resp, derr := http.DefaultClient.Do(req)
+		if derr != nil {
+			errCh <- derr
+			return
+		}
+		respCh <- resp
+	}()
+
+	// Before ready closes, the request must not have completed yet — no
+	// status line, no headers, nothing an EventSource could treat as `onopen`.
+	select {
+	case <-respCh:
+		t.Fatal("response arrived before the watcher-ready channel closed")
+	case err := <-errCh:
+		t.Fatalf("request failed before ready closed: %v", err)
+	case <-time.After(300 * time.Millisecond):
+		// Still blocked — correct.
+	}
+
+	close(ready)
+
+	var resp *http.Response
+	select {
+	case resp = <-respCh:
+	case err := <-errCh:
+		t.Fatalf("request failed after ready closed: %v", err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("response never arrived after the watcher-ready channel closed")
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, "text/event-stream", resp.Header.Get("Content-Type"))
+}
+
+// TestEvents_ReadyGate_CanceledBeforeReady_NoResponse verifies the other
+// half of the gate: a client that disconnects while still waiting for
+// readiness gets no response at all (the handler must return without
+// writing anything), rather than blocking forever.
+func TestEvents_ReadyGate_CanceledBeforeReady_NoResponse(t *testing.T) {
+	t.Parallel()
+	repo := repository.NewUserRepository(testutil.NewTestDB(t))
+	svc := service.NewUserService(repo)
+	hub := events.NewHub()
+	h := handler.NewHandler(svc, nil, hub)
+
+	// Never closed — the request must be canceled while still waiting.
+	ready := make(chan struct{})
+	h.SetWatcherReady(ready)
+
+	srv := httptest.NewServer(h.Routes(http.NotFoundHandler()))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+"/api/events", nil)
+	require.NoError(t, err)
+
+	errCh := make(chan error, 1)
+	respCh := make(chan *http.Response, 1)
+	go func() {
+		resp, derr := http.DefaultClient.Do(req)
+		if derr != nil {
+			errCh <- derr
+			return
+		}
+		respCh <- resp
+	}()
+
+	time.Sleep(200 * time.Millisecond)
+	cancel()
+
+	select {
+	case resp := <-respCh:
+		_ = resp.Body.Close()
+		t.Fatal("expected the canceled request to fail, but a response arrived")
+	case <-errCh:
+		// Expected: the client-side request errors out because the server
+		// never wrote a response before the context was canceled.
+	case <-time.After(2 * time.Second):
+		t.Fatal("request neither errored nor returned a response after cancel")
+	}
+}

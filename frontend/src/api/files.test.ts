@@ -83,4 +83,46 @@ describe("review API client", () => {
     await writeFile("README.md", "# x");
     expect(new URL(captured).searchParams.get("author")).toBe("human");
   });
+
+  it("writeFile sends an If-Match header when an ifMatch sha is given (#119)", async () => {
+    let capturedIfMatch: string | null = null;
+    server.use(
+      http.put(`${API_BASE}/api/files/*`, ({ request }) => {
+        capturedIfMatch = request.headers.get("If-Match");
+        return HttpResponse.json({
+          path: "docs/intro.md",
+          root: "mock-root",
+          content: "# x",
+          modified: "2026-05-20T00:00:00Z",
+          created: "2026-05-19T00:00:00Z",
+          state: "review",
+          sha: "sha-after-write",
+        });
+      })
+    );
+
+    const res = await writeFile("docs/intro.md", "# x", "mock-root", "human", "sha-before");
+    expect(capturedIfMatch).toBe("sha-before");
+    expect(res.sha).toBe("sha-after-write");
+  });
+
+  it("writeFile omits the If-Match header when no ifMatch sha is given", async () => {
+    let capturedIfMatch: string | null | undefined;
+    server.use(
+      http.put(`${API_BASE}/api/files/*`, ({ request }) => {
+        capturedIfMatch = request.headers.get("If-Match");
+        return HttpResponse.json({
+          path: "docs/intro.md",
+          root: "mock-root",
+          content: "# x",
+          modified: "2026-05-20T00:00:00Z",
+          created: "2026-05-19T00:00:00Z",
+          state: "review",
+        });
+      })
+    );
+
+    await writeFile("docs/intro.md", "# x", "mock-root");
+    expect(capturedIfMatch).toBeNull();
+  });
 });

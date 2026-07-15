@@ -248,9 +248,16 @@ func (w *Watcher) handleCanonicalEvent(ev fsnotify.Event) {
 		if info, err := os.Stat(ev.Name); err == nil {
 			mtime = info.ModTime().UTC().Format(time.RFC3339)
 		}
+		// Best-effort: a file that vanished between the fsnotify event and
+		// this read (e.g. a fast delete+recreate) just emits without a sha
+		// rather than dropping the notification entirely.
+		sha := ""
+		if data, err := os.ReadFile(ev.Name); err == nil {
+			sha = files.Sha256Hex(data)
+		}
 		relSlash := filepath.ToSlash(rel)
 		w.schedule(Event{Kind: KindTree, Root: root.Name, Path: relSlash, Mtime: mtime})
-		w.schedule(Event{Kind: KindFile, Root: root.Name, Path: relSlash, Mtime: mtime})
+		w.schedule(Event{Kind: KindFile, Root: root.Name, Path: relSlash, Mtime: mtime, Sha: sha})
 		return
 	}
 }

@@ -13,14 +13,24 @@ import { useToast } from "@/hooks/useToast";
 export const FILE_WATCHER_INTERVAL_MS = 5000;
 
 /**
- * Polls the active file's on-disk mtime and reconciles external edits:
+ * Polls the active file's on-disk state and reconciles external edits:
  *
  *   - clean (not dirty): silently re-fetch and replace the buffer; surface
  *     a low-noise toast so the user knows something changed under them.
  *   - dirty: show a confirm dialog letting the user pick between accepting
  *     the external version (their edits are discarded) and keeping their
- *     own edits (the external mtime is acknowledged so the dialog doesn't
- *     re-open on every subsequent tick).
+ *     own edits (the external mtime/sha is acknowledged so the dialog
+ *     doesn't re-open on every subsequent tick).
+ *
+ * Change detection is sha-first when both sides know a sha (#119): the
+ * content hash tells a real external edit (even one that lands in the same
+ * mtime second — a same-second double save) apart from a plain "touch"
+ * (mtime bumped, bytes unchanged, e.g. `touch` or a metadata-only rewrite),
+ * which is now a silent no-op instead of a spurious reload/dialog. Tabs
+ * without a known sha yet (rehydrated from an older persisted session, or
+ * talking to a server that predates #119) fall back to the previous
+ * mtime-only comparison, backfilling serverSha once it's learned so later
+ * ticks can use the sha-first path.
  *
  * Untitled / unsaved buffers (serverModified === "") are skipped.
  *
@@ -73,15 +83,44 @@ export function useFileWatcher(
         return;
       }
       if (cancelled) return;
-      if (!stat.modified || stat.modified === active.serverModified) return;
 
-      // Re-read the latest state in case something raced in between
-      // (e.g. user switched tabs or saved).
+      // Re-read the latest state in case something raced in between (e.g.
+      // user switched tabs, saved, or a previous tick already reconciled
+      // this exact file).
       const live = useOpenFiles
         .getState()
         .files.find((f) => f.id === active.id);
       if (!live) return;
-      if (live.serverModified === stat.modified) return;
+
+      const shaKnownBothSides = Boolean(stat.sha && live.serverSha);
+      if (shaKnownBothSides) {
+        // sha-first (#119): the content hash is authoritative. Catches a
+        // same-second double save (identical mtime, different content) and
+        // ignores a plain touch (mtime bumped, bytes unchanged).
+        if (stat.sha === live.serverSha) {
+          if (stat.modified && stat.modified !== live.serverModified) {
+            useOpenFiles
+              .getState()
+              .acknowledgeExternalChange(live.id, stat.modified, stat.sha);
+          }
+          return;
+        }
+      } else {
+        // No sha to compare on one (or both) sides — a server predating
+        // #119, or a tab rehydrated from an older persisted session. Fall
+        // back to the mtime-only comparison used before #119.
+        if (!stat.modified || stat.modified === live.serverModified) {
+          // Nothing changed by mtime. If the server *did* report a sha (only
+          // this tab lacks its baseline), backfill it silently so future
+          // ticks can take the sha-first path above.
+          if (stat.sha && !live.serverSha) {
+            useOpenFiles
+              .getState()
+              .acknowledgeExternalChange(live.id, live.serverModified, stat.sha);
+          }
+          return;
+        }
+      }
 
       if (!live.isDirty) {
         try {
@@ -93,7 +132,8 @@ export function useFileWatcher(
               live.id,
               fresh.content,
               fresh.modified,
-              fresh.created
+              fresh.created,
+              fresh.sha
             );
           showToast(
             `「${live.name}」が外部で更新されたため再読み込みしました`,
@@ -130,7 +170,8 @@ export function useFileWatcher(
               live.id,
               fresh.content,
               fresh.modified,
-              fresh.created
+              fresh.created,
+              fresh.sha
             );
           showToast(`「${live.name}」を外部の最新内容で再読み込みしました`, "info");
         } catch (err) {
@@ -144,7 +185,7 @@ export function useFileWatcher(
       } else {
         useOpenFiles
           .getState()
-          .acknowledgeExternalChange(live.id, stat.modified);
+          .acknowledgeExternalChange(live.id, stat.modified, stat.sha);
         showToast(
           `「${live.name}」の編集を保持しました（外部変更は無視）`,
           "warning"
