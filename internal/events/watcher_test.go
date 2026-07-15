@@ -105,6 +105,12 @@ func TestWatcher_CanonicalFileCreate_EmitsTreeAndFile(t *testing.T) {
 	assert.Equal(t, "works", seen[events.KindTree].Root)
 	assert.NotEmpty(t, seen[events.KindTree].Mtime)
 	assert.Equal(t, "works", seen[events.KindFile].Root)
+	// KindTree doesn't need a sha (the client only cares that the tree
+	// listing changed); KindFile must carry one so a client comparing it
+	// against its currently-open file's sha can detect the change even if
+	// mtime alone wouldn't (issue #119).
+	assert.Empty(t, seen[events.KindTree].Sha)
+	assert.Equal(t, files.Sha256Hex([]byte("# hello\n")), seen[events.KindFile].Sha)
 }
 
 func TestWatcher_CanonicalFileUpdate_EmitsFile(t *testing.T) {
@@ -122,6 +128,31 @@ func TestWatcher_CanonicalFileUpdate_EmitsFile(t *testing.T) {
 		return e.Kind == events.KindFile && e.Path == "doc.md"
 	})
 	assert.Equal(t, "works", got.Root)
+	assert.Equal(t, files.Sha256Hex([]byte("# updated\n")), got.Sha)
+}
+
+func TestWatcher_CanonicalFileUpdate_SameSecondDoubleWrite_DifferentSha(t *testing.T) {
+	// Regression for issue #119: two different writes to the same file can
+	// land within the same wall-clock second (identical second-precision
+	// mtime), but the emitted sha must still differ so a client comparing
+	// content hashes (not just mtime) never misses the second change.
+	t.Parallel()
+	roots, root := newTestRoots(t)
+	target := filepath.Join(root, "doc.md")
+	require.NoError(t, os.WriteFile(target, []byte("first\n"), 0o644))
+
+	ch, stop := startWatcher(t, roots)
+	defer stop()
+
+	sameSecond := time.Now()
+	require.NoError(t, os.WriteFile(target, []byte("second\n"), 0o644))
+	require.NoError(t, os.Chtimes(target, sameSecond, sameSecond))
+
+	got := waitForEvent(t, ch, func(e events.Event) bool {
+		return e.Kind == events.KindFile && e.Path == "doc.md"
+	})
+	assert.Equal(t, files.Sha256Hex([]byte("second\n")), got.Sha)
+	assert.NotEqual(t, files.Sha256Hex([]byte("first\n")), got.Sha)
 }
 
 func TestWatcher_CanonicalFileAtomicSave_DetectedAsUpdate(t *testing.T) {

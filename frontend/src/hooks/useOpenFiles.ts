@@ -1,6 +1,5 @@
 import { create } from "zustand";
 import { persist, createJSONStorage, type StateStorage } from "zustand/middleware";
-import { simpleHash } from "@/utils/hash";
 
 export interface OpenFile {
   id: string;
@@ -21,7 +20,17 @@ export interface OpenFile {
   savedMarkdown: string;
   isDirty: boolean;
   reloadToken: number;
-  initialHash: string;
+  /**
+   * sha256 hex the server last reported for this file's on-disk content
+   * (from a read/write response, or backfilled from a stat poll). Lets the
+   * external-change watcher (#119) tell an actual content change apart from
+   * an mtime-only touch, and drives the save-conflict If-Match header.
+   * Undefined for files with no server sha yet — fresh "untitled" buffers,
+   * or tabs rehydrated from a persisted session that pre-dates this field
+   * (the watcher falls back to mtime comparison for those until the next
+   * successful read/write/stat backfills it).
+   */
+  serverSha?: string;
   /**
    * RFC3339 mtime of the file on disk as of the last read/write. Used by the
    * external-change watcher to decide whether a poll-found newer mtime
@@ -43,6 +52,7 @@ export interface IncomingFile {
   markdown: string;
   modified?: string;
   created?: string;
+  sha?: string;
 }
 
 interface OpenFilesState {
@@ -71,26 +81,34 @@ interface OpenFilesState {
   closeToRight: (id: string) => void;
   closeAll: () => void;
   openServerFile: (incoming: IncomingFile) => void;
-  markActiveSaved: (root: string, modified?: string, created?: string) => void;
+  markActiveSaved: (
+    root: string,
+    modified?: string,
+    created?: string,
+    sha?: string
+  ) => void;
   /** Revert the given root's active file's markdown back to its last-saved state. */
   discardActiveChanges: (root: string) => void;
   /**
    * Apply an externally-edited reload to the given file: replace markdown +
    * savedMarkdown, clear isDirty, bump reloadToken, and record the new
-   * serverModified. Used when the watcher detects an external change.
+   * serverModified/serverSha. Used when the watcher detects an external change.
    */
   applyExternalReload: (
     id: string,
     markdown: string,
     modified: string,
-    created?: string
+    created?: string,
+    sha?: string
   ) => void;
   /**
-   * Record a new serverModified without touching the file's contents — used
-   * when the user chooses to keep their unsaved edits over an external
-   * change, so the watcher doesn't keep re-firing on the same mtime.
+   * Record a new serverModified (and, when known, serverSha) without
+   * touching the file's contents — used when the user chooses to keep their
+   * unsaved edits over an external change (so the watcher doesn't keep
+   * re-firing on the same mtime/sha), and to silently backfill serverSha on
+   * a rehydrated tab or an mtime-only "touch" (#119).
    */
-  acknowledgeExternalChange: (id: string, modified: string) => void;
+  acknowledgeExternalChange: (id: string, modified: string, sha?: string) => void;
 }
 
 const STORAGE_KEY = "markdown-reviewer-open-files";
@@ -144,7 +162,7 @@ export const useOpenFiles = create<OpenFilesState>()(
             savedMarkdown: item.markdown,
             isDirty: false,
             reloadToken: 0,
-            initialHash: simpleHash(item.markdown),
+            serverSha: item.sha,
             serverModified: item.modified ?? "",
             serverCreated: item.created ?? "",
           }));
@@ -322,7 +340,7 @@ export const useOpenFiles = create<OpenFilesState>()(
             savedMarkdown: incoming.markdown,
             isDirty: false,
             reloadToken: 0,
-            initialHash: simpleHash(incoming.markdown),
+            serverSha: incoming.sha,
             serverModified: incoming.modified ?? "",
             serverCreated: incoming.created ?? "",
           };
@@ -335,7 +353,7 @@ export const useOpenFiles = create<OpenFilesState>()(
           };
         }),
 
-      markActiveSaved: (root, modified, created) =>
+      markActiveSaved: (root, modified, created, sha) =>
         set((state) => {
           const activeId = state.activeIdByRoot[root];
           if (!activeId) return state;
@@ -346,9 +364,9 @@ export const useOpenFiles = create<OpenFilesState>()(
                     ...file,
                     savedMarkdown: file.markdown,
                     isDirty: false,
-                    initialHash: simpleHash(file.markdown),
                     serverModified: modified ?? file.serverModified,
                     serverCreated: created ?? file.serverCreated,
+                    serverSha: sha ?? file.serverSha,
                   }
                 : file
             ),
@@ -373,7 +391,7 @@ export const useOpenFiles = create<OpenFilesState>()(
           };
         }),
 
-      applyExternalReload: (id, markdown, modified, created) =>
+      applyExternalReload: (id, markdown, modified, created, sha) =>
         set((state) => {
           if (!state.files.some((f) => f.id === id)) return state;
           return {
@@ -385,21 +403,23 @@ export const useOpenFiles = create<OpenFilesState>()(
                     savedMarkdown: markdown,
                     isDirty: false,
                     reloadToken: file.reloadToken + 1,
-                    initialHash: simpleHash(markdown),
                     serverModified: modified,
                     serverCreated: created ?? file.serverCreated,
+                    serverSha: sha ?? file.serverSha,
                   }
                 : file
             ),
           };
         }),
 
-      acknowledgeExternalChange: (id, modified) =>
+      acknowledgeExternalChange: (id, modified, sha) =>
         set((state) => {
           if (!state.files.some((f) => f.id === id)) return state;
           return {
             files: state.files.map((file) =>
-              file.id === id ? { ...file, serverModified: modified } : file
+              file.id === id
+                ? { ...file, serverModified: modified, serverSha: sha ?? file.serverSha }
+                : file
             ),
           };
         }),
@@ -407,29 +427,42 @@ export const useOpenFiles = create<OpenFilesState>()(
     {
       name: STORAGE_KEY,
       storage: createJSONStorage(() => safeLocalStorage),
-      version: 2,
+      version: 3,
       // Older persisted state (version 1) stored `activeId: string` instead
       // of `activeIdByRoot`, and OpenFile entries had no `root` field.
       // Migrate by parking every legacy entry on a placeholder root ("").
       // The first /api/config load reassigns them to the default root via
-      // reattachLegacyFilesToRoot.
+      // reattachLegacyFilesToRoot. Version 2 → 3 (#119) drops the dead
+      // `initialHash` field in favor of `serverSha`, which the entry simply
+      // won't have until the next successful read/write/stat.
       migrate: (state, version) => {
-        if (version >= 2 || !state) return state as OpenFilesState;
-        const legacy = state as unknown as {
-          files?: OpenFile[];
+        if (!state) return state as OpenFilesState;
+        let migrated = state as unknown as {
+          files?: (OpenFile & { initialHash?: string })[];
           activeId?: string | null;
+          activeIdByRoot?: Record<string, string | null>;
         };
-        const files = (legacy.files ?? []).map((f) => ({
-          ...f,
-          root: f.root ?? "",
-        }));
-        const activeIdByRoot: Record<string, string | null> = {};
-        if (legacy.activeId) activeIdByRoot[""] = legacy.activeId;
-        return {
-          ...state,
-          files,
-          activeIdByRoot,
-        } as unknown as OpenFilesState;
+
+        if (version < 2) {
+          const files = (migrated.files ?? []).map((f) => ({
+            ...f,
+            root: f.root ?? "",
+          }));
+          const activeIdByRoot: Record<string, string | null> = {};
+          if (migrated.activeId) activeIdByRoot[""] = migrated.activeId;
+          migrated = { ...migrated, files, activeIdByRoot };
+        }
+
+        if (version < 3) {
+          const files = (migrated.files ?? []).map((f) => {
+            const rest = { ...f };
+            delete rest.initialHash;
+            return rest;
+          });
+          migrated = { ...migrated, files };
+        }
+
+        return migrated as unknown as OpenFilesState;
       },
       partialize: (state) => ({
         files: state.files,
@@ -442,7 +475,6 @@ export const useOpenFiles = create<OpenFilesState>()(
           // Older persisted entries don't have `root`; default to "" and let
           // the editor reattach them once /api/config arrives.
           root: f.root ?? "",
-          initialHash: f.initialHash ?? simpleHash(f.markdown),
           // Older persisted entries don't have savedMarkdown. Treat the
           // last-persisted markdown as the saved baseline.
           savedMarkdown: f.savedMarkdown ?? f.markdown,

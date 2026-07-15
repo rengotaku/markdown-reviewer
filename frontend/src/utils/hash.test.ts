@@ -1,19 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { simpleHash, buildFixFilename } from "./hash";
-
-describe("simpleHash", () => {
-  it("is deterministic for the same input", () => {
-    expect(simpleHash("hello")).toBe(simpleHash("hello"));
-  });
-
-  it("differs for different inputs", () => {
-    expect(simpleHash("hello")).not.toBe(simpleHash("hello!"));
-  });
-
-  it("hashes the empty string to the djb2 seed", () => {
-    expect(simpleHash("")).toBe((5381).toString(36));
-  });
-});
+import { buildFixFilename } from "./hash";
 
 describe("buildFixFilename", () => {
   it("inserts _fix before the extension", () => {

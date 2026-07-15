@@ -56,7 +56,6 @@ function makeOpenFile(overrides: Partial<OpenFile> & { id: string; path: string 
     savedMarkdown: "# doc",
     isDirty: false,
     reloadToken: 0,
-    initialHash: "hash",
     serverModified: "2026-05-20T00:00:00Z",
     serverCreated: "2026-05-19T00:00:00Z",
     ...overrides,
@@ -81,7 +80,7 @@ describe("EditorPage SSE-driven review sweep (#114)", () => {
     localStorage.clear();
     useOpenFiles.setState({ files: [], activeIdByRoot: {} });
     useToast.setState({ toasts: [] });
-    useConfirm.setState({ pending: null });
+    useConfirm.setState({ pending: null, queue: [] });
     MockEventSource.instances = [];
     vi.stubGlobal("EventSource", MockEventSource);
   });

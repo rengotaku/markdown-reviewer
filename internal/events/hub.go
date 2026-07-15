@@ -37,12 +37,17 @@ const (
 
 // Event is the JSON payload of one SSE `data:` line. Fields are the minimum
 // needed for the client to decide what to re-fetch; Mtime is RFC3339 (UTC)
-// and empty when not applicable (e.g. a delete).
+// and empty when not applicable (e.g. a delete). Sha is the sha256 hex
+// digest of the file's current bytes, populated on KindFile events only
+// (best-effort: omitted if the file couldn't be read at emit time) — mtime
+// alone (second precision) can't detect a same-second double-save, but the
+// content hash always can (issue #119).
 type Event struct {
 	Kind  Kind   `json:"kind"`
 	Root  string `json:"root"`
 	Path  string `json:"path"`
 	Mtime string `json:"mtime,omitempty"`
+	Sha   string `json:"sha,omitempty"`
 }
 
 // subscriberBuffer bounds how many pending events a slow client can

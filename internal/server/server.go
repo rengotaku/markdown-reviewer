@@ -99,11 +99,13 @@ func Run(ctx context.Context) error {
 	}
 
 	hub := events.NewHub()
+	var watcherReady <-chan struct{}
 	if roots != nil {
 		watcher, werr := events.NewWatcher(hub, roots)
 		if werr != nil {
 			return fmt.Errorf("init file watcher: %w", werr)
 		}
+		watcherReady = watcher.Ready()
 		go func() {
 			if rerr := watcher.Run(ctx); rerr != nil {
 				slog.Warn("events: watcher stopped", "err", rerr)
@@ -120,6 +122,12 @@ func Run(ctx context.Context) error {
 	}
 
 	h := handler.NewHandler(svc, roots, hub)
+	if watcherReady != nil {
+		// Gate GET /api/events on the same readiness signal so a client
+		// can't get `onopen` before the watcher is actually watching (issue
+		// #119, case 3).
+		h.SetWatcherReady(watcherReady)
+	}
 
 	srv := &http.Server{
 		Addr:         ":" + cfg.Port,

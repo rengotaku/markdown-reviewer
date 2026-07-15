@@ -26,6 +26,22 @@ func (h *Handler) Events(c *gin.Context) {
 		return
 	}
 
+	// Block until the watcher's initial fsnotify registration has finished
+	// (or the client disconnects) before writing any response bytes. Without
+	// this gate, EventSource's `onopen` — and the frontend's decision to stop
+	// polling — can fire the instant the HTTP handshake completes, racing the
+	// watcher's own startup; a filesystem change made in that window would
+	// never be observed as a push event (issue #119, case 3). h.ready is nil
+	// whenever no watcher was wired via SetWatcherReady, in which case this
+	// is a no-op and streaming starts immediately as before.
+	if h.ready != nil {
+		select {
+		case <-h.ready:
+		case <-c.Request.Context().Done():
+			return
+		}
+	}
+
 	ch, unsubscribe := h.hub.Subscribe()
 	defer unsubscribe()
 

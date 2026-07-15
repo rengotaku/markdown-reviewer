@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -71,17 +72,24 @@ type FileReadResponse struct {
 	// State is the managed-review lifecycle state: "draft" (not ingested) or
 	// "review" (ingested — has an entry under ~/.config/reviewer).
 	State string `json:"state"`
+	// Sha is the sha256 hex digest of Content's exact bytes. mtime alone
+	// (second precision) can't distinguish two different saves within the
+	// same second; the content hash always can (issue #119).
+	Sha string `json:"sha"`
 }
 
 // FileStatResponse is the response body for GET /api/stat/*path. Returned
 // without the file content so the frontend can cheaply poll for external
 // changes on the currently open file.
 type FileStatResponse struct {
-	Path            string `json:"path"`
-	Modified        string `json:"modified"`
-	Created         string `json:"created"`
-	Root            string `json:"root"`
-	State           string `json:"state"`
+	Path     string `json:"path"`
+	Modified string `json:"modified"`
+	Created  string `json:"created"`
+	Root     string `json:"root"`
+	State    string `json:"state"`
+	// Sha is the sha256 hex digest of the file's current on-disk bytes. See
+	// FileReadResponse.Sha for why mtime alone isn't enough.
+	Sha             string `json:"sha"`
 	HasOpenComments bool   `json:"hasOpenComments"`
 }
 
@@ -300,6 +308,7 @@ func (h *Handler) ReadFile(c *gin.Context) {
 		Created:  created,
 		Root:     name,
 		State:    reviewState(name, rel),
+		Sha:      files.Sha256Hex(data),
 	})
 }
 
@@ -320,6 +329,17 @@ func (h *Handler) StatFile(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to stat file"})
 		return
 	}
+	// Files under review are small local markdown, so re-reading the whole
+	// body for its hash on every stat poll is cheap — no caching needed.
+	// The file can vanish between the Stat above and this ReadFile (a
+	// delete racing this request); statReadFileError maps that the same
+	// way the Stat's own not-found branch above does, instead of
+	// surfacing it as a 500.
+	data, err := os.ReadFile(full)
+	if err != nil {
+		statReadFileError(c, err)
+		return
+	}
 	modified, created := fileTimes(info)
 	state := reviewState(name, rel)
 	hasOpen := false
@@ -336,6 +356,7 @@ func (h *Handler) StatFile(c *gin.Context) {
 		Created:         created,
 		Root:            name,
 		State:           state,
+		Sha:             files.Sha256Hex(data),
 		HasOpenComments: hasOpen,
 	})
 }
@@ -355,9 +376,46 @@ func (h *Handler) WriteFile(c *gin.Context) {
 		return
 	}
 
-	// Read the about-to-be-overwritten content once; it feeds both the
-	// revision snapshot and the re-anchor diff below.
+	// Serialize the read-check(If-Match)-then-write section per resolved
+	// path: without this, two concurrent PUTs for the same file can both
+	// read the same "old" content, both pass the If-Match comparison, and
+	// the second write silently clobbers the first (issue #119 case 5 is
+	// only actually closed once concurrent writers can't race the check).
+	// Locking is per-path (not a single global mutex) so concurrent writes
+	// to *different* files still proceed in parallel; the lock is held from
+	// this read through the atomicWrite below.
+	unlock := h.lockPath(full)
+	defer unlock()
+
+	// Read the about-to-be-overwritten content once; it feeds the If-Match
+	// conflict check below, the revision snapshot, and the re-anchor diff.
 	oldRaw, oldErr := os.ReadFile(full)
+
+	// Optional conflict detection (issue #119): a client that read the file
+	// via GET /api/files or /api/stat can send back that response's sha as
+	// If-Match. If the file changed on disk since then (including a
+	// same-second double-save mtime can't catch), reject the write instead
+	// of silently overwriting the other change. No header at all preserves
+	// the historical last-write-wins behavior for the mr CLI and any other
+	// caller that never opted in.
+	if ifMatch, hasIfMatch := ifMatchHeaderValue(c); hasIfMatch {
+		currentSha := ""
+		if oldErr == nil {
+			currentSha = files.Sha256Hex(oldRaw)
+		}
+		if currentSha != ifMatch {
+			modified := ""
+			if info, ierr := os.Stat(full); ierr == nil {
+				modified, _ = fileTimes(info)
+			}
+			c.JSON(http.StatusPreconditionFailed, gin.H{
+				"error":    "file changed on disk",
+				"sha":      currentSha,
+				"modified": modified,
+			})
+			return
+		}
+	}
 
 	// Auto-ingest on save: a save is a stronger signal of intent than merely
 	// opening a file, so put it under review here (unlike PR #70/#71, which
@@ -429,7 +487,57 @@ func (h *Handler) WriteFile(c *gin.Context) {
 		Created:  created,
 		Root:     name,
 		State:    reviewState(name, rel),
+		Sha:      files.Sha256Hex([]byte(content)),
 	})
+}
+
+// statReadFileError classifies the error from StatFile's post-Stat
+// os.ReadFile call (done to compute the sha) and writes the matching JSON
+// response. A file that vanished between the earlier os.Stat and this read
+// — a delete racing the request — reports os.ErrNotExist just like a
+// directly-missing file would, so it's mapped to 404 exactly like the
+// Stat's own not-found branch instead of leaking through as a 500.
+// Extracted into its own function so the classification can be unit tested
+// directly (see files_internal_test.go) without needing to reproduce the
+// actual Stat/ReadFile race, which is a few nanoseconds wide and not
+// reliably triggerable from a test.
+func statReadFileError(c *gin.Context, err error) {
+	if errors.Is(err, os.ErrNotExist) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "file not found"})
+		return
+	}
+	c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to stat file"})
+}
+
+// lockPath acquires (creating on first use) the per-path mutex guarding
+// WriteFile's read-check-then-write section for the given resolved path,
+// and returns a func to release it. Entries are never evicted from
+// writeLocks, but that's acceptable here: this is a local, single-user
+// review tool, and the set of distinct files ever written over a server's
+// lifetime is small and bounded by the reviewed markdown tree, so the
+// long-lived *sync.Mutex per path never accumulates into a real leak.
+func (h *Handler) lockPath(path string) (unlock func()) {
+	muAny, _ := h.writeLocks.LoadOrStore(path, &sync.Mutex{})
+	mu, _ := muAny.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
+}
+
+// ifMatchHeaderValue extracts the sha256-hex precondition value from the
+// request's If-Match header for PUT /api/files/*path. Tolerates a
+// surrounding pair of double quotes (the ETag-style quoting some HTTP
+// clients add automatically) in addition to a plain hex string. ok is false
+// when the header is absent, letting WriteFile distinguish "no precondition
+// requested" (legacy last-write-wins) from an empty precondition value.
+func ifMatchHeaderValue(c *gin.Context) (sha string, ok bool) {
+	raw := strings.TrimSpace(c.GetHeader("If-Match"))
+	if raw == "" {
+		return "", false
+	}
+	if len(raw) >= 2 && raw[0] == '"' && raw[len(raw)-1] == '"' {
+		raw = raw[1 : len(raw)-1]
+	}
+	return raw, true
 }
 
 // resolveRequest pulls *path off the gin context, validates the .md

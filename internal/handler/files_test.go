@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -554,6 +555,7 @@ func TestStatFile_ReturnsModifiedTimestamp(t *testing.T) {
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
 	assert.Equal(t, "x.md", resp.Path)
 	assert.Equal(t, mtime.Format(time.RFC3339), resp.Modified)
+	assert.Equal(t, files.Sha256Hex([]byte("x")), resp.Sha)
 }
 
 func TestStatFile_NotFound(t *testing.T) {
@@ -730,4 +732,223 @@ func TestMultiRoot_CannotEscapeIntoSiblingRoot(t *testing.T) {
 	rec := serve(h, httptest.NewRequest(http.MethodGet, "/api/files/../"+filepath.Base(rooms)+"/secret.md?root=works", nil))
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 	assert.NotContains(t, rec.Body.String(), "SECRET")
+}
+
+// --- sha (issue #119) ------------------------------------------------------
+
+// putFileWithIfMatch issues PUT /api/files/<rel> with the given content and
+// (optional) If-Match header, returning the recorder for callers to inspect
+// status + body. Named distinctly from review_test.go's putFile (fixed path
+// "doc.md", no If-Match) to avoid a redeclaration in this test package.
+func putFileWithIfMatch(h *handler.Handler, rel, content, ifMatch string) *httptest.ResponseRecorder {
+	body, _ := json.Marshal(handler.FileWriteRequest{Content: content})
+	req := httptest.NewRequest(http.MethodPut, "/api/files/"+rel, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	if ifMatch != "" {
+		req.Header.Set("If-Match", ifMatch)
+	}
+	return serve(h, req)
+}
+
+func TestFiles_Read_ShaMatchesDiskContent(t *testing.T) {
+	t.Parallel()
+	h, root := setupFilesHandler(t)
+	require.NoError(t, os.WriteFile(filepath.Join(root, "hello.md"), []byte("# hello"), 0o644))
+
+	rec := serve(h, httptest.NewRequest(http.MethodGet, "/api/files/hello.md", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp handler.FileReadResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	assert.Equal(t, files.Sha256Hex([]byte("# hello")), resp.Sha)
+	assert.Len(t, resp.Sha, 64)
+}
+
+func TestFiles_Write_ShaMatchesWrittenBytes(t *testing.T) {
+	t.Parallel()
+	h, root := setupFilesHandler(t)
+
+	rec := putFileWithIfMatch(h, "new.md", "# new file", "")
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp handler.FileReadResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+
+	onDisk, err := os.ReadFile(filepath.Join(root, "new.md"))
+	require.NoError(t, err)
+	// The server force-injects an AI hint, so the sha must be computed over
+	// the final on-disk bytes (hint included), not the raw request content.
+	assert.Equal(t, files.Sha256Hex(onDisk), resp.Sha)
+	assert.NotEqual(t, files.Sha256Hex([]byte("# new file")), resp.Sha)
+}
+
+func TestFiles_Write_IfMatch_Matching_Succeeds(t *testing.T) {
+	t.Parallel()
+	h, root := setupFilesHandler(t)
+	target := filepath.Join(root, "doc.md")
+	require.NoError(t, os.WriteFile(target, []byte("old"), 0o644))
+
+	currentSha := files.Sha256Hex([]byte("old"))
+	rec := putFileWithIfMatch(h, "doc.md", "new content", currentSha)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	data, err := os.ReadFile(target)
+	require.NoError(t, err)
+	assert.True(t, strings.HasSuffix(string(data), "new content"))
+}
+
+func TestFiles_Write_IfMatch_Stale_Returns412AndDoesNotWrite(t *testing.T) {
+	t.Parallel()
+	h, root := setupFilesHandler(t)
+	target := filepath.Join(root, "doc.md")
+	require.NoError(t, os.WriteFile(target, []byte("old"), 0o644))
+
+	rec := putFileWithIfMatch(h, "doc.md", "new content", "0000000000000000000000000000000000000000000000000000000000000000")
+	assert.Equal(t, http.StatusPreconditionFailed, rec.Code)
+
+	var body struct {
+		Error    string `json:"error"`
+		Sha      string `json:"sha"`
+		Modified string `json:"modified"`
+	}
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&body))
+	assert.Equal(t, files.Sha256Hex([]byte("old")), body.Sha)
+	assert.NotEmpty(t, body.Modified)
+	assert.NotEmpty(t, body.Error)
+
+	data, err := os.ReadFile(target)
+	require.NoError(t, err)
+	assert.Equal(t, "old", string(data), "file must NOT have been modified by a rejected write")
+}
+
+func TestFiles_Write_IfMatch_OnMissingFile_Returns412(t *testing.T) {
+	t.Parallel()
+	h, root := setupFilesHandler(t)
+
+	rec := putFileWithIfMatch(h, "missing.md", "content", files.Sha256Hex([]byte("anything")))
+	assert.Equal(t, http.StatusPreconditionFailed, rec.Code)
+
+	var body struct {
+		Sha string `json:"sha"`
+	}
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&body))
+	assert.Empty(t, body.Sha)
+
+	_, err := os.Stat(filepath.Join(root, "missing.md"))
+	assert.True(t, os.IsNotExist(err), "file must not have been created by a rejected write")
+}
+
+func TestFiles_Write_NoIfMatch_LegacyBehaviorUnchanged(t *testing.T) {
+	t.Parallel()
+	h, root := setupFilesHandler(t)
+	target := filepath.Join(root, "doc.md")
+	require.NoError(t, os.WriteFile(target, []byte("old"), 0o644))
+
+	// No If-Match header at all → last-write-wins, exactly as before this
+	// feature existed.
+	rec := putFileWithIfMatch(h, "doc.md", "clobbered by someone else's edit", "")
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	data, err := os.ReadFile(target)
+	require.NoError(t, err)
+	assert.True(t, strings.HasSuffix(string(data), "clobbered by someone else's edit"))
+}
+
+func TestFiles_Write_IfMatch_QuotedValueAccepted(t *testing.T) {
+	t.Parallel()
+	h, root := setupFilesHandler(t)
+	target := filepath.Join(root, "doc.md")
+	require.NoError(t, os.WriteFile(target, []byte("old"), 0o644))
+
+	quoted := `"` + files.Sha256Hex([]byte("old")) + `"`
+	rec := putFileWithIfMatch(h, "doc.md", "new content", quoted)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	data, err := os.ReadFile(target)
+	require.NoError(t, err)
+	assert.True(t, strings.HasSuffix(string(data), "new content"))
+}
+
+// TestFiles_Write_IfMatch_ConcurrentPUT_ExactlyOneSucceeds is a regression
+// test for the TOCTOU race in the If-Match conflict check: two PUTs racing
+// for the same file, both carrying the *same* If-Match value (the original
+// content's sha), must never both succeed. Because both requests present an
+// identical precondition, exactly one outcome is possible regardless of
+// scheduling — whichever request's read-check-then-write section runs
+// second will read the *other* request's already-written content, which no
+// longer matches the shared If-Match value. This makes the assertion
+// (exactly one 200, exactly one 412) true by construction rather than by
+// timing, so the test can't flake even though the two PUTs are deliberately
+// released through a barrier to maximize actual overlap.
+func TestFiles_Write_IfMatch_ConcurrentPUT_ExactlyOneSucceeds(t *testing.T) {
+	t.Parallel()
+	h, root := setupFilesHandler(t)
+	target := filepath.Join(root, "doc.md")
+	require.NoError(t, os.WriteFile(target, []byte("old"), 0o644))
+	oldSha := files.Sha256Hex([]byte("old"))
+
+	contents := []string{"content-from-A", "content-from-B"}
+	start := make(chan struct{})
+	codes := make(chan int, len(contents))
+	var wg sync.WaitGroup
+	for _, content := range contents {
+		wg.Add(1)
+		go func(content string) {
+			defer wg.Done()
+			<-start // release both goroutines together to force real overlap
+			rec := putFileWithIfMatch(h, "doc.md", content, oldSha)
+			codes <- rec.Code
+		}(content)
+	}
+	close(start)
+	wg.Wait()
+	close(codes)
+
+	var statuses []int
+	for code := range codes {
+		statuses = append(statuses, code)
+	}
+	sort.Ints(statuses)
+	assert.Equal(t, []int{http.StatusOK, http.StatusPreconditionFailed}, statuses,
+		"exactly one concurrent PUT sharing the same If-Match must succeed; the other must be rejected, never both")
+
+	data, err := os.ReadFile(target)
+	require.NoError(t, err)
+	wonA := strings.HasSuffix(string(data), "content-from-A")
+	wonB := strings.HasSuffix(string(data), "content-from-B")
+	assert.True(t, wonA != wonB, "final on-disk content must be exactly one of the two concurrent writes, got: %s", data)
+}
+
+// TestStatFile_SameSecondDoubleSave_DetectedViaSha is the whole point of
+// adding a content hash: two different writes that land within the same
+// wall-clock second produce identical (second-precision) mtimes but the sha
+// must still differ, so a poller relying on mtime alone would miss the
+// second change while a poller comparing sha would not.
+func TestStatFile_SameSecondDoubleSave_DetectedViaSha(t *testing.T) {
+	t.Parallel()
+	h, root := setupFilesHandler(t)
+	target := filepath.Join(root, "race.md")
+
+	require.NoError(t, os.WriteFile(target, []byte("first"), 0o644))
+	sameSecond := time.Now()
+	require.NoError(t, os.Chtimes(target, sameSecond, sameSecond))
+
+	rec1 := serve(h, httptest.NewRequest(http.MethodGet, "/api/stat/race.md", nil))
+	require.Equal(t, http.StatusOK, rec1.Code)
+	var resp1 handler.FileStatResponse
+	require.NoError(t, json.NewDecoder(rec1.Body).Decode(&resp1))
+
+	require.NoError(t, os.WriteFile(target, []byte("second"), 0o644))
+	// Force the exact same (second-precision) mtime a real same-second
+	// double-save would have, so the assertion isn't accidentally passing
+	// only because the two writes happened to straddle a second boundary.
+	require.NoError(t, os.Chtimes(target, sameSecond, sameSecond))
+
+	rec2 := serve(h, httptest.NewRequest(http.MethodGet, "/api/stat/race.md", nil))
+	require.Equal(t, http.StatusOK, rec2.Code)
+	var resp2 handler.FileStatResponse
+	require.NoError(t, json.NewDecoder(rec2.Body).Decode(&resp2))
+
+	require.Equal(t, resp1.Modified, resp2.Modified, "test setup: mtimes must be identical to exercise the same-second case")
+	assert.NotEqual(t, resp1.Sha, resp2.Sha, "sha must differ even though mtime did not")
 }

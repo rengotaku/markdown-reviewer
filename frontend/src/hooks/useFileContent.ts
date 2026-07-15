@@ -11,8 +11,9 @@ export function useWriteFile() {
   return useMutation<
     FileReadResponse,
     Error,
-    { path: string; content: string; root?: string }
+    { path: string; content: string; root?: string; ifMatch?: string }
   >({
-    mutationFn: ({ path, content, root }) => writeFile(path, content, root),
+    mutationFn: ({ path, content, root, ifMatch }) =>
+      writeFile(path, content, root, undefined, ifMatch),
   });
 }
