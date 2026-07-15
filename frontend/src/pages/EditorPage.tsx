@@ -601,7 +601,7 @@ export function EditorPage() {
         contents = next;
       }
     }
-    const latestText = activeFile ? stripHint(activeFile.markdown) : "";
+    const latestText = activeFile ? stripHint(activeFile.savedMarkdown) : "";
     const meaningful = revisions.filter((r) => {
       const c = contents[r.id];
       return c !== undefined && hasChanges(lineDiff(c, latestText));
@@ -616,21 +616,19 @@ export function EditorPage() {
     setDiffMode(true);
   };
 
-  // The "latest 正典" side of the diff is the live editor content, with the
-  // server-injected AI hint stripped so it lines up with the hint-stripped
-  // snapshots.
+  // The "latest 正典" side of the diff is the last-saved content (not the
+  // live editor buffer), so tiptap-markdown's roundtrip normalization —
+  // which mutates `activeFile.markdown` on any onUpdate — doesn't leak into
+  // the diff as spurious "+/-" lines. AI hint stripped to line up with the
+  // hint-stripped snapshots. #117
   const diffLatestText = useMemo(
-    () => (activeFile ? stripHint(activeFile.markdown) : ""),
+    () => (activeFile ? stripHint(activeFile.savedMarkdown) : ""),
     [activeFile]
   );
 
-  // Revisions that actually differ from the current editor content. Content
-  // for a revision is only available after it has been fetched (via
-  // fetchAllRevisionContents on diff-open), so revisions whose content is not
-  // yet cached are excluded until the next fetch resolves.
-  // Note: diffLatestText is computed separately below, but we derive the same
-  // value here to avoid entangling that useMemo with this filter.
-  const currentEditorText = activeFile ? stripHint(activeFile.markdown) : "";
+  // Revisions that actually differ from the last-saved content. Same rationale
+  // as diffLatestText: compare against savedMarkdown, not the live buffer.
+  const currentEditorText = activeFile ? stripHint(activeFile.savedMarkdown) : "";
   const meaningfulRevisions = revisions.filter((r) => {
     const c = revContents[r.id];
     return c !== undefined && hasChanges(lineDiff(c, currentEditorText));
