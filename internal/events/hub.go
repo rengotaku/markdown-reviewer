@@ -54,8 +54,8 @@ const subscriberBuffer = 64
 // Hub tracks connected SSE subscribers and fans events out to all of them.
 // The zero value is not usable; use NewHub.
 type Hub struct {
-	mu   sync.Mutex
 	subs map[chan Event]struct{}
+	mu   sync.Mutex
 }
 
 // NewHub creates an empty Hub ready to accept subscribers.

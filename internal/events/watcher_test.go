@@ -18,9 +18,9 @@ import (
 // waitForEvent drains ch until pred matches or the timeout elapses, so
 // tests aren't tripped up by unrelated coalesced events (e.g. a directory
 // create firing before the file write settles).
-func waitForEvent(t *testing.T, ch <-chan events.Event, timeout time.Duration, pred func(events.Event) bool) events.Event {
+func waitForEvent(t *testing.T, ch <-chan events.Event, pred func(events.Event) bool) events.Event {
 	t.Helper()
-	deadline := time.After(timeout)
+	deadline := time.After(5 * time.Second)
 	for {
 		select {
 		case ev := <-ch:
@@ -34,12 +34,12 @@ func waitForEvent(t *testing.T, ch <-chan events.Event, timeout time.Duration, p
 	}
 }
 
-func newTestRoots(t *testing.T, name string) (*files.Roots, string) {
+func newTestRoots(t *testing.T) (*files.Roots, string) {
 	t.Helper()
 	dir := t.TempDir()
 	resolved, err := filepath.EvalSymlinks(dir)
 	require.NoError(t, err)
-	roots, err := files.NewRoots([]files.RootSpec{{Name: name, Path: resolved}})
+	roots, err := files.NewRoots([]files.RootSpec{{Name: "works", Path: resolved}})
 	require.NoError(t, err)
 	return roots, resolved
 }
@@ -49,7 +49,7 @@ func newTestRoots(t *testing.T, name string) (*files.Roots, string) {
 // race the initial addTree walk with their own filesystem writes — this is
 // what previously made every watcher test structurally flaky under
 // parallel/-race load (a fixed time.Sleep is a guess; Ready() is a fact).
-func startWatcher(t *testing.T, roots *files.Roots) (*events.Hub, <-chan events.Event, func()) {
+func startWatcher(t *testing.T, roots *files.Roots) (<-chan events.Event, func()) {
 	t.Helper()
 	hub := events.NewHub()
 	w, err := events.NewWatcher(hub, roots)
@@ -75,13 +75,13 @@ func startWatcher(t *testing.T, roots *files.Roots) (*events.Hub, <-chan events.
 		unsubscribe()
 		<-done
 	}
-	return hub, ch, stop
+	return ch, stop
 }
 
 func TestWatcher_CanonicalFileCreate_EmitsTreeAndFile(t *testing.T) {
 	t.Parallel()
-	roots, root := newTestRoots(t, "works")
-	_, ch, stop := startWatcher(t, roots)
+	roots, root := newTestRoots(t)
+	ch, stop := startWatcher(t, roots)
 	defer stop()
 
 	target := filepath.Join(root, "doc.md")
@@ -109,16 +109,16 @@ func TestWatcher_CanonicalFileCreate_EmitsTreeAndFile(t *testing.T) {
 
 func TestWatcher_CanonicalFileUpdate_EmitsFile(t *testing.T) {
 	t.Parallel()
-	roots, root := newTestRoots(t, "works")
+	roots, root := newTestRoots(t)
 	target := filepath.Join(root, "doc.md")
 	require.NoError(t, os.WriteFile(target, []byte("# hello\n"), 0o644))
 
-	_, ch, stop := startWatcher(t, roots)
+	ch, stop := startWatcher(t, roots)
 	defer stop()
 
 	require.NoError(t, os.WriteFile(target, []byte("# updated\n"), 0o644))
 
-	got := waitForEvent(t, ch, 5*time.Second, func(e events.Event) bool {
+	got := waitForEvent(t, ch, func(e events.Event) bool {
 		return e.Kind == events.KindFile && e.Path == "doc.md"
 	})
 	assert.Equal(t, "works", got.Root)
@@ -129,18 +129,18 @@ func TestWatcher_CanonicalFileAtomicSave_DetectedAsUpdate(t *testing.T) {
 	// (the same pattern internal/handler.atomicWrite uses). The rename must
 	// still surface as a file/tree event for the final target name.
 	t.Parallel()
-	roots, root := newTestRoots(t, "works")
+	roots, root := newTestRoots(t)
 	target := filepath.Join(root, "doc.md")
 	require.NoError(t, os.WriteFile(target, []byte("# hello\n"), 0o644))
 
-	_, ch, stop := startWatcher(t, roots)
+	ch, stop := startWatcher(t, roots)
 	defer stop()
 
 	tmp := filepath.Join(root, ".tmp-mr-atomic")
 	require.NoError(t, os.WriteFile(tmp, []byte("# atomic save\n"), 0o644))
 	require.NoError(t, os.Rename(tmp, target))
 
-	got := waitForEvent(t, ch, 5*time.Second, func(e events.Event) bool {
+	got := waitForEvent(t, ch, func(e events.Event) bool {
 		return e.Kind == events.KindFile && e.Path == "doc.md"
 	})
 	assert.Equal(t, "works", got.Root)
@@ -193,8 +193,8 @@ func waitForSubdirWatched(t *testing.T, ch <-chan events.Event, dir, probePath s
 
 func TestWatcher_NewSubdirectory_IsWatchedDynamically(t *testing.T) {
 	t.Parallel()
-	roots, root := newTestRoots(t, "works")
-	_, ch, stop := startWatcher(t, roots)
+	roots, root := newTestRoots(t)
+	ch, stop := startWatcher(t, roots)
 	defer stop()
 
 	sub := filepath.Join(root, "nested")
@@ -208,7 +208,7 @@ func TestWatcher_NewSubdirectory_IsWatchedDynamically(t *testing.T) {
 
 	require.NoError(t, os.WriteFile(filepath.Join(sub, "child.md"), []byte("# child\n"), 0o644))
 
-	got := waitForEvent(t, ch, 5*time.Second, func(e events.Event) bool {
+	got := waitForEvent(t, ch, func(e events.Event) bool {
 		return e.Kind == events.KindFile && e.Path == "nested/child.md"
 	})
 	assert.Equal(t, "works", got.Root)
@@ -216,8 +216,8 @@ func TestWatcher_NewSubdirectory_IsWatchedDynamically(t *testing.T) {
 
 func TestWatcher_NonMarkdownFile_NoEvent(t *testing.T) {
 	t.Parallel()
-	roots, root := newTestRoots(t, "works")
-	_, ch, stop := startWatcher(t, roots)
+	roots, root := newTestRoots(t)
+	ch, stop := startWatcher(t, roots)
 	defer stop()
 
 	require.NoError(t, os.WriteFile(filepath.Join(root, "notes.txt"), []byte("hi"), 0o644))
@@ -235,11 +235,11 @@ func TestWatcher_SidecarUpdate_EmitsComments(t *testing.T) {
 	configDir := t.TempDir()
 	t.Setenv("REVIEWER_CONFIG_DIR", configDir)
 
-	roots, root := newTestRoots(t, "works")
+	roots, root := newTestRoots(t)
 	require.NoError(t, os.WriteFile(filepath.Join(root, "doc.md"), []byte("# hello\n"), 0o644))
 	require.NoError(t, reviewstore.Ingest("works", "doc.md"))
 
-	_, ch, stop := startWatcher(t, roots)
+	ch, stop := startWatcher(t, roots)
 	defer stop()
 
 	entryDir, err := reviewstore.EntryDir("works", "doc.md")
@@ -247,7 +247,7 @@ func TestWatcher_SidecarUpdate_EmitsComments(t *testing.T) {
 	reviewJSON := filepath.Join(entryDir, reviewstore.ReviewFileName)
 	require.NoError(t, os.WriteFile(reviewJSON, []byte(`{"comments":[]}`), 0o644))
 
-	got := waitForEvent(t, ch, 5*time.Second, func(e events.Event) bool {
+	got := waitForEvent(t, ch, func(e events.Event) bool {
 		return e.Kind == events.KindComments && e.Path == "doc.md"
 	})
 	assert.Equal(t, "works", got.Root)
@@ -256,8 +256,8 @@ func TestWatcher_SidecarUpdate_EmitsComments(t *testing.T) {
 
 func TestWatcher_DebounceCoalescesBurstIntoOneEvent(t *testing.T) {
 	t.Parallel()
-	roots, root := newTestRoots(t, "works")
-	_, ch, stop := startWatcher(t, roots)
+	roots, root := newTestRoots(t)
+	ch, stop := startWatcher(t, roots)
 	defer stop()
 
 	target := filepath.Join(root, "doc.md")
@@ -267,7 +267,7 @@ func TestWatcher_DebounceCoalescesBurstIntoOneEvent(t *testing.T) {
 	}
 
 	// First matching event should arrive well after the debounce window.
-	waitForEvent(t, ch, 5*time.Second, func(e events.Event) bool {
+	waitForEvent(t, ch, func(e events.Event) bool {
 		return e.Kind == events.KindFile && e.Path == "doc.md"
 	})
 
