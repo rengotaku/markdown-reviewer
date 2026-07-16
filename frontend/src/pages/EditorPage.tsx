@@ -546,42 +546,67 @@ export function EditorPage() {
     editor.commands.setCommentHighlights(highlights);
   }, [editor, comments]);
 
-  // Fetch the newest revision's content into the revContents cache so the diff
-  // gutter (below) can compare against it. Skips fetches for revisions we
-  // already have. Cache is cleared on file switch (activePath change).
+  // Fetch every revision's content into the revContents cache so the diff
+  // gutter (below) can find the previous round — the newest revision whose
+  // body actually differs from the current saved markdown. `revisions[0]` is
+  // often identical to savedMarkdown (AppendRevision snapshots pre-save), so
+  // we need the full history to find one that differs. Skips fetches for
+  // revisions we already have; cache is cleared on file switch.
   useEffect(() => {
     if (!activePath) return;
     if (revisions.length === 0) return;
-    const baselineId = revisions[0].id;
-    if (baselineId in revContents) return;
+    const missing = revisions.filter((r) => !(r.id in revContents));
+    if (missing.length === 0) return;
     let cancelled = false;
     (async () => {
-      try {
-        const rev = await getRevision(activePath, baselineId, activeFileRoot);
-        if (cancelled) return;
-        setRevContents((prev) =>
-          baselineId in prev ? prev : { ...prev, [baselineId]: rev.content }
-        );
-      } catch {
-        // Baseline fetch is best-effort — a failure just leaves the gutter off.
-      }
+      const fetched = await Promise.all(
+        missing.map(async (r) => {
+          try {
+            const rev = await getRevision(activePath, r.id, activeFileRoot);
+            return [r.id, rev.content] as [string, string];
+          } catch {
+            return null;
+          }
+        })
+      );
+      if (cancelled) return;
+      setRevContents((prev) => {
+        const next = { ...prev };
+        let changed = false;
+        for (const item of fetched) {
+          if (item && !(item[0] in next)) {
+            next[item[0]] = item[1];
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
+      });
     })();
     return () => {
       cancelled = true;
     };
   }, [activePath, activeFileRoot, revisions, revContents]);
 
-  // Compute and push diff-gutter marks for the active file. Baseline is the
-  // newest revision's body (frontmatter + AI hint peeled so line numbers align
-  // with what the editor is rendering); current is the live editor markdown.
-  // No baseline / no revisions / doc-block mismatch → empty marks (safe).
+  // Compute and push diff-gutter marks for the active file. The gutter mirrors
+  // DiffView's comparison axis: baseline = the newest revision whose body
+  // actually differs from what's on disk (== the "previous round"); current =
+  // the saved markdown (unsaved edits do NOT flow into the gutter — the user
+  // wants to see the delta from the last round, not their own in-flight
+  // edits). Empty marks when nothing has been fetched yet or no revision
+  // differs, so unsaved-only edits and pristine files both show a clean
+  // gutter.
   const diffGutterPayload = useMemo(() => {
     if (!activeFile) return { marks: [], blockCount: 0 };
     if (revisions.length === 0) return { marks: [], blockCount: 0 };
-    const baselineRaw = revContents[revisions[0].id];
-    if (baselineRaw === undefined) return { marks: [], blockCount: 0 };
-    const baselineBody = splitPreamble(baselineRaw).body;
-    const currentBody = splitPreamble(activeFile.markdown).body;
+    const currentBody = splitPreamble(stripHint(activeFile.savedMarkdown)).body;
+    const baselineRev = revisions.find((r) => {
+      const raw = revContents[r.id];
+      if (raw === undefined) return false;
+      const body = splitPreamble(stripHint(raw)).body;
+      return hasChanges(lineDiff(body, currentBody));
+    });
+    if (!baselineRev) return { marks: [], blockCount: 0 };
+    const baselineBody = splitPreamble(stripHint(revContents[baselineRev.id])).body;
     return computeDiffGutterMarks(baselineBody, currentBody);
   }, [activeFile, revisions, revContents]);
 
