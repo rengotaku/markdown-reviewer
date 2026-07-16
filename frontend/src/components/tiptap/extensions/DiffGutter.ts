@@ -26,12 +26,26 @@ interface PluginState {
 
 const key = new PluginKey<PluginState>("diffGutter");
 
+// tiptap/ProseMirror appends a phantom empty paragraph when the document ends
+// with a non-textblock node (table, list, ...). markdown-it never emits an
+// empty paragraph block, so that trailing node is safe to ignore when
+// cross-checking counts — without this, any document ending in a table or
+// list always fails the check and the gutter silently disappears (#125).
+function effectiveChildCount(doc: ProseMirrorNode): number {
+  if (doc.childCount === 0) return 0;
+  const last = doc.child(doc.childCount - 1);
+  if (last.type.name === "paragraph" && last.content.size === 0) {
+    return doc.childCount - 1;
+  }
+  return doc.childCount;
+}
+
 function buildDeco(
   doc: ProseMirrorNode,
   payload: DiffGutterPayload
 ): DecorationSet {
   if (payload.marks.length === 0) return DecorationSet.empty;
-  if (doc.childCount !== payload.blockCount) return DecorationSet.empty;
+  if (effectiveChildCount(doc) !== payload.blockCount) return DecorationSet.empty;
 
   const marksByIndex = new Map<number, GutterMark>();
   for (const m of payload.marks) marksByIndex.set(m.blockIndex, m);
