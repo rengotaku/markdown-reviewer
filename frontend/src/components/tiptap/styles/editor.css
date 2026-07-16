@@ -350,3 +350,31 @@
 .ProseMirror > .diff-gutter-del-above {
   position: relative;
 }
+
+/* Blocks that draw their own border-left (headings, blockquotes) shift the
+   ::before/::after containing block (the padding box) right by that border
+   width, knocking the bar out of the shared gutter column. Compensate per
+   type so every bar lines up regardless of the block's own border (#129). */
+.ProseMirror > h1.diff-gutter-add::before,
+.ProseMirror > h1.diff-gutter-mod::before,
+.ProseMirror > h2.diff-gutter-add::before,
+.ProseMirror > h2.diff-gutter-mod::before,
+.ProseMirror > blockquote.diff-gutter-add::before,
+.ProseMirror > blockquote.diff-gutter-mod::before {
+  left: -18px; /* -14px - 4px border-left */
+}
+
+.ProseMirror > h3.diff-gutter-add::before,
+.ProseMirror > h3.diff-gutter-mod::before {
+  left: -17px; /* -14px - 3px border-left */
+}
+
+.ProseMirror > h1.diff-gutter-del-above::after,
+.ProseMirror > h2.diff-gutter-del-above::after,
+.ProseMirror > blockquote.diff-gutter-del-above::after {
+  left: -20px; /* -16px - 4px border-left */
+}
+
+.ProseMirror > h3.diff-gutter-del-above::after {
+  left: -19px; /* -16px - 3px border-left */
+}
