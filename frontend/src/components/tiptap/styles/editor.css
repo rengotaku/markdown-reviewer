@@ -113,6 +113,12 @@
   list-style-type: disc;
 }
 
+/* Same story for ordered lists: the global reset (ol,ul,menu{list-style:none})
+   strips the numbers, so restore decimal at every depth (#133). */
+.ProseMirror ol {
+  list-style-type: decimal;
+}
+
 .ProseMirror hr {
   border: none;
   border-top: 1px solid #ddd;
