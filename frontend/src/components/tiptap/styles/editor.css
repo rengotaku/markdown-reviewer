@@ -286,3 +286,54 @@
   outline: 2px solid #2563eb;
   outline-offset: 1px;
 }
+
+/* --- Diff gutter (#121) -------------------------------------------------
+   VSCode-git-gutter style: a 3px vertical bar in the left padding of every
+   top-level block that differs from the latest revision. Purely visual —
+   the block itself is not indented, so nothing shifts when the bar toggles.
+   Uses ::before so highlights, comment marks, and blockquote borders can
+   still rely on their own pseudo-elements. */
+.ProseMirror > .diff-gutter-add,
+.ProseMirror > .diff-gutter-mod {
+  position: relative;
+}
+
+.ProseMirror > .diff-gutter-add::before,
+.ProseMirror > .diff-gutter-mod::before {
+  content: "";
+  position: absolute;
+  left: -14px;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+.ProseMirror > .diff-gutter-add::before {
+  /* Match DiffView add color (rgba(46,160,67,...)) — solid alpha so the bar
+     reads clearly against paper backgrounds. */
+  background: rgb(46, 160, 67);
+}
+
+.ProseMirror > .diff-gutter-mod::before {
+  /* GitHub-style "modified" blue. Distinct from add-green and del-red. */
+  background: rgb(9, 105, 218);
+}
+
+/* Short red marker on top for "content was deleted just above this block". */
+.ProseMirror > .diff-gutter-del-above::after {
+  content: "";
+  position: absolute;
+  left: -16px;
+  top: -1px;
+  width: 7px;
+  height: 3px;
+  background: rgb(248, 81, 73);
+  border-radius: 1px;
+  pointer-events: none;
+}
+
+.ProseMirror > .diff-gutter-del-above {
+  position: relative;
+}

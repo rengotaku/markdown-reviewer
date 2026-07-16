@@ -22,6 +22,7 @@ import { SlashCommand } from "./extensions/SlashCommand";
 import { MermaidBlock } from "./extensions/MermaidBlock";
 import { MarkdownPaste } from "./extensions/MarkdownPaste";
 import { CommentHighlight } from "./extensions/CommentHighlight";
+import { DiffGutter } from "./extensions/DiffGutter";
 import "./styles/editor.css";
 
 function getEditorMarkdown(editor: { storage: unknown }): string {
@@ -98,6 +99,7 @@ export function TiptapEditor() {
       MermaidBlock,
       MarkdownPaste,
       CommentHighlight,
+      DiffGutter,
     ],
     content: "",
     editable: true,
