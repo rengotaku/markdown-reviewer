@@ -72,6 +72,8 @@ import { formatLocalTimestamp } from "@/utils/formatTimestamp";
 import { computeAnchorFromSelection } from "@/utils/pmAnchor";
 import { lineDiff, hasChanges } from "@/utils/lineDiff";
 import { dirOf } from "@/utils/dirOf";
+import { splitPreamble } from "@/utils/frontmatter";
+import { computeDiffGutterMarks } from "@/utils/diffGutterMarks";
 import type { HighlightComment } from "@/components/tiptap/extensions/CommentHighlight";
 import { BAR_HEIGHT, TAB_CONTENT_HEIGHT } from "@/theme/dimensions";
 
@@ -543,6 +545,50 @@ export function EditorPage() {
     }));
     editor.commands.setCommentHighlights(highlights);
   }, [editor, comments]);
+
+  // Fetch the newest revision's content into the revContents cache so the diff
+  // gutter (below) can compare against it. Skips fetches for revisions we
+  // already have. Cache is cleared on file switch (activePath change).
+  useEffect(() => {
+    if (!activePath) return;
+    if (revisions.length === 0) return;
+    const baselineId = revisions[0].id;
+    if (baselineId in revContents) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const rev = await getRevision(activePath, baselineId, activeFileRoot);
+        if (cancelled) return;
+        setRevContents((prev) =>
+          baselineId in prev ? prev : { ...prev, [baselineId]: rev.content }
+        );
+      } catch {
+        // Baseline fetch is best-effort — a failure just leaves the gutter off.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activePath, activeFileRoot, revisions, revContents]);
+
+  // Compute and push diff-gutter marks for the active file. Baseline is the
+  // newest revision's body (frontmatter + AI hint peeled so line numbers align
+  // with what the editor is rendering); current is the live editor markdown.
+  // No baseline / no revisions / doc-block mismatch → empty marks (safe).
+  const diffGutterPayload = useMemo(() => {
+    if (!activeFile) return { marks: [], blockCount: 0 };
+    if (revisions.length === 0) return { marks: [], blockCount: 0 };
+    const baselineRaw = revContents[revisions[0].id];
+    if (baselineRaw === undefined) return { marks: [], blockCount: 0 };
+    const baselineBody = splitPreamble(baselineRaw).body;
+    const currentBody = splitPreamble(activeFile.markdown).body;
+    return computeDiffGutterMarks(baselineBody, currentBody);
+  }, [activeFile, revisions, revContents]);
+
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) return;
+    editor.commands.setDiffGutter(diffGutterPayload);
+  }, [editor, diffGutterPayload]);
 
   const loadRevision = async (id: string) => {
     if (!activePath) return;
