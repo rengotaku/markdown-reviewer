@@ -75,12 +75,17 @@
   background-color: #f5f5f5;
   padding: 16px;
   border-radius: 4px;
-  overflow: auto;
+  /* Keep the pre itself unclipped so the diff-gutter ::before bar (placed at
+     a negative left offset) stays visible; horizontal scrolling for long
+     lines moves to the inner <code> instead (#127). */
+  overflow: visible;
 }
 
 .ProseMirror pre code {
   background-color: transparent;
   padding: 0;
+  display: block;
+  overflow-x: auto;
 }
 
 .ProseMirror blockquote {
@@ -111,11 +116,19 @@
   max-width: 100%;
 }
 
+/* Vertical spacing lives on the wrapper (the element the diff gutter
+   decorates) so the gutter bar's top:0/bottom:0 matches the table's real
+   height; the horizontal indent stays on the table itself so the bar's
+   x-position (relative to the wrapper) lines up with other blocks (#127). */
+.ProseMirror .tableWrapper {
+  margin: 32px 0;
+}
+
 .ProseMirror table {
   border-collapse: collapse;
   width: auto;
   max-width: calc(100% - 48px);
-  margin: 32px 0 32px 32px;
+  margin: 0 0 0 32px;
   table-layout: auto;
   overflow: hidden;
 }
