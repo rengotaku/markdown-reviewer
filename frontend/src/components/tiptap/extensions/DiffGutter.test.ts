@@ -107,4 +107,28 @@ describe("DiffGutter", () => {
     expect(nodeAt(ed, ".diff-gutter-mod")).toHaveLength(0);
     expect(nodeAt(ed, ".diff-gutter-del-above")).toHaveLength(0);
   });
+
+  it("tolerates the phantom trailing empty paragraph tiptap appends (#125)", () => {
+    // Documents ending in a non-textblock (list/table) get an extra empty
+    // paragraph from tiptap that markdown-it never counts: childCount = 3,
+    // blockCount = 2. The gutter must still paint instead of degrading.
+    const ed = makeEditor("<h2>title</h2><ul><li>item</li></ul><p></p>");
+    expect(ed.state.doc.childCount).toBe(3);
+    ed.commands.setDiffGutter({
+      marks: [{ blockIndex: 1, kind: "mod" }],
+      blockCount: 2,
+    });
+    const painted = nodeAt(ed, ".diff-gutter-mod");
+    expect(painted).toHaveLength(1);
+    expect(painted[0].tagName.toLowerCase()).toBe("ul");
+  });
+
+  it("still degrades when the mismatch is not just the trailing empty paragraph", () => {
+    const ed = makeEditor("<h2>title</h2><p>body</p><p></p>"); // effective 2
+    ed.commands.setDiffGutter({
+      marks: [{ blockIndex: 0, kind: "add" }],
+      blockCount: 1, // real mismatch — bail out
+    });
+    expect(nodeAt(ed, ".diff-gutter-add")).toHaveLength(0);
+  });
 });
