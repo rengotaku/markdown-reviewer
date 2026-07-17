@@ -27,6 +27,21 @@ func TestRenderPlist_ValueContainingPlaceholderLiteral(t *testing.T) {
 	assert.NotContains(t, out, "/tmp/com.test.markdown-reviewer")
 }
 
+// TestRenderPlist_IncludesSoftFDLimit pins the SoftResourceLimits block:
+// the plist must raise the launchd-default per-process FD limit (256 soft
+// / 2560 hard) so fsnotify's kqueue backend — which opens one FD per file
+// under every watched directory — can cover a REVIEW_ROOTS setup with
+// tens of thousands of entries without hitting EMFILE and returning 500
+// from ingest / PUT endpoints (issue #135).
+func TestRenderPlist_IncludesSoftFDLimit(t *testing.T) {
+	opts := Options{Label: "com.test.mr", Port: "9999"}
+	out := renderPlist(opts, "/bin/x", "/home/u", "/home/u/logs")
+
+	assert.Contains(t, out, "<key>SoftResourceLimits</key>")
+	assert.Contains(t, out, "<key>NumberOfFiles</key>")
+	assert.Contains(t, out, "<integer>65536</integer>")
+}
+
 // TestRequireGOOS exercises requireDarwin's platform check with an injected
 // GOOS, since the real runtime.GOOS is fixed per test run and this package
 // only ever runs its CI on darwin.

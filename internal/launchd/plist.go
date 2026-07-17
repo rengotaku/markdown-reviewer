@@ -62,6 +62,12 @@ const plistTemplate = `<?xml version="1.0" encoding="UTF-8"?>
     <key>KeepAlive</key>
     <true/>
 
+    <key>SoftResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key>
+        <integer>65536</integer>
+    </dict>
+
     <key>StandardOutPath</key>
     <string>__STDOUT__</string>
     <key>StandardErrorPath</key>
