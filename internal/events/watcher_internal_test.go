@@ -2,7 +2,9 @@ package events
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -88,4 +90,66 @@ func TestHandleFsError_EventOverflow_NilRoots_NoPanic(t *testing.T) {
 	assert.NotPanics(t, func() {
 		w.handleFsError(fsnotify.ErrEventOverflow)
 	})
+}
+
+// TestAddTree_RefusesPathOutsideAllowedRoots is the regression test for
+// issue #135: addTree must never walk a path that isn't inside a
+// configured REVIEW_ROOT (or the reviewstore sidecar base). Without the
+// gate a stray fsnotify Create event with an unexpected Name (empty, ".",
+// or the launchd cwd of "/") turned into an unbounded walk that tried to
+// watch /Applications, /Library, /System, /Users, ... exhausting the
+// process FD limit and returning 500 from ingest / PUT endpoints.
+func TestAddTree_RefusesPathOutsideAllowedRoots(t *testing.T) {
+	t.Parallel()
+	// The watcher's only configured root is the tempdir created by
+	// newWatcherForRoots("works"); "outside" is a separate tempdir so it
+	// necessarily sits outside every allowedRoot.
+	w := newWatcherForRoots(t, "works")
+
+	outside := t.TempDir()
+	outsideResolved, err := filepath.EvalSymlinks(outside)
+	require.NoError(t, err)
+	// Populate a subdirectory so a version without the gate would call
+	// fsw.Add on it — the assertion below can then distinguish "gate
+	// refused" from "gate allowed but nothing to walk".
+	require.NoError(t, os.Mkdir(filepath.Join(outsideResolved, "sub"), 0o755))
+
+	require.NoError(t, w.addTree(outsideResolved))
+
+	for _, p := range w.fsw.WatchList() {
+		require.False(t, strings.HasPrefix(p, outsideResolved),
+			"addTree walked outside the configured roots: %s watched", p)
+	}
+}
+
+// TestAddTree_RefusesRelativePath ensures the defense also holds for the
+// exact shape observed in the incident log: paths like "." resolve
+// against the process cwd (which is "/" for launchd agents), and a
+// relative "." must never turn into a walk of "/".
+func TestAddTree_RefusesRelativePath(t *testing.T) {
+	t.Parallel()
+	w := newWatcherForRoots(t, "works")
+
+	// "." resolves to the test binary's cwd, which is not one of the
+	// configured tempdir roots — so the gate must refuse it.
+	require.NoError(t, w.addTree("."))
+
+	// Empty string is treated the same way.
+	require.NoError(t, w.addTree(""))
+
+	// No watches were registered as a side effect.
+	assert.Empty(t, w.fsw.WatchList())
+}
+
+// TestAddTree_AllowsConfiguredRoot proves the gate isn't overzealous:
+// a walk that starts at an allowed root succeeds and populates the
+// watch list (this is what production Run() relies on).
+func TestAddTree_AllowsConfiguredRoot(t *testing.T) {
+	t.Parallel()
+	w := newWatcherForRoots(t, "works")
+	root := w.roots.List()[0].Resolver.Root()
+
+	require.NoError(t, w.addTree(root))
+
+	assert.Contains(t, w.fsw.WatchList(), root)
 }

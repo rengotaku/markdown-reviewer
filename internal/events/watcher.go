@@ -158,6 +158,14 @@ func (w *Watcher) ensureWatchable(dir string) error {
 // (fsnotify.Watcher.Add is non-recursive). Skips the noise directories the
 // files handler also skips, since nothing under those is ever surfaced.
 //
+// Refuses to walk any path that isn't inside a configured REVIEW_ROOT or
+// the reviewstore sidecar base — a defensive gate that ensures a stray
+// fsnotify Create event with an unexpected Name can never turn into an
+// unbounded filesystem traversal (issue #135: a Create event with Name=""
+// or "." from the launchd cwd of "/" caused addTree to walk / and try to
+// watch /Applications, /Library, /System, /Users, ... exhausting the
+// process FD limit).
+//
 // Caveat: directories reached only via a symlink are NOT watched.
 // filepath.WalkDir does not follow symlinks, so a root that contains a
 // symlinked subdirectory (or is itself a symlink into another tree) will
@@ -168,6 +176,10 @@ func (w *Watcher) ensureWatchable(dir string) error {
 // gap: clients relying on symlinked content only get updates via their
 // polling fallback (issue #112), never via the push channel.
 func (w *Watcher) addTree(root string) error {
+	if !w.isWithinAllowedRoot(root) {
+		slog.Warn("events: refusing to walk path outside configured roots", "path", root)
+		return nil
+	}
 	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			// A directory that vanished mid-walk (race with a delete) isn't
@@ -189,6 +201,63 @@ func (w *Watcher) addTree(root string) error {
 		}
 		return nil
 	})
+}
+
+// isWithinAllowedRoot returns true when p (any path form) resolves to
+// somewhere inside a configured REVIEW_ROOT canonical tree or the
+// reviewstore sidecar base. Used as a hard gate around addTree so a stray
+// fsnotify event with an unexpected Name can never trigger an unbounded
+// walk outside the configured scope (issue #135).
+func (w *Watcher) isWithinAllowedRoot(p string) bool {
+	if p == "" {
+		return false
+	}
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return false
+	}
+	abs = filepath.Clean(abs)
+	for _, allowed := range w.allowedRoots() {
+		if isWithinPath(allowed, abs) {
+			return true
+		}
+	}
+	return false
+}
+
+// allowedRoots enumerates every top-level path addTree is permitted to
+// walk: each canonical REVIEW_ROOT (already absolute + symlink-resolved by
+// files.NewResolver) plus the reviewstore sidecar base. Empty when the
+// server was started without any files-API configuration.
+func (w *Watcher) allowedRoots() []string {
+	if w.roots == nil {
+		return nil
+	}
+	list := w.roots.List()
+	out := make([]string, 0, len(list)+1)
+	for _, r := range list {
+		out = append(out, filepath.Clean(r.Resolver.Root()))
+	}
+	if base, err := reviewstore.BaseDir(); err == nil {
+		out = append(out, filepath.Clean(base))
+	}
+	return out
+}
+
+// isWithinPath returns true when p is root or nested inside it. Both must
+// already be absolute + cleaned; anything relative is rejected.
+func isWithinPath(root, p string) bool {
+	rel, err := filepath.Rel(root, p)
+	if err != nil {
+		return false
+	}
+	if rel == "." {
+		return true
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false
+	}
+	return true
 }
 
 // noiseDirs mirrors internal/handler's noiseDirs — directories the files API
