@@ -241,26 +241,47 @@ func (h *Handler) ListDir(c *gin.Context) {
 		if strings.HasPrefix(itemName, ".") {
 			continue
 		}
-		if item.IsDir() {
-			if _, skip := noiseDirs[itemName]; skip {
-				continue
-			}
-		}
 
 		childRel := itemName
 		if rel != "" {
 			childRel = rel + "/" + itemName
 		}
 
+		// os.DirEntry surfaces the raw dirent type: for a symlink,
+		// IsDir()/type("file") are both false regardless of what the
+		// link ultimately points at. Without following the link, such
+		// entries fall through the dir/.md switch below and disappear
+		// from the tree — including every hub entry when REVIEW_ROOT is
+		// a symlink hub (issue #139). Follow through resolver.Resolve
+		// so hub-mode trust and strict-mode escape checks stay in
+		// exactly one place; a link the resolver rejects (outside root
+		// in strict mode, or not a hub-level symlink in hub mode) is
+		// dropped from the listing so it can't be clicked into a 400.
+		isDir := item.IsDir()
 		var modified string
-		if info, ierr := item.Info(); ierr == nil {
+		if item.Type()&os.ModeSymlink != 0 {
+			resolvedChild, rerr := resolver.Resolve(childRel)
+			if rerr != nil {
+				continue
+			}
+			stat, serr := os.Stat(resolvedChild)
+			if serr != nil {
+				continue
+			}
+			isDir = stat.IsDir()
+			modified = stat.ModTime().UTC().Format(time.RFC3339)
+		} else if info, ierr := item.Info(); ierr == nil {
 			modified = info.ModTime().UTC().Format(time.RFC3339)
 		}
 
-		switch {
-		case item.IsDir():
+		if isDir {
+			if _, skip := noiseDirs[itemName]; skip {
+				continue
+			}
 			entries = append(entries, DirEntry{Name: itemName, Path: childRel, Type: "dir", Modified: modified})
-		case strings.EqualFold(filepath.Ext(itemName), markdownExt):
+			continue
+		}
+		if strings.EqualFold(filepath.Ext(itemName), markdownExt) {
 			entries = append(entries, DirEntry{Name: itemName, Path: childRel, Type: "file", Modified: modified})
 		}
 	}
