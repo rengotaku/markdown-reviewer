@@ -46,9 +46,14 @@ type Config struct {
 	// single-root config is built using filepath.Base(REVIEW_ROOT) as the
 	// tab name. Leave both empty to disable the files API entirely
 	// (handlers respond with 500).
-	ReviewRoot      string        `env:"REVIEW_ROOT"`
-	ShutdownTimeout time.Duration `env:"SHUTDOWN_TIMEOUT,default=10s"`
-	JWTTTL          time.Duration `env:"JWT_TTL,default=24h"`
+	ReviewRoot string `env:"REVIEW_ROOT"`
+	// ReviewAllowSymlinkHub opts the single-REVIEW_ROOT fallback into hub
+	// mode: direct symlink children of ReviewRoot are trusted as implicit
+	// sub-roots. Only affects the REVIEW_ROOT path — REVIEW_ROOTS entries
+	// carry their own per-root allow_symlink_hub flag.
+	ReviewAllowSymlinkHub bool          `env:"REVIEW_ALLOW_SYMLINK_HUB"`
+	ShutdownTimeout       time.Duration `env:"SHUTDOWN_TIMEOUT,default=10s"`
+	JWTTTL                time.Duration `env:"JWT_TTL,default=24h"`
 }
 
 // Run boots the API server and blocks until ctx is canceled (graceful
@@ -183,7 +188,11 @@ func buildRoots(cfg Config) (*files.Roots, error) {
 		return nil, nil
 	}
 	return files.NewRoots([]files.RootSpec{
-		{Name: filepath.Base(cfg.ReviewRoot), Path: cfg.ReviewRoot},
+		{
+			Name:            filepath.Base(cfg.ReviewRoot),
+			Path:            cfg.ReviewRoot,
+			AllowSymlinkHub: cfg.ReviewAllowSymlinkHub,
+		},
 	})
 }
 

@@ -20,19 +20,39 @@ var (
 	ErrInvalidPath = errors.New("invalid path")
 )
 
+// Options tunes Resolver behavior. Zero value keeps the strict default:
+// any symlink whose target lands outside root is rejected.
+type Options struct {
+	// AllowSymlinkHub trusts symlinks that appear as *direct children* of
+	// root, treating each such link's target as an implicit sub-root.
+	// Deeper symlinks (or a hub-child that isn't itself a symlink) still
+	// escape and are still rejected. Intended for hub layouts like
+	// ~/code/<repo> -> ~/Workspace/<repo>/main where root is a flat index
+	// of per-repo symlinks by design.
+	AllowSymlinkHub bool
+}
+
 // Resolver resolves user-supplied relative paths against an absolute,
 // symlink-resolved root. All API access goes through Resolver so the
 // "stay inside the root" invariant lives in exactly one place.
 type Resolver struct {
 	root string
+	opts Options
 }
 
-// NewResolver creates a Resolver rooted at root. The root must exist.
+// NewResolver creates a Resolver rooted at root with default (strict)
+// options. See NewResolverWithOptions for the opt-in modes.
+func NewResolver(root string) (*Resolver, error) {
+	return NewResolverWithOptions(root, Options{})
+}
+
+// NewResolverWithOptions creates a Resolver rooted at root. The root must
+// exist.
 //
 // The root is resolved to an absolute, symlink-free path up-front so the
 // later per-request checks can do a simple prefix comparison without
 // re-walking symlinks for the root itself on every request.
-func NewResolver(root string) (*Resolver, error) {
+func NewResolverWithOptions(root string, opts Options) (*Resolver, error) {
 	if root == "" {
 		return nil, errors.New("root is empty")
 	}
@@ -51,7 +71,7 @@ func NewResolver(root string) (*Resolver, error) {
 	if !info.IsDir() {
 		return nil, fmt.Errorf("root %q is not a directory", resolved)
 	}
-	return &Resolver{root: resolved}, nil
+	return &Resolver{root: resolved, opts: opts}, nil
 }
 
 // Root returns the absolute, symlink-resolved root directory.
@@ -88,7 +108,7 @@ func (r *Resolver) Resolve(rel string) (string, error) {
 
 	resolved, err := filepath.EvalSymlinks(full)
 	if err == nil {
-		if !withinRoot(r.root, resolved) {
+		if !r.withinAllowedRoots(cleaned, resolved) {
 			return "", ErrPathTraversal
 		}
 		return resolved, nil
@@ -107,10 +127,57 @@ func (r *Resolver) Resolve(rel string) (string, error) {
 		}
 		return "", fmt.Errorf("resolve parent: %w", perr)
 	}
-	if !withinRoot(r.root, parentResolved) {
+	if !r.withinAllowedRoots(cleaned, parentResolved) {
 		return "", ErrPathTraversal
 	}
 	return filepath.Join(parentResolved, filepath.Base(full)), nil
+}
+
+// withinAllowedRoots reports whether resolved is inside the primary root
+// or, when AllowSymlinkHub is on, inside the target of the first-component
+// symlink child. `cleaned` is the caller's already-cleaned relative path
+// (used to identify the first component; never re-joined with root).
+func (r *Resolver) withinAllowedRoots(cleaned, resolved string) bool {
+	if withinRoot(r.root, resolved) {
+		return true
+	}
+	if !r.opts.AllowSymlinkHub {
+		return false
+	}
+	subRoot, ok := r.hubSubRoot(cleaned)
+	if !ok {
+		return false
+	}
+	return withinRoot(subRoot, resolved)
+}
+
+// hubSubRoot returns the resolved target of `cleaned`'s first path
+// component when that component is a direct symlink child of root
+// pointing at an existing directory. Anything else (regular dir, missing
+// entry, symlink to a file, deeper path) returns ok=false so the strict
+// path stays in charge.
+func (r *Resolver) hubSubRoot(cleaned string) (string, bool) {
+	first := cleaned
+	if idx := strings.IndexRune(cleaned, filepath.Separator); idx >= 0 {
+		first = cleaned[:idx]
+	}
+	if first == "" || first == "." || first == ".." {
+		return "", false
+	}
+	childPath := filepath.Join(r.root, first)
+	linkInfo, err := os.Lstat(childPath)
+	if err != nil || linkInfo.Mode()&os.ModeSymlink == 0 {
+		return "", false
+	}
+	target, err := filepath.EvalSymlinks(childPath)
+	if err != nil {
+		return "", false
+	}
+	targetInfo, err := os.Stat(target)
+	if err != nil || !targetInfo.IsDir() {
+		return "", false
+	}
+	return target, true
 }
 
 // withinRoot returns true when p is root or sits anywhere inside it.

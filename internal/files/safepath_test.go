@@ -189,3 +189,123 @@ func TestResolve_NonExistingFile_ParentDoesNotExist(t *testing.T) {
 	// Caller-visible signal: os.ErrNotExist (not a traversal).
 	assert.True(t, errors.Is(err, os.ErrNotExist), "expected os.ErrNotExist, got %v", err)
 }
+
+// setupHubRoot builds a root directory whose direct child `hub` is a
+// symlink to a separately-allocated outside directory, and returns both
+// the (symlink-resolved) root and the outside target. Used by the
+// AllowSymlinkHub cases to exercise the "trust top-level symlinks" path.
+func setupHubRoot(t *testing.T) (root, outside string) {
+	t.Helper()
+	root = setupRoot(t)
+	rawOutside := t.TempDir()
+	outside, err := filepath.EvalSymlinks(rawOutside)
+	require.NoError(t, err)
+	require.NoError(t, os.Symlink(outside, filepath.Join(root, "hub")))
+	return root, outside
+}
+
+func TestResolve_AllowSymlinkHub_TopLevelSymlink_ExistingFile(t *testing.T) {
+	root, outside := setupHubRoot(t)
+	require.NoError(t, os.WriteFile(filepath.Join(outside, "doc.md"), []byte("x"), 0o644))
+
+	r, err := files.NewResolverWithOptions(root, files.Options{AllowSymlinkHub: true})
+	require.NoError(t, err)
+
+	got, err := r.Resolve("hub/doc.md")
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(outside, "doc.md"), got)
+}
+
+func TestResolve_AllowSymlinkHub_TopLevelSymlink_NestedExistingFile(t *testing.T) {
+	root, outside := setupHubRoot(t)
+	sub := filepath.Join(outside, "sub")
+	require.NoError(t, os.MkdirAll(sub, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(sub, "deep.md"), []byte("x"), 0o644))
+
+	r, err := files.NewResolverWithOptions(root, files.Options{AllowSymlinkHub: true})
+	require.NoError(t, err)
+
+	got, err := r.Resolve("hub/sub/deep.md")
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(sub, "deep.md"), got)
+}
+
+func TestResolve_AllowSymlinkHub_TopLevelSymlink_NonExistingFile(t *testing.T) {
+	root, outside := setupHubRoot(t)
+
+	r, err := files.NewResolverWithOptions(root, files.Options{AllowSymlinkHub: true})
+	require.NoError(t, err)
+
+	got, err := r.Resolve("hub/new.md")
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(outside, "new.md"), got)
+}
+
+func TestResolve_AllowSymlinkHub_RealDirectChildStillWorks(t *testing.T) {
+	// Hub mode must not regress the non-symlink case: a real subdir under
+	// root still resolves through the primary-root check without falling
+	// into hubSubRoot.
+	root, _ := setupHubRoot(t)
+	real := filepath.Join(root, "real")
+	require.NoError(t, os.MkdirAll(real, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(real, "in.md"), []byte("x"), 0o644))
+
+	r, err := files.NewResolverWithOptions(root, files.Options{AllowSymlinkHub: true})
+	require.NoError(t, err)
+
+	got, err := r.Resolve("real/in.md")
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(real, "in.md"), got)
+}
+
+func TestResolve_AllowSymlinkHub_DeepSymlinkStillRejected(t *testing.T) {
+	// A symlink nested one level below root (not a direct child) must NOT
+	// be trusted even in hub mode — hub trust is intentionally only one
+	// level deep.
+	root := setupRoot(t)
+	subdir := filepath.Join(root, "sub")
+	require.NoError(t, os.MkdirAll(subdir, 0o755))
+	outside := t.TempDir()
+	resolvedOutside, err := filepath.EvalSymlinks(outside)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(resolvedOutside, "secret.md"), []byte("s"), 0o644))
+	require.NoError(t, os.Symlink(filepath.Join(resolvedOutside, "secret.md"), filepath.Join(subdir, "link.md")))
+
+	r, err := files.NewResolverWithOptions(root, files.Options{AllowSymlinkHub: true})
+	require.NoError(t, err)
+
+	_, err = r.Resolve("sub/link.md")
+	require.ErrorIs(t, err, files.ErrPathTraversal)
+}
+
+func TestResolve_AllowSymlinkHub_TopLevelSymlinkToFile_Rejected(t *testing.T) {
+	// A top-level symlink whose target is a *file* (not a directory) is
+	// not a hub entry; the resolver must fall back to strict mode and
+	// reject the outside-of-root target.
+	root := setupRoot(t)
+	outside := t.TempDir()
+	resolvedOutside, err := filepath.EvalSymlinks(outside)
+	require.NoError(t, err)
+	target := filepath.Join(resolvedOutside, "secret.md")
+	require.NoError(t, os.WriteFile(target, []byte("s"), 0o644))
+	require.NoError(t, os.Symlink(target, filepath.Join(root, "hubfile")))
+
+	r, err := files.NewResolverWithOptions(root, files.Options{AllowSymlinkHub: true})
+	require.NoError(t, err)
+
+	_, err = r.Resolve("hubfile")
+	require.ErrorIs(t, err, files.ErrPathTraversal)
+}
+
+func TestResolve_HubModeOff_TopLevelSymlinkStillRejected(t *testing.T) {
+	// Regression guard for the default: without AllowSymlinkHub, a
+	// direct-child symlink to an outside directory is rejected as before.
+	root, outside := setupHubRoot(t)
+	require.NoError(t, os.WriteFile(filepath.Join(outside, "doc.md"), []byte("x"), 0o644))
+
+	r, err := files.NewResolver(root)
+	require.NoError(t, err)
+
+	_, err = r.Resolve("hub/doc.md")
+	require.ErrorIs(t, err, files.ErrPathTraversal)
+}
