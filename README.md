@@ -60,8 +60,9 @@ REVIEW_ROOTS='[{"name":"works","path":"'"$HOME"'/works"},{"name":"notes","path":
 
 | 環境変数 | デフォルト | 用途 |
 |----------|-----------|------|
-| `REVIEW_ROOTS` | (なし) | レビュー対象ルートの JSON 配列 `[{"name":..., "path":...}]` |
+| `REVIEW_ROOTS` | (なし) | レビュー対象ルートの JSON 配列 `[{"name":..., "path":...}]`。各エントリに `"allow_symlink_hub": true` を付けるとそのルートは hub モード（下記） |
 | `REVIEW_ROOT` | (なし) | 単一ルート指定（`name` は basename になる） |
+| `REVIEW_ALLOW_SYMLINK_HUB` | `false` | 単一 `REVIEW_ROOT` を hub モードにする。ルート直下の**第一階層の symlink 子**を implicit sub-root として信頼し、その配下（外に出るリンク先）を開けるようにする。より深い階層の symlink 経由の外部脱出は依然として拒否 |
 | `PORT` | `8080` | listen ポート |
 | `DATABASE_DSN` | `app.db` | ユーザー DB（boilerplate 由来で実質未使用。`:memory:` 推奨） |
 | `MARKDOWN_REVIEWER_BASE_URL` | (リクエストの Host から導出) | hint に埋める base URL の固定 |

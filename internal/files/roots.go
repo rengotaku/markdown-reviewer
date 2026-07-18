@@ -10,9 +10,14 @@ import (
 // RootSpec is one entry parsed out of the REVIEW_ROOTS env var. Name is the
 // user-facing label (tab title); Path is the directory the resolver will be
 // rooted at.
+//
+// AllowSymlinkHub opts this root into hub mode: direct symlink children of
+// Path are trusted as implicit sub-roots. See Options.AllowSymlinkHub for
+// the exact semantics. Defaults to false to preserve the strict behavior.
 type RootSpec struct {
-	Name string `json:"name"`
-	Path string `json:"path"`
+	Name            string `json:"name"`
+	Path            string `json:"path"`
+	AllowSymlinkHub bool   `json:"allow_symlink_hub,omitempty"`
 }
 
 // Root pairs a user-facing name with a configured Resolver.
@@ -47,7 +52,9 @@ func NewRoots(specs []RootSpec) (*Roots, error) {
 		if _, dup := r.byName[spec.Name]; dup {
 			return nil, fmt.Errorf("duplicate root name %q", spec.Name)
 		}
-		resolver, err := NewResolver(spec.Path)
+		resolver, err := NewResolverWithOptions(spec.Path, Options{
+			AllowSymlinkHub: spec.AllowSymlinkHub,
+		})
 		if err != nil {
 			return nil, fmt.Errorf("init resolver for root %q: %w", spec.Name, err)
 		}
