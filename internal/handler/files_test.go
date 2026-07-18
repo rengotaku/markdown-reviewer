@@ -492,6 +492,119 @@ func TestListDir_NotADirectory(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), "path is not a directory")
 }
 
+// setupHubHandler returns a Handler with a single AllowSymlinkHub root at
+// tmpdir A and a separate outside tmpdir B, plus a symlink `hub` inside A
+// that points at B. Mirrors the ~/code -> ~/Workspace/<repo>/main hub
+// layout the resolver's hub mode was built for.
+func setupHubHandler(t *testing.T) (h *handler.Handler, root, outside string) {
+	t.Helper()
+	rawRoot := t.TempDir()
+	root, err := filepath.EvalSymlinks(rawRoot)
+	require.NoError(t, err)
+	rawOutside := t.TempDir()
+	outside, err = filepath.EvalSymlinks(rawOutside)
+	require.NoError(t, err)
+	require.NoError(t, os.Symlink(outside, filepath.Join(root, "hub")))
+
+	roots, err := files.NewRoots([]files.RootSpec{
+		{Name: "default", Path: root, AllowSymlinkHub: true},
+	})
+	require.NoError(t, err)
+
+	repo := repository.NewUserRepository(testutil.NewTestDB(t))
+	svc := service.NewUserService(repo)
+	return handler.NewHandler(svc, roots, nil), root, outside
+}
+
+// A top-level symlink child pointing at a real directory must appear in
+// the root listing as `type: "dir"`. Regression for issue #139: DirEntry
+// from os.ReadDir reports IsDir()=false for symlinks, so hub entries were
+// falling through the dir/.md switch and disappearing from the tree even
+// though /api/files/<hub-child>/... resolved fine.
+func TestListDir_AllowSymlinkHub_TopLevelSymlinkListedAsDir(t *testing.T) {
+	t.Parallel()
+	h, _, outside := setupHubHandler(t)
+	// Populate the linked target so the listing has something meaningful.
+	require.NoError(t, os.WriteFile(filepath.Join(outside, "doc.md"), []byte("d"), 0o644))
+
+	rec, resp := listDir(t, h, "")
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Len(t, resp.Entries, 1)
+	assert.Equal(t, handler.DirEntry{Name: "hub", Path: "hub", Type: "dir"}, resp.Entries[0])
+}
+
+// Drilling into the hub entry must list the outside directory's children
+// via the normal ListDir path (relies on resolver.Resolve).
+func TestListDir_AllowSymlinkHub_HubChildDrillsIn(t *testing.T) {
+	t.Parallel()
+	h, _, outside := setupHubHandler(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(outside, "sub"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(outside, "readme.md"), []byte("r"), 0o644))
+
+	rec, resp := listDir(t, h, "hub")
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Len(t, resp.Entries, 2)
+	assert.Equal(t, handler.DirEntry{Name: "sub", Path: "hub/sub", Type: "dir"}, resp.Entries[0])
+	assert.Equal(t, handler.DirEntry{Name: "readme.md", Path: "hub/readme.md", Type: "file"}, resp.Entries[1])
+}
+
+// A top-level symlink whose target is a file (not a directory) must not
+// hide as a "dir" and must not surface as a non-.md file. It should be
+// silently dropped — mirroring the resolver's "hub entries are dirs" rule.
+func TestListDir_AllowSymlinkHub_SymlinkToFile_Excluded(t *testing.T) {
+	t.Parallel()
+	h, root, outside := setupHubHandler(t)
+	// Extra top-level symlink pointing at an outside *file* (non-.md so it
+	// wouldn't be listed even if the resolver accepted it).
+	require.NoError(t, os.WriteFile(filepath.Join(outside, "note.txt"), []byte("n"), 0o644))
+	require.NoError(t, os.Symlink(filepath.Join(outside, "note.txt"), filepath.Join(root, "linkfile")))
+
+	rec, resp := listDir(t, h, "")
+	require.Equal(t, http.StatusOK, rec.Code)
+	// Only the pre-existing `hub` dir-symlink remains; `linkfile` is dropped.
+	require.Len(t, resp.Entries, 1)
+	assert.Equal(t, "hub", resp.Entries[0].Name)
+}
+
+// In strict mode (default), a top-level symlink pointing outside root
+// stays hidden — the resolver rejects it and ListDir must not surface
+// entries it can't subsequently open.
+func TestListDir_StrictMode_TopLevelSymlinkToOutside_Excluded(t *testing.T) {
+	t.Parallel()
+	h, root := setupFilesHandler(t)
+	outsideDir := t.TempDir()
+	outside, err := filepath.EvalSymlinks(outsideDir)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(outside, "doc.md"), []byte("d"), 0o644))
+	require.NoError(t, os.Symlink(outside, filepath.Join(root, "hub")))
+
+	rec, resp := listDir(t, h, "")
+	require.Equal(t, http.StatusOK, rec.Code)
+	assert.Empty(t, resp.Entries)
+}
+
+// A symlink whose target sits *inside* the primary root is allowed by
+// the resolver in both strict and hub mode, so it must appear in the
+// listing. This wasn't the case before #139 because os.ReadDir's
+// IsDir()=false for symlinks dropped it silently.
+func TestListDir_StrictMode_TopLevelSymlinkToInsideRoot_Listed(t *testing.T) {
+	t.Parallel()
+	h, root := setupFilesHandler(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "real"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "real", "x.md"), []byte("x"), 0o644))
+	require.NoError(t, os.Symlink(filepath.Join(root, "real"), filepath.Join(root, "alias")))
+
+	rec, resp := listDir(t, h, "")
+	require.Equal(t, http.StatusOK, rec.Code)
+	names := make([]string, 0, len(resp.Entries))
+	for _, e := range resp.Entries {
+		names = append(names, e.Name)
+		assert.Equal(t, "dir", e.Type)
+	}
+	sort.Strings(names)
+	assert.Equal(t, []string{"alias", "real"}, names)
+}
+
 // Resolve() returns os.ErrNotExist when a non-existing target's parent is
 // also missing — covers the ErrNotExist branch of the Resolve-err switch.
 func TestListDir_ResolveNotExistParent(t *testing.T) {
