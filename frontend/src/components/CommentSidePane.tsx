@@ -496,6 +496,46 @@ function CommentRow({
         >
           {c.author || "?"} {c.date ? `· ${c.date}` : ""}
         </Typography>
+        {!editOpen && (
+          <>
+            <Tooltip
+              title={
+                aiOwned
+                  ? "AI のコメントは編集できません"
+                  : resolved
+                    ? "解決済みのため編集できません"
+                    : "コメントを編集"
+              }
+            >
+              <span>
+                <IconButton
+                  size="small"
+                  disabled={resolved || aiOwned}
+                  onClick={startEdit}
+                  aria-label="edit comment"
+                  data-testid="comment-edit"
+                  sx={{ p: 0.25 }}
+                >
+                  <EditOutlinedIcon sx={{ fontSize: 16 }} />
+                </IconButton>
+              </span>
+            </Tooltip>
+            <Tooltip title={aiOwned ? "AI のコメントは削除できません" : "コメントを削除"}>
+              <span>
+                <IconButton
+                  size="small"
+                  disabled={aiOwned}
+                  onClick={() => onDelete(c.id)}
+                  aria-label="delete comment"
+                  data-testid="comment-delete"
+                  sx={{ p: 0.25 }}
+                >
+                  <DeleteOutlineIcon sx={{ fontSize: 16 }} />
+                </IconButton>
+              </span>
+            </Tooltip>
+          </>
+        )}
       </Box>
 
       {ctx && (
@@ -613,27 +653,6 @@ function CommentRow({
             </IconButton>
           </span>
         </Tooltip>
-        <Tooltip
-          title={
-            aiOwned
-              ? "AI のコメントは編集できません"
-              : resolved
-                ? "解決済みのため編集できません"
-                : "コメントを編集"
-          }
-        >
-          <span>
-            <IconButton
-              size="small"
-              disabled={resolved || aiOwned}
-              onClick={startEdit}
-              aria-label="edit comment"
-              data-testid="comment-edit"
-            >
-              <EditOutlinedIcon fontSize="small" />
-            </IconButton>
-          </span>
-        </Tooltip>
         <Tooltip title={resolved ? "未解決に戻す" : "解決済みにする"}>
           <IconButton
             size="small"
@@ -657,20 +676,6 @@ function CommentRow({
           >
             <OpenInFullIcon fontSize="small" />
           </IconButton>
-        </Tooltip>
-        <Box sx={{ flexGrow: 1 }} />
-        <Tooltip title={aiOwned ? "AI のコメントは削除できません" : "コメントを削除"}>
-          <span>
-            <IconButton
-              size="small"
-              disabled={aiOwned}
-              onClick={() => onDelete(c.id)}
-              aria-label="delete comment"
-              data-testid="comment-delete"
-            >
-              <DeleteOutlineIcon fontSize="small" />
-            </IconButton>
-          </span>
         </Tooltip>
       </Box>
     </Box>
