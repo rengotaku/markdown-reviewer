@@ -349,11 +349,13 @@
   background: rgb(9, 105, 218);
 }
 
-/* Short red marker on top for "content was deleted just above this block". */
+/* Short red marker on top for "content was deleted just above this block".
+   Horizontally centered against the add/mod dot below (dot: left:-20, w:9 →
+   center at -15.5; dash: w:7 → left:-19 puts center at -15.5). */
 .ProseMirror > .diff-gutter-del-above::after {
   content: "";
   position: absolute;
-  left: -21px;
+  left: -19px;
   top: -1px;
   width: 7px;
   height: 3px;
@@ -387,9 +389,9 @@
 .ProseMirror > h1.diff-gutter-del-above::after,
 .ProseMirror > h2.diff-gutter-del-above::after,
 .ProseMirror > blockquote.diff-gutter-del-above::after {
-  left: -25px; /* -21px - 4px border-left */
+  left: -23px; /* -19px - 4px border-left, matches h1/h2/blockquote dot */
 }
 
 .ProseMirror > h3.diff-gutter-del-above::after {
-  left: -24px; /* -21px - 3px border-left */
+  left: -22px; /* -19px - 3px border-left, matches h3 dot */
 }
