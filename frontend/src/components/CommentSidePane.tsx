@@ -192,13 +192,12 @@ export function CommentSidePane({
         sx={{
           pl: 2,
           pr: 0.5,
-          // Fixed height shared with the sidebar / editor headers so the
-          // three dividers form one continuous line (#65, #90). BAR_HEIGHT = 37px.
+          // #143: この 1 行目の下線は廃止した。BAR_HEIGHT 固定は、直下の
+          // フィルタ行（2 行目）のディバイダを他ペインの 2 行目と揃えて
+          // 1 本の連続線にするために引き続き必要（#65, #90）。
           height: BAR_HEIGHT,
           flexShrink: 0,
           boxSizing: "border-box",
-          borderBottom: "1px solid",
-          borderColor: "divider",
           display: "flex",
           alignItems: "center",
           gap: 1,

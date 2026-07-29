@@ -336,6 +336,620 @@ describe("EditorPage", () => {
     expect(screen.getByTestId("editor-active-path")).toHaveTextContent(
       "ファイルが選択されていません"
     );
+    // #143: no active file → the version badge has nothing to show.
+    expect(screen.queryByTestId("editor-active-version")).not.toBeInTheDocument();
+  });
+
+  it("shows v1 for a draft file with no saved revisions (#143)", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
+    );
+    await user.click(screen.getByTestId("sidebar-file-README.md"));
+
+    // Default mock /api/stat returns state: "draft" → revisions stays [].
+    await waitFor(() =>
+      expect(screen.getByTestId("editor-active-version")).toHaveTextContent("v1")
+    );
+  });
+
+  it("shows v{newest id + 1} for a file under review (#143)", async () => {
+    const user = userEvent.setup();
+    const { http, HttpResponse } = await import("msw");
+    const { server } = await import("@/test/mocks/server");
+    server.use(
+      http.get("http://localhost:8080/api/stat/*", () =>
+        HttpResponse.json({
+          path: "README.md",
+          root: "mock-root",
+          modified: "2026-05-20T00:00:00Z",
+          created: "2026-05-19T00:00:00Z",
+          state: "review",
+          hasOpenComments: false,
+        })
+      ),
+      http.get("http://localhost:8080/api/revisions/*", ({ request }) => {
+        const url = new URL(request.url);
+        const id = url.searchParams.get("id");
+        // getRevision (single-snapshot fetch, used to resolve versionReady)
+        // hits this same route with an `id` query param — mirror the
+        // default handler's shape so its content isn't undefined.
+        if (id) {
+          return HttpResponse.json({
+            id,
+            ts: "2026-05-20T00:00:00Z",
+            author: "ai",
+            content: "# README.md\n\nprevious content",
+          });
+        }
+        return HttpResponse.json({
+          path: "README.md",
+          root: "mock-root",
+          // ListRevisions returns newest-first: r-002 (newest) then r-001.
+          revisions: [
+            { id: "r-002", ts: "2026-05-20T00:00:00Z", author: "ai" },
+            { id: "r-001", ts: "2026-05-19T00:00:00Z", author: "ai" },
+          ],
+        });
+      })
+    );
+
+    renderPage();
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
+    );
+    await user.click(screen.getByTestId("sidebar-file-README.md"));
+
+    // Newest retained revision is r-002 → the currently displayed content is
+    // one past that, v3.
+    await waitFor(() =>
+      expect(screen.getByTestId("editor-active-version")).toHaveTextContent("v3")
+    );
+  });
+
+  it("keeps the version number correct past the MaxRevisions=20 trim (#143 codex review)", async () => {
+    const user = userEvent.setup();
+    const { http, HttpResponse } = await import("msw");
+    const { server } = await import("@/test/mocks/server");
+    server.use(
+      http.get("http://localhost:8080/api/stat/*", () =>
+        HttpResponse.json({
+          path: "README.md",
+          root: "mock-root",
+          modified: "2026-05-20T00:00:00Z",
+          created: "2026-05-19T00:00:00Z",
+          state: "review",
+          hasOpenComments: false,
+        })
+      ),
+      http.get("http://localhost:8080/api/revisions/*", ({ request }) => {
+        const url = new URL(request.url);
+        const id = url.searchParams.get("id");
+        // getRevision (single-snapshot fetch, used to resolve versionReady)
+        // hits this same route with an `id` query param — mirror the
+        // default handler's shape so its content isn't undefined.
+        if (id) {
+          return HttpResponse.json({
+            id,
+            ts: "2026-05-20T00:00:00Z",
+            author: "ai",
+            content: "# README.md\n\nprevious content",
+          });
+        }
+        return HttpResponse.json({
+          path: "README.md",
+          root: "mock-root",
+          // history.jsonl was trimmed to MaxRevisions=20, but nextID() derives
+          // from the max retained id, so the id keeps climbing past 20 —
+          // revisions.length alone (here 1) would wrongly report v2.
+          revisions: [{ id: "r-021", ts: "2026-05-20T00:00:00Z", author: "ai" }],
+        });
+      })
+    );
+
+    renderPage();
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
+    );
+    await user.click(screen.getByTestId("sidebar-file-README.md"));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("editor-active-version")).toHaveTextContent("v22")
+    );
+  });
+
+  it("falls back to revisions.length + 1 when the newest revision id fails to parse (#143)", async () => {
+    const user = userEvent.setup();
+    const { http, HttpResponse } = await import("msw");
+    const { server } = await import("@/test/mocks/server");
+    server.use(
+      http.get("http://localhost:8080/api/stat/*", () =>
+        HttpResponse.json({
+          path: "README.md",
+          root: "mock-root",
+          modified: "2026-05-20T00:00:00Z",
+          created: "2026-05-19T00:00:00Z",
+          state: "review",
+          hasOpenComments: false,
+        })
+      ),
+      http.get("http://localhost:8080/api/revisions/*", ({ request }) => {
+        const url = new URL(request.url);
+        const id = url.searchParams.get("id");
+        // getRevision (single-snapshot fetch, used to resolve versionReady)
+        // hits this same route with an `id` query param — mirror the
+        // default handler's shape so its content isn't undefined.
+        if (id) {
+          return HttpResponse.json({
+            id,
+            ts: "2026-05-20T00:00:00Z",
+            author: "ai",
+            content: "# README.md\n\nprevious content",
+          });
+        }
+        return HttpResponse.json({
+          path: "README.md",
+          root: "mock-root",
+          revisions: [
+            { id: "weird", ts: "2026-05-20T00:00:00Z", author: "ai" },
+            { id: "r-001", ts: "2026-05-19T00:00:00Z", author: "ai" },
+          ],
+        });
+      })
+    );
+
+    renderPage();
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
+    );
+    await user.click(screen.getByTestId("sidebar-file-README.md"));
+
+    // Newest id ("weird") doesn't parse → falls back to length + 1 = 3.
+    await waitFor(() =>
+      expect(screen.getByTestId("editor-active-version")).toHaveTextContent("v3")
+    );
+  });
+
+  it("does not show a version badge while the initial stat fetch is in flight (#143 round 3)", async () => {
+    const user = userEvent.setup();
+    const { http, HttpResponse, delay } = await import("msw");
+    const { server } = await import("@/test/mocks/server");
+    server.use(
+      http.get("http://localhost:8080/api/stat/*", async () => {
+        await delay(30);
+        return HttpResponse.json({
+          path: "README.md",
+          root: "mock-root",
+          modified: "2026-05-20T00:00:00Z",
+          created: "2026-05-19T00:00:00Z",
+          state: "draft",
+          hasOpenComments: false,
+        });
+      })
+    );
+
+    renderPage();
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
+    );
+    await user.click(screen.getByTestId("sidebar-file-README.md"));
+
+    // The stat fetch is still in flight — versionReady hasn't resolved yet,
+    // so the badge must not render a guessed version (#143 round 3).
+    expect(screen.queryByTestId("editor-active-version")).not.toBeInTheDocument();
+
+    // Once stat resolves (draft, no history), v1 is exact and shows up.
+    await waitFor(() =>
+      expect(screen.getByTestId("editor-active-version")).toHaveTextContent("v1")
+    );
+  });
+
+  it("keeps the version badge hidden when listRevisions fails after a successful stat (#143 round 3)", async () => {
+    const user = userEvent.setup();
+    const { http, HttpResponse } = await import("msw");
+    const { server } = await import("@/test/mocks/server");
+    server.use(
+      http.get("http://localhost:8080/api/stat/*", () =>
+        HttpResponse.json({
+          path: "README.md",
+          root: "mock-root",
+          modified: "2026-05-20T00:00:00Z",
+          created: "2026-05-19T00:00:00Z",
+          state: "review",
+          hasOpenComments: false,
+        })
+      ),
+      http.get("http://localhost:8080/api/revisions/*", () =>
+        HttpResponse.json({ error: "boom" }, { status: 500 })
+      )
+    );
+
+    renderPage();
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
+    );
+    await user.click(screen.getByTestId("sidebar-file-README.md"));
+
+    // Give the failed stat/listRevisions chain plenty of time to settle —
+    // the catch branch degrades reviewState to "draft" (editor stays usable)
+    // but must not guess a version, unlike an actual draft file (#143
+    // round 3).
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(screen.queryByTestId("editor-active-version")).not.toBeInTheDocument();
+  });
+
+  it("clears the previous file's version badge the instant the active tab changes (#143 round 3)", async () => {
+    const user = userEvent.setup();
+    const { http, HttpResponse } = await import("msw");
+    const { server } = await import("@/test/mocks/server");
+    server.use(
+      http.get("http://localhost:8080/api/stat/*", ({ request }) => {
+        const url = new URL(request.url);
+        const path = url.pathname.replace(/^\/api\/stat\//, "");
+        return HttpResponse.json({
+          path,
+          root: "mock-root",
+          modified: "2026-05-20T00:00:00Z",
+          created: "2026-05-19T00:00:00Z",
+          state: path === "README.md" ? "review" : "draft",
+          hasOpenComments: false,
+        });
+      }),
+      http.get("http://localhost:8080/api/revisions/*", ({ request }) => {
+        const url = new URL(request.url);
+        const id = url.searchParams.get("id");
+        if (id) {
+          return HttpResponse.json({
+            id,
+            ts: "2026-05-20T00:00:00Z",
+            author: "ai",
+            content: "# README.md\n\nprevious content",
+          });
+        }
+        return HttpResponse.json({
+          path: "README.md",
+          root: "mock-root",
+          revisions: [{ id: "r-002", ts: "2026-05-20T00:00:00Z", author: "ai" }],
+        });
+      })
+    );
+
+    renderPage();
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
+    );
+    await user.click(screen.getByTestId("sidebar-file-README.md"));
+    await waitFor(() =>
+      expect(screen.getByTestId("editor-active-version")).toHaveTextContent("v3")
+    );
+
+    await user.click(screen.getByTestId("sidebar-dir-docs"));
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-file-docs/intro.md")).toBeInTheDocument()
+    );
+    await user.click(screen.getByTestId("sidebar-file-docs/intro.md"));
+
+    // #143 round 3: switching the active tab must never let the previous
+    // file's version linger, even for a single frame — the render-time
+    // reset (not an effect) clears versionReady synchronously on file-key
+    // change.
+    expect(screen.queryByTestId("editor-active-version")).not.toHaveTextContent("v3");
+  });
+
+  it("fetches a newly-listed revision's content even after versionReady has already resolved (#143 round 4 regression)", async () => {
+    // Regression guard: an earlier version of the revContents-fetch effect
+    // gated its entire body on `!versionReady`, so once the badge resolved
+    // once it stopped fetching content for any revision that showed up
+    // later (e.g. a SyncExternalEdit-appended revision discovered by the
+    // reviewRefresh poll while the tab stays open). That silently broke both
+    // the diff gutter's baseline search and computeDisplayVersion (which
+    // then saw `newestRevisionContent === undefined` and guessed `+1`).
+    const user = userEvent.setup();
+    const { http, HttpResponse } = await import("msw");
+    const { server } = await import("@/test/mocks/server");
+
+    class MockEventSource {
+      static instances: MockEventSource[] = [];
+      url: string;
+      onopen: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      onmessage: ((e: MessageEvent<string>) => void) | null = null;
+      closed = false;
+      constructor(url: string) {
+        this.url = url;
+        MockEventSource.instances.push(this);
+      }
+      emitMessage(data: unknown) {
+        this.onmessage?.({ data: JSON.stringify(data) } as MessageEvent<string>);
+      }
+      close() {
+        this.closed = true;
+      }
+    }
+    vi.stubGlobal("EventSource", MockEventSource);
+
+    try {
+      // listRevisions starts with a single revision; a second one is added
+      // server-side partway through the test to simulate an out-of-band
+      // append.
+      let revisionList = [{ id: "r-001", ts: "2026-05-19T00:00:00Z", author: "ai" }];
+      const fetchedRevisionIds: string[] = [];
+      server.use(
+        http.get("http://localhost:8080/api/stat/*", () =>
+          HttpResponse.json({
+            path: "README.md",
+            root: "mock-root",
+            modified: "2026-05-20T00:00:00Z",
+            created: "2026-05-19T00:00:00Z",
+            state: "review",
+            hasOpenComments: false,
+          })
+        ),
+        http.get("http://localhost:8080/api/revisions/*", ({ request }) => {
+          const url = new URL(request.url);
+          const id = url.searchParams.get("id");
+          if (id) {
+            fetchedRevisionIds.push(id);
+            return HttpResponse.json({
+              id,
+              ts: "2026-05-20T00:00:00Z",
+              author: "ai",
+              content: "# README.md\n\nprevious content",
+            });
+          }
+          return HttpResponse.json({
+            path: "README.md",
+            root: "mock-root",
+            revisions: revisionList,
+          });
+        })
+      );
+
+      renderPage();
+      await waitFor(() =>
+        expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
+      );
+      await user.click(screen.getByTestId("sidebar-file-README.md"));
+
+      // versionReady resolves off the single r-001 revision, fetching its
+      // content once.
+      await waitFor(() =>
+        expect(screen.getByTestId("editor-active-version")).toHaveTextContent("v2")
+      );
+      expect(fetchedRevisionIds).toEqual(["r-001"]);
+
+      // A second revision appears server-side. Simulate the reviewRefresh
+      // poll's out-of-band discovery via an SSE `comments` event naming the
+      // (still) active, still-open file — this re-fetches stat + listRevisions
+      // without switching tabs (so versionReady stays true throughout).
+      revisionList = [
+        { id: "r-002", ts: "2026-05-21T00:00:00Z", author: "ai" },
+        { id: "r-001", ts: "2026-05-19T00:00:00Z", author: "ai" },
+      ];
+      const instance = MockEventSource.instances[0];
+      instance.emitMessage({ kind: "comments", root: "mock-root", path: "README.md" });
+
+      // #143 round 4: even though versionReady already resolved to true
+      // above, the newly-listed r-002's content must still be fetched.
+      await waitFor(() => expect(fetchedRevisionIds).toContain("r-002"));
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("hides the version badge while a newly-listed revision's content is still in flight, even though versionReady is already true (#143 round 5 codex review)", async () => {
+    // Regression guard: displayVersion used to gate on `versionReady` alone.
+    // Once true (from an earlier newest revision), it never resets to
+    // false, so a later revision whose content hasn't arrived yet (or whose
+    // fetch fails outright) fell through to `newestRevisionContent ===
+    // undefined`, which computeDisplayVersion treats as "not matching" — a
+    // silently wrong (and, on fetch failure, permanently stuck) `+1`.
+    const user = userEvent.setup();
+    const { http, HttpResponse } = await import("msw");
+    const { server } = await import("@/test/mocks/server");
+
+    class MockEventSource {
+      static instances: MockEventSource[] = [];
+      url: string;
+      onopen: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      onmessage: ((e: MessageEvent<string>) => void) | null = null;
+      closed = false;
+      constructor(url: string) {
+        this.url = url;
+        MockEventSource.instances.push(this);
+      }
+      emitMessage(data: unknown) {
+        this.onmessage?.({ data: JSON.stringify(data) } as MessageEvent<string>);
+      }
+      close() {
+        this.closed = true;
+      }
+    }
+    vi.stubGlobal("EventSource", MockEventSource);
+
+    try {
+      let revisionList = [{ id: "r-001", ts: "2026-05-19T00:00:00Z", author: "ai" }];
+      // Stalls r-002's getRevision call indefinitely (until the test
+      // releases it) so its content stays "not yet fetched".
+      const release: { current: () => void } = { current: () => {} };
+      const r002Gate = new Promise<void>((resolve) => {
+        release.current = resolve;
+      });
+
+      server.use(
+        http.get("http://localhost:8080/api/stat/*", () =>
+          HttpResponse.json({
+            path: "README.md",
+            root: "mock-root",
+            modified: "2026-05-20T00:00:00Z",
+            created: "2026-05-19T00:00:00Z",
+            state: "review",
+            hasOpenComments: false,
+          })
+        ),
+        http.get("http://localhost:8080/api/revisions/*", async ({ request }) => {
+          const url = new URL(request.url);
+          const id = url.searchParams.get("id");
+          if (id === "r-002") {
+            await r002Gate;
+            return HttpResponse.json({
+              id,
+              ts: "2026-05-21T00:00:00Z",
+              author: "ai",
+              // Matches the current buffer exactly (the external-edit-sync
+              // path) — no `+1` once this actually lands.
+              content: "# README.md\n\nmock content",
+            });
+          }
+          if (id) {
+            return HttpResponse.json({
+              id,
+              ts: "2026-05-20T00:00:00Z",
+              author: "ai",
+              content: "# README.md\n\nprevious content",
+            });
+          }
+          return HttpResponse.json({
+            path: "README.md",
+            root: "mock-root",
+            revisions: revisionList,
+          });
+        })
+      );
+
+      renderPage();
+      await waitFor(() =>
+        expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
+      );
+      await user.click(screen.getByTestId("sidebar-file-README.md"));
+
+      // versionReady resolves off the single r-001 revision (content
+      // mismatches the current buffer → `+1` → v2).
+      await waitFor(() =>
+        expect(screen.getByTestId("editor-active-version")).toHaveTextContent("v2")
+      );
+
+      // A newer revision (r-002) appears server-side; its content fetch is
+      // stalled by the gate above.
+      revisionList = [
+        { id: "r-002", ts: "2026-05-21T00:00:00Z", author: "ai" },
+        { id: "r-001", ts: "2026-05-19T00:00:00Z", author: "ai" },
+      ];
+      const instance = MockEventSource.instances[0];
+      instance.emitMessage({ kind: "comments", root: "mock-root", path: "README.md" });
+
+      // #143 round 5: the badge must disappear (not keep showing the stale
+      // v2, and not guess a wrong v3) while r-002's content is still in
+      // flight.
+      await waitFor(() =>
+        expect(screen.queryByTestId("editor-active-version")).not.toBeInTheDocument()
+      );
+
+      release.current();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("shows the correct version once the newly-listed revision's content arrives, without a false +1 (#143 round 5 codex review)", async () => {
+    const user = userEvent.setup();
+    const { http, HttpResponse } = await import("msw");
+    const { server } = await import("@/test/mocks/server");
+
+    class MockEventSource {
+      static instances: MockEventSource[] = [];
+      url: string;
+      onopen: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      onmessage: ((e: MessageEvent<string>) => void) | null = null;
+      closed = false;
+      constructor(url: string) {
+        this.url = url;
+        MockEventSource.instances.push(this);
+      }
+      emitMessage(data: unknown) {
+        this.onmessage?.({ data: JSON.stringify(data) } as MessageEvent<string>);
+      }
+      close() {
+        this.closed = true;
+      }
+    }
+    vi.stubGlobal("EventSource", MockEventSource);
+
+    try {
+      let revisionList = [{ id: "r-001", ts: "2026-05-19T00:00:00Z", author: "ai" }];
+
+      server.use(
+        http.get("http://localhost:8080/api/stat/*", () =>
+          HttpResponse.json({
+            path: "README.md",
+            root: "mock-root",
+            modified: "2026-05-20T00:00:00Z",
+            created: "2026-05-19T00:00:00Z",
+            state: "review",
+            hasOpenComments: false,
+          })
+        ),
+        http.get("http://localhost:8080/api/revisions/*", ({ request }) => {
+          const url = new URL(request.url);
+          const id = url.searchParams.get("id");
+          if (id === "r-002") {
+            return HttpResponse.json({
+              id,
+              ts: "2026-05-21T00:00:00Z",
+              author: "ai",
+              // Matches the current buffer exactly (external-edit-sync path)
+              // — the correct version is plain `id` (v2), never `id + 1`
+              // (v3).
+              content: "# README.md\n\nmock content",
+            });
+          }
+          if (id) {
+            return HttpResponse.json({
+              id,
+              ts: "2026-05-20T00:00:00Z",
+              author: "ai",
+              content: "# README.md\n\nprevious content",
+            });
+          }
+          return HttpResponse.json({
+            path: "README.md",
+            root: "mock-root",
+            revisions: revisionList,
+          });
+        })
+      );
+
+      renderPage();
+      await waitFor(() =>
+        expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
+      );
+      await user.click(screen.getByTestId("sidebar-file-README.md"));
+
+      await waitFor(() =>
+        expect(screen.getByTestId("editor-active-version")).toHaveTextContent("v2")
+      );
+
+      revisionList = [
+        { id: "r-002", ts: "2026-05-21T00:00:00Z", author: "ai" },
+        { id: "r-001", ts: "2026-05-19T00:00:00Z", author: "ai" },
+      ];
+      const instance = MockEventSource.instances[0];
+      instance.emitMessage({ kind: "comments", root: "mock-root", path: "README.md" });
+
+      // #143 round 5: once r-002's content lands and matches the current
+      // buffer, the badge must show the exact match version (v2 = plain
+      // `id`), never a guessed `+1` (v3) at any point along the way.
+      await waitFor(() =>
+        expect(screen.getByTestId("editor-active-version")).toHaveTextContent("v2")
+      );
+      expect(screen.queryByTestId("editor-active-version")).not.toHaveTextContent("v3");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("switches active file via tab click and closes a tab via the close button", async () => {
