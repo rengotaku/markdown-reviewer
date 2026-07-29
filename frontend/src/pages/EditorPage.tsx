@@ -74,6 +74,7 @@ import { lineDiff, hasChanges } from "@/utils/lineDiff";
 import { dirOf } from "@/utils/dirOf";
 import { splitPreamble } from "@/utils/frontmatter";
 import { computeDiffGutterMarks } from "@/utils/diffGutterMarks";
+import { computeDisplayVersion } from "@/utils/revisionVersion";
 import type { HighlightComment } from "@/components/tiptap/extensions/CommentHighlight";
 import { BAR_HEIGHT, TAB_CONTENT_HEIGHT } from "@/theme/dimensions";
 
@@ -191,6 +192,12 @@ export function EditorPage() {
   const [reviewState, setReviewState] = useState<ReviewState | undefined>(undefined);
   const [revisions, setRevisions] = useState<RevisionMeta[]>([]);
   const [revContents, setRevContents] = useState<Record<string, string>>({});
+  // #143 round 3: whether the header version badge (v{N}) can be computed
+  // correctly for the active file yet. See the readiness effect below for
+  // the exact conditions; gating on this (rather than deriving straight from
+  // `revisions`) is what stops a stale/guessed v1 from flashing before the
+  // real revision list has loaded.
+  const [versionReady, setVersionReady] = useState(false);
   const [reviewRefresh, setReviewRefresh] = useState(0);
   const [diffMode, setDiffMode] = useState(false);
   const [selectedRevId, setSelectedRevId] = useState<string | null>(null);
@@ -372,6 +379,9 @@ export function EditorPage() {
     setRevisions([]);
     setRevContents({});
     setComments([]);
+    // #143 round 3: the previous file's version number must never linger
+    // for even one frame on the newly-active tab.
+    setVersionReady(false);
   }
 
   // Fetch review state + revision list for the active file. Degrades to
@@ -395,9 +405,21 @@ export function EditorPage() {
         markReviewFile(activeKey, stat.hasOpenComments ?? false);
         if (state === "review") {
           const rl = await listRevisions(activePath, activeFileRoot);
-          if (!cancelled) setRevisions(rl.revisions);
+          if (!cancelled) {
+            setRevisions(rl.revisions);
+            // #143 round 3: a review file with no saved revisions yet has no
+            // history to wait on — v1 is exact. A non-empty list still needs
+            // the newest revision's content (the revContents-fetch effect
+            // below resolves versionReady once that lands), so it is left
+            // unresolved here to avoid flashing a guess.
+            if (rl.revisions.length === 0) setVersionReady(true);
+          }
         } else {
           setRevisions([]);
+          // Draft has no revision history, so v1 is exact the instant we
+          // know the file isn't under review — no need to wait on anything
+          // else (#143 round 3).
+          if (!cancelled) setVersionReady(true);
         }
       } catch (err) {
         if (err instanceof HTTPError && err.response.status === 404) {
@@ -406,6 +428,9 @@ export function EditorPage() {
         if (!cancelled) {
           setReviewState("draft");
           setRevisions([]);
+          // #143 round 3: a failed stat/list must not silently freeze the
+          // badge on a guessed version — leave it unresolved (hidden)
+          // instead of defaulting to v1.
         }
       }
     })();
@@ -552,40 +577,88 @@ export function EditorPage() {
   // often identical to savedMarkdown (AppendRevision snapshots pre-save), so
   // we need the full history to find one that differs. Skips fetches for
   // revisions we already have; cache is cleared on file switch.
+  //
+  // Also resolves the header version badge (#143 round 3) once the newest
+  // revision's content is available — either just fetched below or already
+  // cached from an earlier run of this effect — because computeDisplayVersion
+  // needs that content to tell apart the two ways a revision gets appended
+  // (browser save vs. external/AI edit sync; see computeDisplayVersion's
+  // docstring). The draft case and the review-with-zero-revisions case are
+  // resolved eagerly by the stat/revisions effect above instead, since
+  // neither needs revision content. Deliberately one-way (never resets
+  // versionReady back to false itself): only the file-switch reset above does
+  // that, so periodic stat/comment polling doesn't flicker the badge once
+  // resolved. setState only happens after an await — including the
+  // microtask yield on the already-cached path — so it does not trigger the
+  // synchronous-setState-in-effect lint.
+  //
+  // IMPORTANT (#143 round 4 — regression fix): this effect must keep fetching
+  // whenever `missing` is non-empty, even after versionReady has already
+  // resolved to true. The diff gutter (below) and `newestRevisionContent`
+  // both depend on revContents staying complete for every revision the app
+  // learns about later (e.g. a `SyncExternalEdit`-appended revision arriving
+  // via polling while the tab is open) — not just the ones needed to resolve
+  // the badge once. Gating the whole effect on `!versionReady` silently
+  // stopped fetching new revisions' content after the first resolution,
+  // leaving the gutter stuck on a stale baseline and letting
+  // `newestRevisionContent` fall back to `undefined` (→ a wrong `+1` on the
+  // badge — the very bug round 3 fixed). Only skip the effect entirely when
+  // there is truly nothing to do: no missing content AND the badge is
+  // already resolved.
   useEffect(() => {
     if (!activePath) return;
     if (revisions.length === 0) return;
     const missing = revisions.filter((r) => !(r.id in revContents));
-    if (missing.length === 0) return;
+    if (missing.length === 0 && versionReady) return;
     let cancelled = false;
     (async () => {
-      const fetched = await Promise.all(
-        missing.map(async (r) => {
-          try {
-            const rev = await getRevision(activePath, r.id, activeFileRoot);
-            return [r.id, rev.content] as [string, string];
-          } catch {
-            return null;
+      let fetchedIds: string[] = [];
+      if (missing.length > 0) {
+        const fetched = await Promise.all(
+          missing.map(async (r) => {
+            try {
+              const rev = await getRevision(activePath, r.id, activeFileRoot);
+              return [r.id, rev.content] as [string, string];
+            } catch {
+              return null;
+            }
+          })
+        );
+        if (cancelled) return;
+        setRevContents((prev) => {
+          const next = { ...prev };
+          let changed = false;
+          for (const item of fetched) {
+            if (item && !(item[0] in next)) {
+              next[item[0]] = item[1];
+              changed = true;
+            }
           }
-        })
-      );
+          return changed ? next : prev;
+        });
+        fetchedIds = fetched
+          .filter((item): item is [string, string] => item !== null)
+          .map((item) => item[0]);
+      } else {
+        // Nothing left to fetch this run (the newest revision's content is
+        // already cached from a prior run) — still yield to a microtask so
+        // the versionReady check below stays async.
+        await Promise.resolve();
+      }
       if (cancelled) return;
-      setRevContents((prev) => {
-        const next = { ...prev };
-        let changed = false;
-        for (const item of fetched) {
-          if (item && !(item[0] in next)) {
-            next[item[0]] = item[1];
-            changed = true;
-          }
-        }
-        return changed ? next : prev;
-      });
+      // #143 round 3: check both the pre-existing cache and anything just
+      // fetched above — the newest revision may have already been cached by
+      // an earlier run of this effect (the `missing` filter above excludes
+      // it), so relying on `fetchedIds` alone would miss that case.
+      const latestId = revisions[0].id;
+      if (latestId in revContents || fetchedIds.includes(latestId)) {
+        setVersionReady(true);
+      }
     })();
     return () => {
       cancelled = true;
     };
-  }, [activePath, activeFileRoot, revisions, revContents]);
+  }, [activePath, activeFileRoot, revisions, revContents, versionReady]);
 
   // Compute and push diff-gutter marks for the active file. The gutter mirrors
   // DiffView's comparison axis: baseline = the newest revision whose body
@@ -717,6 +790,33 @@ export function EditorPage() {
     const c = revContents[r.id];
     return c !== undefined && hasChanges(lineDiff(c, currentEditorText));
   });
+
+  // #143 round 3: newest revision's raw content (hint-stripped), used by
+  // computeDisplayVersion to tell the external-edit path (content already
+  // matches — no `+1`) apart from the browser-save path (content is one
+  // save behind — `+1`). undefined while still being fetched — see
+  // displayVersion below, which refuses to call computeDisplayVersion until
+  // this is defined (for files with any revision history).
+  const newestRevisionContent =
+    revisions.length > 0 && revisions[0].id in revContents
+      ? stripHint(revContents[revisions[0].id])
+      : undefined;
+  // #143 round 4 codex review: `versionReady` alone isn't enough once a file
+  // is under review with history — it can be true from an *earlier* newest
+  // revision while the current one's content is still in flight (a new
+  // revision just landed in `revisions` but the revContents-fetch effect
+  // hasn't resolved it yet, or its getRevision call failed and never will).
+  // Recomputing from a stale/undefined newestRevisionContent would either
+  // show yesterday's version for a beat or, on a failed fetch, wrongly and
+  // permanently guess `+1` (versionReady never resets to false on its own).
+  // So for files with revision history, only compute once *both* the badge
+  // is otherwise ready AND the newest revision's content has actually
+  // arrived; a history-less file (draft, or review with zero revisions) has
+  // nothing to wait on beyond versionReady itself.
+  const displayVersion =
+    versionReady && (revisions.length === 0 || newestRevisionContent !== undefined)
+      ? computeDisplayVersion(revisions, newestRevisionContent, currentEditorText)
+      : undefined;
 
   // Migrate any persisted legacy single-root files onto the default root
   // the first time we learn which root that is. Idempotent — subsequent
@@ -1286,14 +1386,12 @@ export function EditorPage() {
             sx={{
               pl: 0.5,
               pr: 1.5,
-              // Fixed (not min) height, shared by all three pane headers, so
-              // the header divider stays one continuous line regardless of
-              // which pane holds the tallest control (#65, #90). BAR_HEIGHT = 37px.
+              // #143: この 1 行目の下線は廃止した。BAR_HEIGHT 固定は、直下の
+              // RootTabs（2 行目）のディバイダを他ペインの 2 行目と揃えて
+              // 1 本の連続線にするために引き続き必要（#65, #90）。
               height: BAR_HEIGHT,
               flexShrink: 0,
               boxSizing: "border-box",
-              borderBottom: "1px solid",
-              borderColor: "divider",
               display: "flex",
               alignItems: "center",
               gap: 1,
@@ -1359,13 +1457,13 @@ export function EditorPage() {
             alignItems: "center",
             gap: 1,
             px: 2,
-            // Fixed height shared with the sidebar / comment pane headers so
-            // the three dividers form one continuous line (#65, #90). BAR_HEIGHT = 37px.
+            // #143: この 1 行目の下線は廃止した。BAR_HEIGHT 固定は、直下の
+            // タブバー（2 行目、editor-tabs の borderBottom）のディバイダを
+            // 他ペインの 2 行目と揃えて 1 本の連続線にするために引き続き
+            // 必要（#65, #90）。
             height: BAR_HEIGHT,
             flexShrink: 0,
             boxSizing: "border-box",
-            borderBottom: "1px solid",
-            borderColor: "divider",
           }}
         >
           <Box
@@ -1404,6 +1502,37 @@ export function EditorPage() {
               {activeFile ? activeFile.path : "ファイルが選択されていません"}
               {activeFile?.isDirty && " •"}
             </Typography>
+            {/* #143: 現在の内容がどの版にあたるかを算出して表示する。
+                revision は「保存前の内容」(ブラウザ保存 PUT /api/files) と
+                「現在の内容そのもの」(外部編集同期 SyncExternalEdit、AI の
+                in-place 編集が主用途) の 2 経路で追加され、どちらだったかで
+                現在の版が「最新 revision と同じ」か「その1つ先」かが変わる
+                （判定ロジックは computeDisplayVersion 参照）。
+                また revisions.length ではなく最新 revision の ID から算出する
+                のは、history.jsonl が MaxRevisions=20 でトリムされ配列長が
+                頭打ちになっても ID は単調増加し続けるため（codex レビュー
+                round 2 指摘）。
+                読み込み完了 (versionReady) までバッジ自体を出さない（誤った
+                v1 の一瞬表示や取得失敗時の固定表示を防ぐ。codex レビュー
+                round 3 指摘）。既存の枠（パス / ⓘ / レビュー中）を上書きせず
+                独立した表示枠として追加する（1枠1意味）。 */}
+            {activeFile && displayVersion !== undefined && (
+              <Tooltip
+                title={
+                  revisions.length > 0
+                    ? `現在は v${displayVersion}（最新 revision: ${revisions[0].id}）`
+                    : "保存済み revision なし → 現在は v1"
+                }
+              >
+                <Typography
+                  variant="caption"
+                  sx={{ color: "text.secondary", flexShrink: 0, whiteSpace: "nowrap" }}
+                  data-testid="editor-active-version"
+                >
+                  v{displayVersion}
+                </Typography>
+              </Tooltip>
+            )}
             {activeFile && (activeFile.serverCreated || activeFile.serverModified) && (
               <Tooltip
                 title={
