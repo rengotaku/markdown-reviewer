@@ -109,9 +109,13 @@ function markdownBodySx(theme: Theme): SystemStyleObject<Theme> {
       my: 0.75,
       borderCollapse: "collapse",
     },
+    // Horizontal cell padding is kept tight (4px) on purpose: the table box
+    // itself lines up with the surrounding paragraphs, so every px of
+    // border+padding shifts the first column's *text* right and reads as the
+    // table being indented. 1px border + 4px keeps that offset at 5px.
     "& th, & td": {
       border: `1px solid ${theme.palette.divider}`,
-      px: 1,
+      px: 0.5,
       py: 0.5,
     },
     "& a": { color: theme.palette.primary.main },
