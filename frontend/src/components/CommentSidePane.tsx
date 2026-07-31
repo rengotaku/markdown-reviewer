@@ -24,9 +24,12 @@ import ReplayIcon from "@mui/icons-material/Replay";
 import ReplyIcon from "@mui/icons-material/Reply";
 import OpenInFullIcon from "@mui/icons-material/OpenInFull";
 import RefreshIcon from "@mui/icons-material/Refresh";
+import { alpha } from "@mui/material/styles";
 import type { SxProps, Theme } from "@mui/material/styles";
+import type { SystemStyleObject } from "@mui/system";
 import type { CommentJSON, CommentReply } from "@/api";
 import { BAR_HEIGHT } from "@/theme/dimensions";
+import { renderCommentMarkdown } from "@/utils/commentMarkdown";
 
 /** AI-authored comments/replies are read-only to the human reviewer: they can
  *  reply, resolve, and jump to them, but not edit the body or delete them. The
@@ -39,10 +42,110 @@ const isAiAuthored = (author?: string): boolean => author === AI_AUTHOR;
  *  dialog always shows the full text. */
 const BODY_PREVIEW_LIMIT = 200;
 
-/** A text block that collapses to a `BODY_PREVIEW_LIMIT`-char preview when long,
- *  with an inline "続きを表示 / 折りたたむ" toggle. Each instance keeps its own
- *  expand state, so a comment body and each of its replies collapse
- *  independently. Short text renders in full with no toggle. */
+/** Nested-selector styles applied to a rendered Markdown body (#147) so
+ *  block elements (headings/lists/tables/code/...) read as a compact preview
+ *  row rather than a full article: tight vertical rhythm, no leading/trailing
+ *  gap, a horizontally-scrollable table (never widening the side pane), and
+ *  colors drawn from theme tokens so light/dark both work without hardcoded
+ *  hex. No syntax highlighting — code blocks are just monospace + a flat
+ *  tint. */
+function markdownBodySx(theme: Theme): SystemStyleObject<Theme> {
+  const codeBg = alpha(theme.palette.text.primary, 0.08);
+  return {
+    "& > :first-of-type": { mt: 0 },
+    "& > :last-child": { mb: 0 },
+    "& p": { my: 0.75 },
+    // Tailwind's preflight resets h1-h6 to inherited size/weight, so a `##`
+    // would render indistinguishable from body text. Restore a compact scale
+    // sized for the narrow side pane rather than article-sized headings.
+    "& h1, & h2, & h3, & h4, & h5, & h6": {
+      mt: 1.25,
+      mb: 0.5,
+      fontWeight: 700,
+      lineHeight: 1.3,
+    },
+    "& h1": { fontSize: "1.2em" },
+    "& h2": { fontSize: "1.1em" },
+    "& h3": { fontSize: "1.02em" },
+    "& h4, & h5, & h6": { fontSize: "1em", color: theme.palette.text.secondary },
+    // Tailwind's preflight zeroes out list markers globally, so restore them
+    // here. Matches the editor's convention (DiffGutter/tiptap): disc at every
+    // nesting level for <ul>, decimal for <ol>.
+    "& ul, & ol": { my: 0.75, pl: 3 },
+    "& ul": { listStyleType: "disc" },
+    "& ol": { listStyleType: "decimal" },
+    "& li": { display: "list-item" },
+    "& li + li": { mt: 0.25 },
+    "& li > ul, & li > ol": { my: 0.25 },
+    "& blockquote": {
+      my: 0.75,
+      pl: 1.5,
+      ml: 0,
+      borderLeft: `3px solid ${theme.palette.divider}`,
+      color: theme.palette.text.secondary,
+    },
+    "& hr": { my: 1, border: 0, borderTop: `1px solid ${theme.palette.divider}` },
+    "& code": {
+      fontFamily:
+        'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
+      fontSize: "0.85em",
+      bgcolor: codeBg,
+      px: 0.5,
+      py: 0.125,
+      borderRadius: 0.5,
+    },
+    "& pre": {
+      my: 0.75,
+      p: 1,
+      borderRadius: 1,
+      bgcolor: codeBg,
+      overflowX: "auto",
+    },
+    "& pre code": { bgcolor: "transparent", p: 0, fontSize: "0.8em" },
+    "& table": {
+      display: "block",
+      overflowX: "auto",
+      maxWidth: "100%",
+      my: 0.75,
+      borderCollapse: "collapse",
+    },
+    "& th, & td": {
+      border: `1px solid ${theme.palette.divider}`,
+      px: 1,
+      py: 0.5,
+    },
+    "& a": { color: theme.palette.primary.main },
+  };
+}
+
+/** CSS-only height clamp for a collapsed long body: unlike slicing the
+ *  Markdown source (which breaks mid-syntax — a table or fence cut in half),
+ *  the full source is always rendered and only the *visual* height is capped,
+ *  with a bottom fade hinting there's more. */
+function clampSx(theme: Theme): SystemStyleObject<Theme> {
+  return {
+    maxHeight: "6em",
+    overflow: "hidden",
+    position: "relative",
+    "&::after": {
+      content: '""',
+      position: "absolute",
+      insetInline: 0,
+      bottom: 0,
+      height: "1.5em",
+      background: `linear-gradient(to bottom, transparent, ${theme.palette.background.default})`,
+      pointerEvents: "none",
+    },
+  };
+}
+
+/** Renders a comment/reply's full Markdown source (#147) and collapses tall
+ *  bodies to a CSS-clamped preview with an inline "続きを表示 / 折りたたむ"
+ *  toggle below it. Each instance keeps its own expand state, so a comment
+ *  body and each of its replies collapse independently. The clamp is purely
+ *  visual — the full source is always in the DOM, so mid-syntax truncation
+ *  (a half-rendered table/fence) can't happen. Short text renders in full
+ *  with no toggle. */
 function CollapsibleText({
   text,
   testid,
@@ -54,9 +157,20 @@ function CollapsibleText({
 }) {
   const [expanded, setExpanded] = useState(false);
   const long = text.length > BODY_PREVIEW_LIMIT;
+  const collapsed = long && !expanded;
   return (
-    <Typography variant="body2" sx={sx} data-testid={testid}>
-      {long && !expanded ? `${text.slice(0, BODY_PREVIEW_LIMIT)}…` : text}
+    <Box>
+      <Typography
+        variant="body2"
+        component="div"
+        data-testid={testid}
+        data-collapsed={String(collapsed)}
+        // XSS-safe: see commentMarkdown.ts (html:false + unmodified validateLink()).
+        dangerouslySetInnerHTML={{ __html: renderCommentMarkdown(text) }}
+        sx={[sx ?? false, markdownBodySx, collapsed ? clampSx : false].filter(
+          Boolean
+        ) as SxProps<Theme>}
+      />
       {long && (
         <Link
           component="button"
@@ -65,12 +179,12 @@ function CollapsibleText({
           underline="hover"
           onClick={() => setExpanded((v) => !v)}
           data-testid={`${testid}-toggle`}
-          sx={{ ml: 0.5, verticalAlign: "baseline" }}
+          sx={{ display: "block", mt: 0.25 }}
         >
           {expanded ? "折りたたむ" : "続きを表示"}
         </Link>
       )}
-    </Typography>
+    </Box>
   );
 }
 
@@ -454,7 +568,30 @@ function CommentRow({
         opacity: resolved ? 0.6 : 1,
       }}
     >
-      <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 0.5 }}>
+      <Box
+        data-testid="comment-header"
+        sx={{
+          display: "flex",
+          alignItems: "center",
+          gap: 1,
+          mb: 0.75,
+          mx: -1.5,
+          mt: -1.5,
+          px: 1.5,
+          py: 0.75,
+          bgcolor: "action.hover",
+        }}
+      >
+        <Box
+          aria-hidden
+          sx={{
+            width: 3,
+            alignSelf: "stretch",
+            borderRadius: 1,
+            bgcolor: "primary.main",
+            flexShrink: 0,
+          }}
+        />
         {badge && (
           <Chip
             label={badge.label}
@@ -488,13 +625,15 @@ function CommentRow({
             data-testid="comment-orphan"
           />
         )}
-        <Typography
-          variant="caption"
-          color="text.secondary"
-          sx={{ flexGrow: 1, textAlign: "right" }}
-        >
-          {c.author || "?"} {c.date ? `· ${c.date}` : ""}
+        <Typography variant="body2" sx={{ fontWeight: 600, color: "text.primary" }}>
+          {c.author || "?"}
         </Typography>
+        {c.date && (
+          <Typography variant="caption" color="text.secondary">
+            · {c.date}
+          </Typography>
+        )}
+        <Box sx={{ flexGrow: 1 }} />
         {!editOpen && (
           <>
             <Tooltip
@@ -586,7 +725,7 @@ function CommentRow({
         <CollapsibleText
           text={c.body}
           testid="comment-body"
-          sx={{ mt: 0.5, whiteSpace: "pre-wrap", wordBreak: "break-word" }}
+          sx={{ mt: 0.5, wordBreak: "break-word" }}
         />
       )}
 
@@ -726,12 +865,47 @@ function ReplyRow({
     setEditOpen(false);
   };
 
+  // Only the side-pane thread row uses the shared "comment-reply-header"
+  // testid; the detail dialog's copy of this row gets its own name so the
+  // two can never collide when both render at once (comment open in detail
+  // view while its thread is also visible in the side pane).
+  const headerTestid =
+    outerTestid === "comment-reply" ? "comment-reply-header" : "comment-detail-reply-header";
+
   return (
     <Box sx={{ mb: 0.5 }} data-testid={outerTestid}>
-      <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
-        <Typography variant="caption" color="text.secondary" sx={{ flexGrow: 1 }}>
-          {r.author || "?"} {r.date ? `· ${r.date}` : ""}
+      <Box
+        data-testid={headerTestid}
+        sx={{
+          display: "flex",
+          alignItems: "center",
+          gap: 0.75,
+          px: 1,
+          py: 0.5,
+          mb: 0.25,
+          borderRadius: 1,
+          bgcolor: "action.hover",
+        }}
+      >
+        <Box
+          aria-hidden
+          sx={{
+            width: 3,
+            alignSelf: "stretch",
+            borderRadius: 1,
+            bgcolor: "primary.main",
+            flexShrink: 0,
+          }}
+        />
+        <Typography variant="caption" sx={{ fontWeight: 600, color: "text.primary" }}>
+          {r.author || "?"}
         </Typography>
+        {r.date && (
+          <Typography variant="caption" color="text.secondary">
+            · {r.date}
+          </Typography>
+        )}
+        <Box sx={{ flexGrow: 1 }} />
         {!editOpen && (
           <>
             <Tooltip
@@ -813,16 +987,17 @@ function ReplyRow({
         <CollapsibleText
           text={r.body}
           testid="comment-reply-body"
-          sx={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}
+          sx={{ wordBreak: "break-word" }}
         />
       ) : (
         <Typography
           variant="body2"
-          sx={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}
+          component="div"
+          sx={[{ wordBreak: "break-word" }, markdownBodySx]}
           data-testid="comment-detail-reply-body"
-        >
-          {r.body}
-        </Typography>
+          // XSS-safe: see commentMarkdown.ts (html:false + unmodified validateLink()).
+          dangerouslySetInnerHTML={{ __html: renderCommentMarkdown(r.body) }}
+        />
       )}
     </Box>
   );
@@ -899,7 +1074,20 @@ function CommentDetailDialog({
       fullWidth
       data-testid="comment-detail-dialog"
     >
-      <DialogTitle sx={{ display: "flex", alignItems: "center", gap: 1, pb: 1 }}>
+      <DialogTitle
+        data-testid="comment-detail-header"
+        sx={{ display: "flex", alignItems: "center", gap: 1, bgcolor: "action.hover" }}
+      >
+        <Box
+          aria-hidden
+          sx={{
+            width: 3,
+            alignSelf: "stretch",
+            borderRadius: 1,
+            bgcolor: "primary.main",
+            flexShrink: 0,
+          }}
+        />
         {badge && (
           <Chip
             label={badge.label}
@@ -925,13 +1113,15 @@ function CommentDetailDialog({
             sx={{ height: 20 }}
           />
         )}
-        <Typography
-          variant="caption"
-          color="text.secondary"
-          sx={{ flexGrow: 1, textAlign: "right" }}
-        >
-          {c.author || "?"} {c.date ? `· ${c.date}` : ""}
+        <Typography variant="body2" sx={{ fontWeight: 600, color: "text.primary" }}>
+          {c.author || "?"}
         </Typography>
+        {c.date && (
+          <Typography variant="caption" color="text.secondary">
+            · {c.date}
+          </Typography>
+        )}
+        <Box sx={{ flexGrow: 1 }} />
       </DialogTitle>
       <DialogContent dividers>
         {ctx && (
@@ -980,10 +1170,11 @@ function CommentDetailDialog({
         ) : (
           <Typography
             variant="body1"
-            sx={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}
-          >
-            {c.body}
-          </Typography>
+            component="div"
+            sx={[{ wordBreak: "break-word" }, markdownBodySx]}
+            // XSS-safe: see commentMarkdown.ts (html:false + unmodified validateLink()).
+            dangerouslySetInnerHTML={{ __html: renderCommentMarkdown(c.body) }}
+          />
         )}
 
         {c.replies && c.replies.length > 0 && (

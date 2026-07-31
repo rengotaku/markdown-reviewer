@@ -84,27 +84,37 @@ describe("CommentSidePane", () => {
     expect(screen.queryByTestId("comment-body-toggle")).toBeNull();
   });
 
-  it("truncates long bodies to a 200-char preview with an expand/collapse toggle", async () => {
+  // #147: CollapsibleText switched from character-slicing the plain-text
+  // preview to always rendering the full Markdown source and CSS-clamping
+  // the container's height instead (truncating the raw source would break
+  // mid-syntax, e.g. a table or fence). These two tests were updated in
+  // place to match that intentional behavior change — the toggle's
+  // data-testid/label contract (comment-body-toggle, 続きを表示/折りたたむ)
+  // is unchanged, only the "is the text sliced" assertion is gone. The
+  // `data-collapsed` attribute is a test hook for the CSS-clamp state.
+  it("keeps the full body rendered (no source slicing) and toggles the clamp state", async () => {
     const user = userEvent.setup();
     const long = "あ".repeat(250);
     renderPane({ comments: [comment("c1", { body: long })] });
 
     const body = screen.getByTestId("comment-body");
-    expect(body.textContent).toContain("あ".repeat(200) + "…");
-    expect(body.textContent).not.toContain("あ".repeat(201));
+    // Full source is always present in the DOM — only visually clamped.
+    expect(body.textContent).toContain("あ".repeat(250));
+    expect(body).toHaveAttribute("data-collapsed", "true");
 
     const toggle = screen.getByTestId("comment-body-toggle");
     expect(toggle).toHaveTextContent("続きを表示");
 
     await user.click(toggle);
-    expect(screen.getByTestId("comment-body").textContent).toContain("あ".repeat(250));
+    expect(screen.getByTestId("comment-body")).toHaveAttribute("data-collapsed", "false");
     expect(screen.getByTestId("comment-body-toggle")).toHaveTextContent("折りたたむ");
 
     await user.click(screen.getByTestId("comment-body-toggle"));
     expect(screen.getByTestId("comment-body-toggle")).toHaveTextContent("続きを表示");
+    expect(screen.getByTestId("comment-body")).toHaveAttribute("data-collapsed", "true");
   });
 
-  it("truncates long replies individually with their own toggle", async () => {
+  it("clamps long replies individually with their own toggle, without slicing the source", async () => {
     const user = userEvent.setup();
     const longReply = "り".repeat(250);
     renderPane({
@@ -119,17 +129,19 @@ describe("CommentSidePane", () => {
       ],
     });
 
-    // Short reply: no toggle. Long reply: collapsed preview + one toggle.
+    // Short reply: no toggle. Long reply: clamped + one toggle, full text
+    // still present in the DOM.
     const replyBodies = screen.getAllByTestId("comment-reply-body");
     expect(replyBodies).toHaveLength(2);
     expect(replyBodies[0]).toHaveTextContent("短い返信");
-    expect(replyBodies[1].textContent).toContain("り".repeat(200) + "…");
-    expect(replyBodies[1].textContent).not.toContain("り".repeat(201));
+    expect(replyBodies[1].textContent).toContain("り".repeat(250));
+    expect(replyBodies[1]).toHaveAttribute("data-collapsed", "true");
 
     const toggle = screen.getByTestId("comment-reply-body-toggle");
     await user.click(toggle);
     const expanded = screen.getAllByTestId("comment-reply-body")[1];
     expect(expanded.textContent).toContain("り".repeat(250));
+    expect(expanded).toHaveAttribute("data-collapsed", "false");
     expect(screen.getByTestId("comment-reply-body-toggle")).toHaveTextContent("折りたたむ");
   });
 
@@ -556,5 +568,83 @@ describe("CommentSidePane", () => {
     await user.click(screen.getByTestId("comment-open-detail"));
     await user.click(screen.getByTestId("comment-detail-resolve-toggle"));
     expect(h.onResolveToggle).toHaveBeenCalledWith("c1", "open");
+  });
+
+  // --- #147: Markdown rendering + header redesign (pre-designed spec A/B,
+  // see issue brief). Do not delete/rename/loosen these assertions. ---
+
+  it("B1: renders a bold comment body as <strong>, with no literal ** left", () => {
+    renderPane({ comments: [comment("c1", { body: "**強調**" })] });
+    const body = screen.getByTestId("comment-body");
+    expect(body.querySelector("strong")).not.toBeNull();
+    expect(body.textContent).not.toContain("**");
+  });
+
+  it("B2: renders a GFM table inside the comment body", () => {
+    const tableBody = "| a | b |\n| --- | --- |\n| 1 | 2 |";
+    renderPane({ comments: [comment("c1", { body: tableBody })] });
+    const body = screen.getByTestId("comment-body");
+    expect(body.querySelector("table")).not.toBeNull();
+  });
+
+  it("B3: renders inline code in a reply body", () => {
+    renderPane({
+      comments: [
+        comment("c1", {
+          replies: [{ author: "reviewer", date: "2026-05-21", body: "`code`" }],
+        }),
+      ],
+    });
+    const replyBody = screen.getByTestId("comment-reply-body");
+    expect(replyBody.querySelector("code")).not.toBeNull();
+  });
+
+  it("B4: keeps a table intact (not truncated mid-syntax) in a long, collapsed body, and the toggle still works", async () => {
+    const user = userEvent.setup();
+    const tableMd = "| a | b |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |";
+    const padding = "x".repeat(220);
+    renderPane({ comments: [comment("c1", { body: `${padding}\n\n${tableMd}` })] });
+
+    const body = screen.getByTestId("comment-body");
+    expect(body).toHaveAttribute("data-collapsed", "true");
+    expect(body.querySelector("table")).not.toBeNull();
+
+    const toggle = screen.getByTestId("comment-body-toggle");
+    expect(toggle).toBeInTheDocument();
+    await user.click(toggle);
+    expect(screen.getByTestId("comment-body")).toHaveAttribute("data-collapsed", "false");
+    expect(screen.getByTestId("comment-body-toggle")).toHaveTextContent("折りたたむ");
+  });
+
+  it("B5: shows no toggle for a body at/under the preview limit (regression guard)", () => {
+    renderPane({ comments: [comment("c1", { body: "x".repeat(200) })] });
+    expect(screen.queryByTestId("comment-body-toggle")).toBeNull();
+  });
+
+  it("B6: editing a human comment's body shows the raw Markdown source, not rendered text", async () => {
+    const user = userEvent.setup();
+    renderPane({
+      comments: [comment("c1", { author: "reviewer", body: "**強調** テキスト" })],
+    });
+    await user.click(screen.getByTestId("comment-edit"));
+    const input = screen.getByTestId("comment-edit-input") as HTMLTextAreaElement;
+    expect(input.value).toBe("**強調** テキスト");
+  });
+
+  it("B7: a comment row has a comment-header containing the author", () => {
+    renderPane({ comments: [comment("c1", { author: "alice" })] });
+    const header = screen.getByTestId("comment-header");
+    expect(header).toHaveTextContent("alice");
+  });
+
+  it("B8: a reply row has a comment-reply-header", () => {
+    renderPane({
+      comments: [
+        comment("c1", {
+          replies: [{ author: "reviewer", date: "2026-05-21", body: "reply" }],
+        }),
+      ],
+    });
+    expect(screen.getByTestId("comment-reply-header")).toBeInTheDocument();
   });
 });
