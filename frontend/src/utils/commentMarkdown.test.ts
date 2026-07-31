@@ -123,6 +123,16 @@ describe("renderCommentMarkdown", () => {
     expect(html).not.toMatch(/<a[^>]*href=/i);
   });
 
+  it("never emits an <img>, so opening the pane fires no network request", () => {
+    for (const src of [
+      "![x](https://attacker.example/pixel.png)",
+      "![x](http://127.0.0.1:8080/action)",
+      "![x](data:image/png;base64,AAA)",
+    ]) {
+      expect(renderCommentMarkdown(src)).not.toMatch(/<img/i);
+    }
+  });
+
   it("does not touch a plain-text mention of a scheme with no link syntax", () => {
     const html = renderCommentMarkdown("javascript: is a URI scheme");
     expect(html).toContain("javascript:");

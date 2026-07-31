@@ -17,6 +17,13 @@ import MarkdownIt from "markdown-it";
 //     code blocks render as plain <pre><code> with no <span class=...> noise.
 const md = new MarkdownIt({ html: false, linkify: true, breaks: true });
 
+// Images are deliberately not part of the supported syntax set (#147), and
+// leaving the rule on would make merely *opening* the side pane fire a GET to
+// whatever URL a comment names — a silent tracking/SSRF-ish beacon for bodies
+// that arrive over POST /api/comments or get written by an AI summarising an
+// untrusted document. Disabling the rule renders `![alt](url)` as inert text.
+md.disable(["image"]);
+
 // Force every rendered link to open in a new tab safely, regardless of
 // whether it came from `[text](url)` syntax or bare-URL linkify.
 const defaultRenderLinkOpen =
