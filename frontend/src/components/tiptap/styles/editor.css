@@ -131,19 +131,27 @@
 
 /* Vertical spacing lives on the wrapper (the element the diff gutter
    decorates) so the gutter bar's top:0/bottom:0 matches the table's real
-   height; the horizontal indent stays on the table itself so the bar's
-   x-position (relative to the wrapper) lines up with other blocks (#127). */
+   height. The wrapper deliberately keeps overflow visible so the gutter dot
+   (::before at left:-20px) is not clipped — the scroll box lives on the table
+   instead, the same split used for pre/code (#127, #128). */
 .ProseMirror .tableWrapper {
   margin: 32px 0;
 }
 
+/* `display: block` turns the table element into a plain block box (an
+   anonymous table box is generated inside for the rows), which does two
+   things a real table box can't: it fills the editor column exactly like a
+   paragraph, and `overflow-x` actually scrolls. A `table-layout: auto` table
+   can never be narrower than its min-content width, so `max-width` alone let
+   wide tables spill past the right edge with no way to reach the hidden
+   columns (#152). Cells keep their natural width — nothing is truncated or
+   force-wrapped. Same approach as the comment side pane's Markdown tables. */
 .ProseMirror table {
+  display: block;
+  overflow-x: auto;
+  max-width: 100%;
+  margin: 0;
   border-collapse: collapse;
-  width: auto;
-  max-width: calc(100% - 48px);
-  margin: 0 0 0 32px;
-  table-layout: auto;
-  overflow: hidden;
 }
 
 .ProseMirror th,
