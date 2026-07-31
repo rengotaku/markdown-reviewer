@@ -55,6 +55,19 @@ function markdownBodySx(theme: Theme): SystemStyleObject<Theme> {
     "& > :first-of-type": { mt: 0 },
     "& > :last-child": { mb: 0 },
     "& p": { my: 0.75 },
+    // Tailwind's preflight resets h1-h6 to inherited size/weight, so a `##`
+    // would render indistinguishable from body text. Restore a compact scale
+    // sized for the narrow side pane rather than article-sized headings.
+    "& h1, & h2, & h3, & h4, & h5, & h6": {
+      mt: 1.25,
+      mb: 0.5,
+      fontWeight: 700,
+      lineHeight: 1.3,
+    },
+    "& h1": { fontSize: "1.2em" },
+    "& h2": { fontSize: "1.1em" },
+    "& h3": { fontSize: "1.02em" },
+    "& h4, & h5, & h6": { fontSize: "1em", color: theme.palette.text.secondary },
     // Tailwind's preflight zeroes out list markers globally, so restore them
     // here. Matches the editor's convention (DiffGutter/tiptap): disc at every
     // nesting level for <ul>, decimal for <ol>.
