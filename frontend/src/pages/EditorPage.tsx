@@ -29,7 +29,7 @@ import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
 import { TiptapEditor } from "@/components/tiptap/TiptapEditor";
 import {
   Sidebar,
-  RootTabs,
+  RootSelect,
   ToastViewport,
   ConfirmDialog,
   AddCommentDialog,
@@ -183,7 +183,6 @@ export function EditorPage() {
   const toggleCentered = useEditorPrefs((s) => s.toggleCentered);
   const { author } = useCommentAuthor();
   const queryClient = useQueryClient();
-  const reviewRootName = activeRoot || "Files";
 
   // --- Managed-review session state (ingest / revision diff) ---------------
   // Kept local to the editor rather than in the open-files store: it is a view
@@ -1386,9 +1385,11 @@ export function EditorPage() {
             sx={{
               pl: 0.5,
               pr: 1.5,
-              // #143: この 1 行目の下線は廃止した。BAR_HEIGHT 固定は、直下の
-              // RootTabs（2 行目）のディバイダを他ペインの 2 行目と揃えて
-              // 1 本の連続線にするために引き続き必要（#65, #90）。
+              // #143, #158: この 1 行目の下線は廃止した。BAR_HEIGHT 固定は、
+              // 直下の Sidebar フィルタバー（2 行目 — multi-root では root
+              // 切替がヘッダーの RootSelect に移り、RootTabs は廃止された）
+              // のディバイダを他ペインの 2 行目と揃えて 1 本の連続線にする
+              // ために引き続き必要（#65, #90）。
               height: BAR_HEIGHT,
               flexShrink: 0,
               boxSizing: "border-box",
@@ -1402,21 +1403,7 @@ export function EditorPage() {
                 <MenuOpenIcon fontSize="small" />
               </IconButton>
             </Tooltip>
-            <Tooltip title={reviewRootName} placement="bottom-start">
-              <Typography
-                variant="subtitle2"
-                sx={{
-                  flexGrow: 1,
-                  overflow: "hidden",
-                  textOverflow: "ellipsis",
-                  whiteSpace: "nowrap",
-                  minWidth: 0,
-                }}
-                data-testid="sidebar-review-root"
-              >
-                {reviewRootName}
-              </Typography>
-            </Tooltip>
+            <RootSelect />
             <Tooltip title="ファイル一覧を再読み込み">
               <IconButton
                 size="small"
@@ -1428,7 +1415,6 @@ export function EditorPage() {
               </IconButton>
             </Tooltip>
           </Box>
-          <RootTabs />
           <Sidebar activePath={activeFile?.path} onSelect={handleSelect} />
           <Box
             onMouseDown={handleResizeMouseDown}
@@ -1669,7 +1655,12 @@ export function EditorPage() {
           scrollButtons={false}
           TabIndicatorProps={{ sx: { display: "none" } }}
           sx={{
-            minHeight: TAB_CONTENT_HEIGHT,
+            // #158: Tabs のルートは（Tailwind preflight により）border-box なので
+            // minHeight には枠線込みの BAR_HEIGHT を渡す。TAB_CONTENT_HEIGHT
+            // （= BAR_HEIGHT - 1）を渡すとバー全体が 36px になり、他ペインの
+            // 2 行目（height: BAR_HEIGHT の border-box）に対して下線が 1px
+            // 上にずれる。内容高さは Tab 側の minHeight で 36px を保つ。
+            minHeight: BAR_HEIGHT,
             borderBottom: 1,
             borderColor: "divider",
             flexShrink: 0,
