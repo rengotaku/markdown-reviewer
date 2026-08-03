@@ -69,7 +69,7 @@ import {
 } from "@/api";
 import { stripHint } from "@/utils/stripHint";
 import { formatLocalTimestamp } from "@/utils/formatTimestamp";
-import { computeAnchorFromSelection } from "@/utils/pmAnchor";
+import { computeAnchorsFromSelection } from "@/utils/pmAnchor";
 import { lineDiff, hasChanges } from "@/utils/lineDiff";
 import { dirOf } from "@/utils/dirOf";
 import { splitPreamble } from "@/utils/frontmatter";
@@ -1229,17 +1229,22 @@ export function EditorPage() {
       if (scope === "global") {
         await createComment(path, { scope: "global", body, author, date }, root);
       } else {
-        // anchored inline
+        // anchored inline — anchor(s) cover every block the selection
+        // touches (#162), not just the block holding the selection start.
         const range = commentDialog.range;
-        const anchor = range
-          ? computeAnchorFromSelection(editor.state.doc, range.from, range.to)
-          : null;
-        if (!anchor) {
+        const anchors = range
+          ? computeAnchorsFromSelection(editor.state.doc, range.from, range.to)
+          : [];
+        if (anchors.length === 0) {
           showToast("選択範囲のアンカーを特定できませんでした", "warning");
           closeCommentDialog();
           return;
         }
-        await createComment(path, { scope: "inline", body, author, date, anchor }, root);
+        await createComment(
+          path,
+          { scope: "inline", body, author, date, anchor: anchors[0], anchors: anchors.slice(1) },
+          root
+        );
       }
       refreshComments();
     } catch (err) {

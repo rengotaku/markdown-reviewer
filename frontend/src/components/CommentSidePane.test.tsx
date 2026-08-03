@@ -386,7 +386,10 @@ describe("CommentSidePane", () => {
         comment("c1", {
           scope: "cross_section",
           anchor: undefined,
-          context: null,
+          // #162 made buildCommentJSON resolve a context from `anchors` too,
+          // so a real cross_section response now carries one. The heading
+          // list must still win — that is what the scope is about.
+          context: { heading_path: ["# 認証", "## トークン"], line_range: [3, 20] },
           anchors: [
             { heading_path: ["# 認証", "## トークン"], snippet: "s1", occurrence: 0 },
             { heading_path: ["# 認証", "## エラー"], snippet: "s2", occurrence: 0 },
@@ -396,6 +399,26 @@ describe("CommentSidePane", () => {
     });
     expect(screen.getByTestId("comment-context-c1")).toHaveTextContent(
       "対象: ## トークン ・ ## エラー"
+    );
+  });
+
+  it("keeps the heading + line range for a multi-line inline comment that also carries anchors", () => {
+    // #162: an inline comment spanning several blocks stores the trailing
+    // blocks in `anchors`, but its resolved `context.line_range` already
+    // covers all of them — so the label must stay "見出し (L74–L80)" rather
+    // than degrading to a list of repeated heading names.
+    renderPane({
+      comments: [
+        comment("c1", {
+          scope: "inline",
+          anchor: { heading_path: ["## 実績"], snippet: "s1", occurrence: 0 },
+          anchors: [{ heading_path: ["## 実績"], snippet: "s2", occurrence: 0 }],
+          context: { heading_path: ["## 実績"], line_range: [74, 80] },
+        }),
+      ],
+    });
+    expect(screen.getByTestId("comment-context-c1")).toHaveTextContent(
+      "対象: ## 実績 (L74–80)"
     );
   });
 
@@ -427,6 +450,25 @@ describe("CommentSidePane", () => {
     });
     const ctx = screen.getByTestId("comment-context-c1");
     expect(ctx).toHaveTextContent("## A › s1 / s2");
+    expect(ctx).toHaveTextContent("現在の本文には見つかりません");
+  });
+
+  it("lists the leading anchor too when a multi-line inline comment goes orphan", () => {
+    // #162: the first selected block lives in `anchor`, the rest in `anchors`.
+    // Taking `anchors` alone would hide the block the selection started on.
+    renderPane({
+      comments: [
+        comment("c1", {
+          scope: "inline",
+          orphan: true,
+          context: null,
+          anchor: { heading_path: ["## 実績"], snippet: "先頭ブロック", occurrence: 0 },
+          anchors: [{ heading_path: ["## 実績"], snippet: "後続ブロック", occurrence: 0 }],
+        }),
+      ],
+    });
+    const ctx = screen.getByTestId("comment-context-c1");
+    expect(ctx).toHaveTextContent("## 実績 › 先頭ブロック / ## 実績 › 後続ブロック");
     expect(ctx).toHaveTextContent("現在の本文には見つかりません");
   });
 

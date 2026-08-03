@@ -55,8 +55,12 @@ type CommentsResponse struct {
 	Comments []CommentJSON   `json:"comments"`
 }
 
-// buildCommentJSON resolves a stored comment's anchor against content into the
-// API shape.
+// buildCommentJSON resolves a stored comment's anchor(s) against content into
+// the API shape. A comment may carry a single Anchor, an Anchors slice
+// (cross_section / multi-line inline, #162), or neither (global). Every
+// anchor that still resolves contributes to context.line_range as
+// [min(line), max(line)] across all of them; a comment is only orphan when
+// none of its anchors resolve at all.
 func buildCommentJSON(content string, c reviewstore.Comment) CommentJSON {
 	out := CommentJSON{
 		ID: c.ID, Scope: c.Scope, GroupID: c.GroupID,
@@ -64,17 +68,37 @@ func buildCommentJSON(content string, c reviewstore.Comment) CommentJSON {
 		Status: c.Status, Replies: c.Replies,
 		Anchor: c.Anchor, Anchors: c.Anchors,
 	}
-	if c.Anchor == nil {
-		// Cross-section comments carry Anchors instead of a single Anchor and
-		// are resolved client-side; global comments have neither. Either way
-		// there is no single line context to attach here.
+	anchors := reviewstore.AnchorsOf(c)
+	if len(anchors) == 0 {
+		// Global comment: no anchors, no line context.
 		return out
 	}
-	if lr, ok := reviewstore.ResolveAnchor(content, *c.Anchor); ok {
-		out.Context = &CommentContext{HeadingPath: c.Anchor.HeadingPath, LineRange: lr}
-	} else {
-		out.Orphan = true
+	var headingPath []string
+	var lineRange [2]int
+	resolved := false
+	for _, a := range anchors {
+		lr, ok := reviewstore.ResolveAnchor(content, a)
+		if !ok {
+			continue
+		}
+		if !resolved {
+			headingPath = a.HeadingPath
+			lineRange = lr
+			resolved = true
+			continue
+		}
+		if lr[0] < lineRange[0] {
+			lineRange[0] = lr[0]
+		}
+		if lr[1] > lineRange[1] {
+			lineRange[1] = lr[1]
+		}
 	}
+	if !resolved {
+		out.Orphan = true
+		return out
+	}
+	out.Context = &CommentContext{HeadingPath: headingPath, LineRange: lineRange}
 	return out
 }
 

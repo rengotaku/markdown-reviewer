@@ -83,6 +83,49 @@ describe("CommentHighlight", () => {
     expect(m.every((el) => el.getAttribute("data-comment-id") === "cx")).toBe(true);
   });
 
+  // B1 (issue #162 regression): a comment carrying both `anchor` and
+  // `anchors` — the multi-line inline anchoring shape — must paint a
+  // decoration for every one of them. Before the fix, buildDeco used
+  // `c.anchor ? [c.anchor] : (c.anchors ?? [])`, so the presence of `anchor`
+  // silently discarded `anchors` and only 1 of the 3 decorations appeared.
+  it("B1: paints a decoration for anchor plus every entry in anchors combined", () => {
+    const ed = makeEditor(
+      "<h2>A</h2><p>alpha target</p><h2>B</h2><p>bravo target</p><h2>C</h2><p>charlie target</p>"
+    );
+    ed.commands.setCommentHighlights([
+      {
+        id: "multi",
+        status: "open",
+        anchor: { heading_path: ["## A"], snippet: "alpha", occurrence: 0 },
+        anchors: [
+          { heading_path: ["## B"], snippet: "bravo", occurrence: 0 },
+          { heading_path: ["## C"], snippet: "charlie", occurrence: 0 },
+        ],
+      },
+    ]);
+    const m = marks(ed);
+    expect(m).toHaveLength(3);
+    expect(m.every((el) => el.getAttribute("data-comment-id") === "multi")).toBe(true);
+    expect(m.map((el) => el.textContent).sort()).toEqual(["alpha", "bravo", "charlie"]);
+  });
+
+  // B3: when one of the combined anchor(s) no longer resolves (orphaned),
+  // the resolvable ones still paint — the whole comment must not vanish.
+  it("B3: paints only the anchors that still resolve when one is orphaned", () => {
+    const ed = makeEditor("<h2>A</h2><p>alpha target</p><h2>B</h2><p>bravo target</p>");
+    ed.commands.setCommentHighlights([
+      {
+        id: "partial",
+        status: "open",
+        anchor: { heading_path: ["## A"], snippet: "alpha", occurrence: 0 },
+        anchors: [{ heading_path: [], snippet: "こんな文字列は無い", occurrence: 0 }],
+      },
+    ]);
+    const m = marks(ed);
+    expect(m).toHaveLength(1);
+    expect(m[0].textContent).toBe("alpha");
+  });
+
   it("skips orphaned anchors that no longer resolve", () => {
     const ed = makeEditor("<p>current body</p>");
     ed.commands.setCommentHighlights([
