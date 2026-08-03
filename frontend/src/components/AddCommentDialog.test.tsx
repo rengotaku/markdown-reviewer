@@ -1,9 +1,14 @@
-import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AddCommentDialog } from "./AddCommentDialog";
+import { useConfirm } from "@/hooks/useConfirm";
 
 describe("AddCommentDialog", () => {
+  beforeEach(() => {
+    useConfirm.setState({ pending: null, queue: [] });
+  });
+
   it("renders nothing visible when open=false", () => {
     const onClose = vi.fn();
     const onSubmit = vi.fn();
@@ -212,5 +217,160 @@ describe("AddCommentDialog", () => {
 
     await user.click(screen.getByRole("button", { name: "キャンセル" }));
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("body has content + backdrop click → shows a discard confirmation and does not close", async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    render(
+      <AddCommentDialog
+        open
+        targetSnippet="snip"
+        onClose={onClose}
+        onSubmit={() => {}}
+      />
+    );
+
+    await user.type(screen.getByTestId("comment-body-input"), "wip");
+
+    // MUI Dialog portals into document.body, not the render() container.
+    const backdrop = document.body.querySelector(".MuiBackdrop-root");
+    expect(backdrop).not.toBeNull();
+    fireEvent.click(backdrop as Element);
+
+    await waitFor(() => expect(useConfirm.getState().pending).not.toBeNull());
+    expect(useConfirm.getState().pending?.title).toBe(
+      "コメントを破棄しますか？"
+    );
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("declining the discard confirmation keeps the dialog open with the input intact", async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    render(
+      <AddCommentDialog
+        open
+        targetSnippet="snip"
+        onClose={onClose}
+        onSubmit={() => {}}
+      />
+    );
+
+    await user.type(screen.getByTestId("comment-body-input"), "wip");
+    fireEvent.click(
+      document.body.querySelector(".MuiBackdrop-root") as Element
+    );
+    await waitFor(() => expect(useConfirm.getState().pending).not.toBeNull());
+
+    act(() => useConfirm.getState().resolve(false));
+
+    await waitFor(() => expect(useConfirm.getState().pending).toBeNull());
+    expect(onClose).not.toHaveBeenCalled();
+    expect(
+      (screen.getByTestId("comment-body-input") as HTMLTextAreaElement).value
+    ).toBe("wip");
+  });
+
+  it("body has content + Escape key → shows a confirmation, accepting closes", async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    render(
+      <AddCommentDialog
+        open
+        targetSnippet="snip"
+        onClose={onClose}
+        onSubmit={() => {}}
+      />
+    );
+
+    const input = screen.getByTestId("comment-body-input");
+    await user.type(input, "wip");
+    await user.type(input, "{Escape}");
+
+    await waitFor(() => expect(useConfirm.getState().pending).not.toBeNull());
+
+    act(() => useConfirm.getState().resolve(true));
+
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+  });
+
+  it("body has content + cancel button → shows a confirmation, accepting closes", async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    render(
+      <AddCommentDialog
+        open
+        targetSnippet="snip"
+        onClose={onClose}
+        onSubmit={() => {}}
+      />
+    );
+
+    await user.type(screen.getByTestId("comment-body-input"), "wip");
+    await user.click(screen.getByRole("button", { name: "キャンセル" }));
+
+    await waitFor(() => expect(useConfirm.getState().pending).not.toBeNull());
+    expect(onClose).not.toHaveBeenCalled();
+
+    act(() => useConfirm.getState().resolve(true));
+
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+  });
+
+  it("empty body + backdrop click → closes immediately without a confirmation", async () => {
+    const onClose = vi.fn();
+    render(
+      <AddCommentDialog
+        open
+        targetSnippet="snip"
+        onClose={onClose}
+        onSubmit={() => {}}
+      />
+    );
+
+    fireEvent.click(
+      document.body.querySelector(".MuiBackdrop-root") as Element
+    );
+
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    expect(useConfirm.getState().pending).toBeNull();
+  });
+
+  it("empty body + cancel button → closes immediately without a confirmation", async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    render(
+      <AddCommentDialog
+        open
+        targetSnippet="snip"
+        onClose={onClose}
+        onSubmit={() => {}}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: "キャンセル" }));
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(useConfirm.getState().pending).toBeNull();
+  });
+
+  it("whitespace-only body + cancel button → closes immediately without a confirmation", async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    render(
+      <AddCommentDialog
+        open
+        targetSnippet="snip"
+        onClose={onClose}
+        onSubmit={() => {}}
+      />
+    );
+
+    await user.type(screen.getByTestId("comment-body-input"), "   ");
+    await user.click(screen.getByRole("button", { name: "キャンセル" }));
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(useConfirm.getState().pending).toBeNull();
   });
 });
