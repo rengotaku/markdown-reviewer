@@ -2,7 +2,11 @@ import { Extension } from "@tiptap/core";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
-import { resolveAnchorInDoc, type PmAnchor } from "@/utils/pmAnchor";
+import {
+  extractAnchorBlocks,
+  resolveAnchorInBlocks,
+  type PmAnchor,
+} from "@/utils/pmAnchor";
 
 // CommentHighlight paints inline highlights for sidecar comments. Comments live
 // in review.json (not in the document), so highlights are decorations layered
@@ -29,6 +33,11 @@ function buildDeco(
   comments: ReadonlyArray<HighlightComment>
 ): DecorationSet {
   const decos: Decoration[] = [];
+  // Flatten the doc once, not once per anchor: buildDeco re-runs on every
+  // docChanged (i.e. per keystroke), and #162 made a single comment carry one
+  // anchor per selected block — resolving each against a freshly extracted
+  // block list would make the redraw O(anchors × doc size).
+  const blocks = extractAnchorBlocks(doc);
   for (const c of comments) {
     // Resolved comments carry no highlight: the body stays clean once a comment
     // is dealt with. Reopening flips status back to "open", so the decoration
@@ -40,7 +49,7 @@ function buildDeco(
     // `anchor` was present, so only the first block ever highlighted).
     const anchors = [...(c.anchor ? [c.anchor] : []), ...(c.anchors ?? [])];
     for (const a of anchors) {
-      const range = resolveAnchorInDoc(doc, a);
+      const range = resolveAnchorInBlocks(blocks, a);
       if (!range || range.from >= range.to) continue;
       decos.push(
         Decoration.inline(range.from, range.to, {
