@@ -153,16 +153,6 @@
   border-collapse: collapse;
 }
 
-/* Cells lay out at their natural width instead of being wrapped down to
-   min-content: a column of short values like `mutb-fundoor-aws` was being
-   broken across 3-4 lines to squeeze the table into the editor width, which
-   read worse than scrolling (#154). The overflow goes to the table's own
-   horizontal scroll (see above), so nothing becomes unreachable.
-   `pre` rather than `nowrap` because ProseMirror renders the document with
-   whitespace preserved (`white-space: break-spaces`); `nowrap` would collapse
-   runs of spaces inside a cell while editing, `pre` keeps them. Markdown table
-   cells cannot contain literal newlines, so `pre`'s newline handling never
-   comes into play. */
 .ProseMirror th,
 .ProseMirror td {
   border: 1px solid #ddd;
@@ -172,7 +162,6 @@
   vertical-align: top;
   font-size: 0.875rem;
   line-height: 1.3;
-  white-space: pre;
 }
 
 .ProseMirror th {
@@ -182,6 +171,36 @@
 
 .ProseMirror .selectedCell {
   background-color: #e3f2fd;
+}
+
+/* Column sizing: short values stay on one line, only genuinely long prose
+   wraps — and it wraps at a fixed cap rather than at whatever width is left
+   over.
+
+   Auto table layout sizes columns from the *cell content's* intrinsic widths,
+   so the knob has to be on the block inside the cell, not the cell itself:
+   `max-width` on a `td` collapses the column to min-content instead (measured:
+   `mutb-fundoor-staging-aws` back to 4 lines), which is the #154 problem
+   again. `width: max-content` makes the block ask for its unwrapped width,
+   `max-width` caps that ask — so a column is never wider than the cap and
+   never narrower than its content wants, and the table's overflow goes to the
+   horizontal scroll set up above.
+
+   The cap is on every direct child, not just `p`: TableCell's content is
+   `block+`, so a cell can also hold a heading or a list, and those would
+   otherwise route around the cap and bring the runaway scroll back.
+
+   Measured on a real document with a 1781-char cell (#156): the table's
+   scrollWidth drops 44344px → 2592px, while short-value columns stay at one
+   line. Tables with no long cell are unaffected (identical metrics to #155).
+
+   `rem`, not `em`: `em` resolves against the *child's* font-size, so the cap
+   would silently double on an `h1` child (2em) and the "fixed cap" would not
+   be fixed. 28rem == 448px == the 32em the cell's own 0.875rem font implies. */
+.ProseMirror th > *,
+.ProseMirror td > * {
+  width: max-content;
+  max-width: 28rem;
 }
 
 .ProseMirror th p,
