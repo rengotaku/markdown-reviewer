@@ -9,6 +9,7 @@ import {
   blockIndexAtPos,
   extractAnchorBlocks,
   resolveAnchorInDoc,
+  stripBlockMarkers,
   type AnchorBlock,
 } from "./pmAnchor";
 
@@ -379,6 +380,32 @@ describe("resolveAnchorInBlocks with block-level markers (#168)", () => {
       occurrence: 0,
     });
     expect(r).toEqual({ from: 30, to: 30 + "⚠️ レビューで挙げた 6 件を削除した".length });
+  });
+
+  it("resolves a blockquote marker written without a space", () => {
+    // CommonMark accepts ">text" and ">>text"; the backend matches the raw
+    // line, so the editor has to strip these forms too.
+    for (const snippet of [">特になし。", ">>特になし。", "> > 特になし。"]) {
+      expect(resolveAnchorInBlocks(blocks, { heading_path: [], snippet, occurrence: 0 })).toEqual(
+        { from: 70, to: 70 + "特になし。".length }
+      );
+    }
+  });
+
+  it("leaves prose that merely starts with a hyphen or digit alone", () => {
+    // "-text" / "1.text" / "#text" are not list items or headings, so nothing
+    // may be stripped — otherwise the fallback would match the wrong block.
+    const prose: AnchorBlock[] = [
+      { start: 1, end: 10, text: "-5 度まで下がった", headingStack: [] },
+    ];
+    expect(stripBlockMarkers("-5 度まで下がった")).toBe("-5 度まで下がった");
+    expect(
+      resolveAnchorInBlocks(prose, {
+        heading_path: [],
+        snippet: "-5 度まで下がった",
+        occurrence: 0,
+      })
+    ).toEqual({ from: 1, to: 1 + "-5 度まで下がった".length });
   });
 
   it("resolves nested markers such as '> - '", () => {

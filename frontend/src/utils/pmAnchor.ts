@@ -40,8 +40,13 @@ function suffixMatch(stack: string[], want: string[]): boolean {
 
 // Leading block-level Markdown markers: blockquote `>`, bullet `-`/`*`/`+`,
 // ordered `1.`/`1)`, and ATX heading `#`. Applied repeatedly so nested forms
-// like "> - " are peeled off too.
-const BLOCK_MARKER = /^\s*(?:>|[-*+]|\d+[.)]|#{1,6})\s+/;
+// like "> - " and ">> " are peeled off too.
+//
+// Only `>` takes an optional trailing space: CommonMark accepts `>text` and
+// `>>text`, whereas `-text`, `1.text` and `#text` are plain text, not list
+// items or headings — requiring the space there keeps ordinary prose that
+// happens to start with a hyphen or a digit from being mangled.
+const BLOCK_MARKER = /^\s*(?:>\s*|[-*+]\s+|\d+[.)]\s+|#{1,6}\s+)/;
 
 /**
  * stripBlockMarkers removes leading block-level Markdown markers from a
