@@ -1354,6 +1354,16 @@ export function EditorPage() {
       .sort((a, b) => a.from - b.from);
     if (ranges.length === 0) return; // orphan: no anchor resolves.
 
+    // Retire any in-flight flash before starting a new jump, whichever branch
+    // it came from: the flash decoration set and its timer are shared, so a
+    // pending clear would cut this jump short and a stale flash would blink
+    // alongside the new target.
+    if (flashTimerRef.current !== null) {
+      window.clearTimeout(flashTimerRef.current);
+      flashTimerRef.current = null;
+      editor.commands.clearCommentFlash();
+    }
+
     const root = editor.view.dom;
     const decorated = root.querySelectorAll<HTMLElement>(
       `[data-comment-id="${CSS.escape(id)}"]`
@@ -1376,9 +1386,6 @@ export function EditorPage() {
       node.nodeType === Node.TEXT_NODE ? node.parentElement : (node as HTMLElement);
     target?.scrollIntoView({ behavior: "smooth", block: "center" });
     editor.commands.flashCommentRanges(ranges);
-    // The flash decoration set is shared, so a pending clear from an earlier
-    // click would cut this one short. Cancel it and own the timer.
-    if (flashTimerRef.current !== null) window.clearTimeout(flashTimerRef.current);
     flashTimerRef.current = window.setTimeout(() => {
       flashTimerRef.current = null;
       if (!editor || editor.isDestroyed) return;
