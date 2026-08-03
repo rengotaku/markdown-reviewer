@@ -1,5 +1,5 @@
 export { Sidebar } from "./Sidebar";
-export { RootTabs } from "./RootTabs";
+export { RootSelect } from "./RootSelect";
 export { ToastViewport } from "./ToastViewport";
 export { ConfirmDialog } from "./ConfirmDialog";
 export { AddCommentDialog } from "./AddCommentDialog";
