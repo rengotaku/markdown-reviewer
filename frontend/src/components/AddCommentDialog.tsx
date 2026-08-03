@@ -7,6 +7,7 @@ import Button from "@mui/material/Button";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
 import Box from "@mui/material/Box";
+import { useConfirm } from "@/hooks/useConfirm";
 
 /**
  * The dialog supports three discrete flows; the caller picks which by setting
@@ -40,10 +41,51 @@ interface Props {
 const SNIPPET_LIMIT = 80;
 
 export function AddCommentDialog(props: Props) {
+  const { open, defaultBody, onClose } = props;
+  const confirm = useConfirm((s) => s.confirm);
+
+  // Body lives here (not in DialogBody) so both the backdrop/Escape close
+  // path (Dialog's onClose, below) and the cancel button can check it before
+  // deciding whether to discard-confirm. Reset it every time the dialog
+  // opens — reopening with a fresh (or new default) body is the existing,
+  // intentional behavior we're preserving.
+  //
+  // This uses React's "adjusting state when a prop changes" render-time
+  // pattern (see https://react.dev/learn/you-might-not-need-an-effect)
+  // instead of an effect: an effect would re-seed the body *after* the
+  // already-open dialog re-renders, which both flashes the stale value and
+  // trips react-hooks/set-state-in-effect. Tracking the previous `open`
+  // value and updating `body` inline during render bails out before commit,
+  // so React never paints the stale state.
+  const [body, setBody] = useState(defaultBody ?? "");
+  const [prevOpen, setPrevOpen] = useState(open);
+  if (open !== prevOpen) {
+    setPrevOpen(open);
+    if (open) {
+      setBody(defaultBody ?? "");
+    }
+  }
+
+  const requestClose = async () => {
+    if (body.trim().length === 0) {
+      onClose();
+      return;
+    }
+    const ok = await confirm({
+      title: "コメントを破棄しますか？",
+      message: "入力中のコメントは保存されません。",
+      confirmLabel: "破棄する",
+      cancelLabel: "編集を続ける",
+    });
+    if (ok) {
+      onClose();
+    }
+  };
+
   return (
     <Dialog
-      open={props.open}
-      onClose={props.onClose}
+      open={open}
+      onClose={requestClose}
       fullWidth
       maxWidth="sm"
       // MUI Dialog restores focus to the trigger element (the editor's
@@ -53,7 +95,14 @@ export function AddCommentDialog(props: Props) {
       // to the top. Suppress the restore to keep the view stable.
       disableRestoreFocus
     >
-      {props.open ? <DialogBody {...props} /> : null}
+      {open ? (
+        <DialogBody
+          {...props}
+          body={body}
+          setBody={setBody}
+          onClose={requestClose}
+        />
+      ) : null}
     </Dialog>
   );
 }
@@ -73,15 +122,19 @@ function targetLabel(mode: CommentDialogMode): string {
   return mode === "block" ? "対象ブロック" : "対象テキスト";
 }
 
+interface DialogBodyProps extends Props {
+  body: string;
+  setBody: (body: string) => void;
+}
+
 function DialogBody({
   mode = "anchored",
   targetSnippet,
-  defaultBody,
+  body,
+  setBody,
   onClose,
   onSubmit,
-}: Props) {
-  const [body, setBody] = useState(defaultBody ?? "");
-
+}: DialogBodyProps) {
   const trimmed = body.trim();
   const showTarget = mode === "anchored" || mode === "block";
   const canSubmit = trimmed.length > 0;
