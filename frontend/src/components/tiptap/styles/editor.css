@@ -193,11 +193,14 @@
    Measured on a real document with a 1781-char cell (#156): the table's
    scrollWidth drops 44344px → 2592px, while short-value columns stay at one
    line. Tables with no long cell are unaffected (identical metrics to #155).
-   The cap is in `em`, i.e. relative to the cell's own 0.875rem font. */
+
+   `rem`, not `em`: `em` resolves against the *child's* font-size, so the cap
+   would silently double on an `h1` child (2em) and the "fixed cap" would not
+   be fixed. 28rem == 448px == the 32em the cell's own 0.875rem font implies. */
 .ProseMirror th > *,
 .ProseMirror td > * {
   width: max-content;
-  max-width: 32em;
+  max-width: 28rem;
 }
 
 .ProseMirror th p,
