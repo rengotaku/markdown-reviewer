@@ -349,3 +349,84 @@ describe("pmAnchor ProseMirror adapters", () => {
     expect(anchors.map((a) => a.snippet)).toEqual(["item one", "item two"]);
   });
 });
+
+// #168: snippets written by AI clients keep the raw line's block-level markers
+// (the backend matches Markdown lines, which have them), but ProseMirror block
+// text does not. Measured on a real file: 8 of 9 backend-resolvable comments
+// were unresolvable in the editor for exactly this reason — 7 ordered-list
+// markers and 1 blockquote marker.
+describe("resolveAnchorInBlocks with block-level markers (#168)", () => {
+  const blocks: AnchorBlock[] = [
+    { start: 1, end: 20, text: "同じ移行を他の人が再現できる状態にした", headingStack: ["### 実績"] },
+    { start: 30, end: 60, text: "⚠️ レビューで挙げた 6 件を削除した", headingStack: ["### 実績"] },
+    { start: 70, end: 90, text: "特になし。", headingStack: ["### 課題"] },
+  ];
+
+  it("resolves a snippet carrying an ordered-list marker", () => {
+    const r = resolveAnchorInBlocks(blocks, {
+      heading_path: ["### 実績"],
+      snippet: "4. 同じ移行を他の人が再現できる状態にした",
+      occurrence: 0,
+    });
+    // The range must cover the block text only — the "4. " is not in the doc.
+    expect(r).toEqual({ from: 1, to: 1 + "同じ移行を他の人が再現できる状態にした".length });
+  });
+
+  it("resolves a snippet carrying a blockquote marker", () => {
+    const r = resolveAnchorInBlocks(blocks, {
+      heading_path: ["### 実績"],
+      snippet: "> ⚠️ レビューで挙げた 6 件を削除した",
+      occurrence: 0,
+    });
+    expect(r).toEqual({ from: 30, to: 30 + "⚠️ レビューで挙げた 6 件を削除した".length });
+  });
+
+  it("resolves nested markers such as '> - '", () => {
+    const r = resolveAnchorInBlocks(blocks, {
+      heading_path: [],
+      snippet: "> - 特になし。",
+      occurrence: 0,
+    });
+    expect(r).toEqual({ from: 70, to: 70 + "特になし。".length });
+  });
+
+  it("prefers an exact match over the stripped form", () => {
+    // A block whose text genuinely starts with "1. " must win against a later
+    // block matching only after stripping, so real content is never skipped.
+    const withLiteral: AnchorBlock[] = [
+      { start: 1, end: 10, text: "1. リテラルな行", headingStack: [] },
+      { start: 20, end: 30, text: "リテラルな行", headingStack: [] },
+    ];
+    const r = resolveAnchorInBlocks(withLiteral, {
+      heading_path: [],
+      snippet: "1. リテラルな行",
+      occurrence: 0,
+    });
+    expect(r).toEqual({ from: 1, to: 1 + "1. リテラルな行".length });
+  });
+
+  it("still returns null when the text is genuinely gone", () => {
+    expect(
+      resolveAnchorInBlocks(blocks, {
+        heading_path: [],
+        snippet: "1. 本文から消えた行",
+        occurrence: 0,
+      })
+    ).toBeNull();
+  });
+
+  it("counts marker-prefixed matches consistently when computing occurrence", () => {
+    // Authoring and resolving must agree, otherwise the occurrence-th match
+    // points at a different block on the way back.
+    const dup: AnchorBlock[] = [
+      { start: 1, end: 10, text: "重複する行", headingStack: [] },
+      { start: 20, end: 30, text: "重複する行", headingStack: [] },
+    ];
+    const anchor = computeAnchorInBlocks(dup, 1, "2. 重複する行");
+    expect(anchor.occurrence).toBe(1);
+    expect(resolveAnchorInBlocks(dup, anchor)).toEqual({
+      from: 20,
+      to: 20 + "重複する行".length,
+    });
+  });
+});

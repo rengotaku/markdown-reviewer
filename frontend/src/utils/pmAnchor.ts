@@ -38,6 +38,46 @@ function suffixMatch(stack: string[], want: string[]): boolean {
   return want.every((w, i) => stack[off + i] === w);
 }
 
+// Leading block-level Markdown markers: blockquote `>`, bullet `-`/`*`/`+`,
+// ordered `1.`/`1)`, and ATX heading `#`. Applied repeatedly so nested forms
+// like "> - " are peeled off too.
+const BLOCK_MARKER = /^\s*(?:>|[-*+]|\d+[.)]|#{1,6})\s+/;
+
+/**
+ * stripBlockMarkers removes leading block-level Markdown markers from a
+ * snippet (#168). The backend resolves anchors against raw Markdown *lines*,
+ * which carry these markers, while the editor resolves against ProseMirror
+ * block text, which does not — a list item's textContent has no "1. " and a
+ * blockquote's has no "> ". Snippets written by AI clients sit in between
+ * (inline markup stripped, block markers kept), so the reading side has to
+ * tolerate them or the highlight and the jump both silently do nothing.
+ */
+export function stripBlockMarkers(snippet: string): string {
+  let out = snippet;
+  for (;;) {
+    const next = out.replace(BLOCK_MARKER, "");
+    if (next === out) return out;
+    out = next;
+  }
+}
+
+/**
+ * snippetIndexIn finds the snippet in a block's text, retrying without leading
+ * block markers. Returns the match offset and the matched length (which
+ * differs from snippet.length when the stripped form matched), or null.
+ */
+function snippetIndexIn(
+  text: string,
+  snippet: string
+): { idx: number; len: number } | null {
+  const exact = text.indexOf(snippet);
+  if (exact !== -1) return { idx: exact, len: snippet.length };
+  const bare = stripBlockMarkers(snippet);
+  if (bare === snippet || !bare) return null;
+  const loose = text.indexOf(bare);
+  return loose === -1 ? null : { idx: loose, len: bare.length };
+}
+
 /**
  * resolveAnchorInBlocks returns the PM range of the occurrence-th block that
  * contains the snippet under a matching heading path, or null when orphaned.
@@ -50,14 +90,14 @@ export function resolveAnchorInBlocks(
   if (!anchor.snippet) return null;
   let seen = 0;
   for (const b of blocks) {
-    const idx = b.text.indexOf(anchor.snippet);
-    if (idx === -1) continue;
+    const hit = snippetIndexIn(b.text, anchor.snippet);
+    if (hit === null) continue;
     if (anchor.heading_path.length && !suffixMatch(b.headingStack, anchor.heading_path)) {
       continue;
     }
     if (seen === anchor.occurrence) {
-      const from = b.start + idx;
-      return { from, to: from + anchor.snippet.length };
+      const from = b.start + hit.idx;
+      return { from, to: from + hit.len };
     }
     seen++;
   }
@@ -80,7 +120,9 @@ export function computeAnchorInBlocks(
   let occurrence = 0;
   for (let i = 0; i < blockIndex; i++) {
     const b = blocks[i];
-    if (b.text.indexOf(snippet) === -1) continue;
+    // Same matching rule as resolveAnchorInBlocks, so authoring and resolving
+    // agree on which blocks count towards `occurrence` (#168).
+    if (snippetIndexIn(b.text, snippet) === null) continue;
     if (heading_path.length && !suffixMatch(b.headingStack, heading_path)) continue;
     occurrence++;
   }
