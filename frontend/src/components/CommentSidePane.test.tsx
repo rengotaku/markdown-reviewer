@@ -399,6 +399,26 @@ describe("CommentSidePane", () => {
     );
   });
 
+  it("keeps the heading + line range for a multi-line inline comment that also carries anchors", () => {
+    // #162: an inline comment spanning several blocks stores the trailing
+    // blocks in `anchors`, but its resolved `context.line_range` already
+    // covers all of them — so the label must stay "見出し (L74–L80)" rather
+    // than degrading to a list of repeated heading names.
+    renderPane({
+      comments: [
+        comment("c1", {
+          scope: "inline",
+          anchor: { heading_path: ["## 実績"], snippet: "s1", occurrence: 0 },
+          anchors: [{ heading_path: ["## 実績"], snippet: "s2", occurrence: 0 }],
+          context: { heading_path: ["## 実績"], line_range: [74, 80] },
+        }),
+      ],
+    });
+    expect(screen.getByTestId("comment-context-c1")).toHaveTextContent(
+      "対象: ## 実績 (L74–80)"
+    );
+  });
+
   it("falls back to the anchor snippet when no live context is resolved", () => {
     renderPane({
       comments: [

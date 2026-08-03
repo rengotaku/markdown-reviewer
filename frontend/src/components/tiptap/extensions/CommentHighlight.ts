@@ -34,7 +34,11 @@ function buildDeco(
     // is dealt with. Reopening flips status back to "open", so the decoration
     // reappears the next time comments are pushed in.
     if (c.status === "resolved") continue;
-    const anchors = c.anchor ? [c.anchor] : (c.anchors ?? []);
+    // A multi-line inline comment (#162) carries its first block in `anchor`
+    // and the rest in `anchors`; combine both rather than treating them as
+    // mutually exclusive (the pre-fix bug discarded `anchors` whenever
+    // `anchor` was present, so only the first block ever highlighted).
+    const anchors = [...(c.anchor ? [c.anchor] : []), ...(c.anchors ?? [])];
     for (const a of anchors) {
       const range = resolveAnchorInDoc(doc, a);
       if (!range || range.from >= range.to) continue;

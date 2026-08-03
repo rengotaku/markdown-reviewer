@@ -244,17 +244,22 @@ function contextLabel(c: CommentJSON): string | null {
     const orig = originalTarget(c);
     return orig ? `${orig}（現在の本文には見つかりません）` : "位置不明 (orphan)";
   }
-  if (c.anchors && c.anchors.length > 0) {
-    return c.anchors
-      .map((a) => a.heading_path[a.heading_path.length - 1] ?? a.snippet)
-      .filter(Boolean)
-      .join(" ・ ");
-  }
+  // `context` first: a multi-line inline comment (#162) carries `anchors` too,
+  // and its line_range already spans every anchor — so the heading + L74–L80
+  // form stays, instead of degrading to a list of repeated heading names.
+  // cross_section comments have no single `anchor`, hence no `context`, and
+  // still fall through to the per-anchor heading list below.
   if (c.context) {
     const head = c.context.heading_path[c.context.heading_path.length - 1];
     const [s, e] = c.context.line_range;
     const lines = s === e ? `L${s}` : `L${s}–${e}`;
     return head ? `${head} (${lines})` : lines;
+  }
+  if (c.anchors && c.anchors.length > 0) {
+    return c.anchors
+      .map((a) => a.heading_path[a.heading_path.length - 1] ?? a.snippet)
+      .filter(Boolean)
+      .join(" ・ ");
   }
   if (c.anchor) return c.anchor.snippet;
   return null;

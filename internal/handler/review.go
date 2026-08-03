@@ -150,23 +150,16 @@ func (h *Handler) ReviewMarkdown(c *gin.Context) {
 	c.Data(http.StatusOK, "text/markdown; charset=utf-8", []byte(b.String()))
 }
 
-// writeReviewComment appends one comment's Markdown block to b.
+// writeReviewComment appends one comment's Markdown block to b. Location and
+// snippet resolution are shared with `mr review`/`mr comments`
+// (cmd/mr/format.go) via reviewstore.CommentLocation/Snippets so both surfaces
+// render identically, including comments carrying multiple anchors (#162).
 func writeReviewComment(b *strings.Builder, content string, cm reviewstore.Comment) {
-	loc := "全体"
-	if cm.Anchor != nil {
-		if lr, ok := reviewstore.ResolveAnchor(content, *cm.Anchor); ok {
-			heading := ""
-			if n := len(cm.Anchor.HeadingPath); n > 0 {
-				heading = cm.Anchor.HeadingPath[n-1] + " "
-			}
-			loc = fmt.Sprintf("%s(L%d)", heading, lr[0])
-		} else {
-			loc = "⚠ orphan（対象テキストが見つかりません）"
+	fmt.Fprintf(b, "## %s [%s] %s\n\n", cm.ID, cm.Scope, reviewstore.CommentLocation(content, cm))
+	for _, sn := range reviewstore.Snippets(cm) {
+		if sn != "" {
+			fmt.Fprintf(b, "> 対象: %s\n\n", sn)
 		}
-	}
-	fmt.Fprintf(b, "## %s [%s] %s\n\n", cm.ID, cm.Scope, loc)
-	if cm.Anchor != nil && cm.Anchor.Snippet != "" {
-		fmt.Fprintf(b, "> 対象: %s\n\n", cm.Anchor.Snippet)
 	}
 	fmt.Fprintf(b, "- 状態: %s\n", cm.Status)
 	fmt.Fprintf(b, "- 指摘: %s\n", cm.Body)

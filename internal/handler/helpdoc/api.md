@@ -55,6 +55,12 @@ hint URL は環境変数 `MARKDOWN_REVIEWER_BASE_URL` で固定でき、未設�
 （`heading_path` + `snippet` + `occurrence`）で正典に紐付く。ロード時に正典本文を再走査して
 位置（`context.line_range`）を復元する。見つからなければ `orphan: true`（位置不明として明示）。
 
+複数行にまたがる選択も、`anchor`（先頭ブロック）+ `anchors[]`（2 件目以降）で**全ブロックに
+アンカー**する（`scope` は `inline` のまま）。`context.line_range` はその中で解決できた
+アンカーの `[最小行, 最大行]`。`orphan: true` になるのは**全アンカーが解決不能なときのみ**で、
+一部だけ解決できれば `orphan: false`・`line_range` はその解決分だけから算出される。
+単一ブロック選択時は `anchors` が空になり、保存形・API 形とも旧来と完全に一致する。
+
 > **アンカーを自分で作るとき（`POST /api/comments` で `anchor` を指定する／CLI で起票する）の契約**:
 > `heading_path` と `snippet` は **描画後テキスト（インライン記法を除去した形）** で書くこと。
 > 具体的には、コードスパン `` `x` `` → `x`、強調 `**x**`/`*x*`/`__x__`/`_x_` → `x`、
@@ -66,7 +72,7 @@ hint URL は環境変数 `MARKDOWN_REVIEWER_BASE_URL` で固定でき、未設�
 
 | scope | 意味 | anchor |
 |-------|------|--------|
-| `inline` / `block` | テキスト範囲への注釈 | あり |
+| `inline` / `block` | テキスト範囲への注釈 | `anchor` 必須。複数行選択時は `anchors[]`（2 件目以降）も付く |
 | `cross_section` | 複数見出し横断 | `anchors[]`（複数） |
 | `global` | ファイル全体 | なし（`context: null`） |
 

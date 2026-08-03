@@ -131,24 +131,35 @@ export function resolveAnchorInDoc(
 }
 
 /**
- * computeAnchorFromSelection derives an anchor for the editor selection. The
- * snippet is clamped to the block holding the selection start so it stays on a
- * single line (matching the backend's line-based resolution).
+ * computeAnchorsFromSelection derives one anchor per block the selection
+ * touches (#162): a multi-line selection used to be clamped to whichever
+ * block held its start, which both lost the trailing blocks and — when the
+ * start landed exactly at a block's line end — produced an empty snippet and
+ * failed outright. Each touched block is anchored to its own overlap with the
+ * selection; blocks whose overlap trims to nothing (selection starts at a
+ * line end / ends at a line head / whitespace-only) are skipped rather than
+ * failing the whole selection. A single-block selection yields exactly the
+ * same single-element result as before, so this is a drop-in replacement.
  */
-export function computeAnchorFromSelection(
+export function computeAnchorsFromSelection(
   doc: ProseMirrorNode,
   from: number,
   to: number
-): PmAnchor | null {
+): PmAnchor[] {
   const blocks = extractAnchorBlocks(doc);
-  const idx = blockIndexAtPos(blocks, from);
-  if (idx === -1) return null;
-  const block = blocks[idx];
-  const startOff = Math.max(0, from - block.start);
-  const endOff = Math.min(block.text.length, to - block.start);
-  const snippet = block.text.slice(startOff, endOff).trim();
-  if (!snippet) return null;
-  return computeAnchorInBlocks(blocks, idx, snippet);
+  const anchors: PmAnchor[] = [];
+  for (let i = 0; i < blocks.length; i++) {
+    const block = blocks[i];
+    // Mirrors blockIndexAtPos's single-position window test, generalized to a
+    // range: the block is touched when the selection intersects its node span.
+    if (to <= block.start - 1 || from >= block.end) continue;
+    const startOff = Math.max(0, Math.min(block.text.length, from - block.start));
+    const endOff = Math.max(0, Math.min(block.text.length, to - block.start));
+    const snippet = block.text.slice(startOff, endOff).trim();
+    if (!snippet) continue;
+    anchors.push(computeAnchorInBlocks(blocks, i, snippet));
+  }
+  return anchors;
 }
 
 /**

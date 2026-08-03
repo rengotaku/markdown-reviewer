@@ -28,8 +28,11 @@ func postJSON(t *testing.T, h *handler.Handler, method, target string, body any)
 	return serve(h, req)
 }
 
-func anchor(heading, snippet string, occ int) *reviewstore.Anchor {
-	a := &reviewstore.Anchor{Snippet: snippet, Occurrence: occ}
+// anchor builds a first-occurrence Anchor; every test in this file needs at
+// most one match per heading+snippet pair, so Occurrence is always 0
+// (an explicit occ param here would be unparam-flagged dead weight).
+func anchor(heading, snippet string) *reviewstore.Anchor {
+	a := &reviewstore.Anchor{Snippet: snippet, Occurrence: 0}
 	if heading != "" {
 		a.HeadingPath = []string{heading}
 	}
@@ -70,7 +73,7 @@ func TestComments_CRUDLifecycle(t *testing.T) {
 	// Create an anchored comment.
 	rec := postJSON(t, h, http.MethodPost, "/api/comments/doc.md", handler.CreateCommentRequest{
 		Scope: "inline", Author: "reviewer", Body: "36 時間では？",
-		Anchor: anchor("## トークンの期限", "24 時間", 0),
+		Anchor: anchor("## トークンの期限", "24 時間"),
 	})
 	require.Equal(t, http.StatusCreated, rec.Code)
 	var created handler.CommentJSON
@@ -167,13 +170,139 @@ func TestComments_OrphanWhenSnippetMissing(t *testing.T) {
 	require.Equal(t, http.StatusOK, serve(h, httptest.NewRequest(http.MethodPost, "/api/ingest/doc.md", nil)).Code)
 
 	rec := postJSON(t, h, http.MethodPost, "/api/comments/doc.md", handler.CreateCommentRequest{
-		Scope: "inline", Body: "x", Anchor: anchor("", "存在しない", 0),
+		Scope: "inline", Body: "x", Anchor: anchor("", "存在しない"),
 	})
 	require.Equal(t, http.StatusCreated, rec.Code)
 	var created handler.CommentJSON
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&created))
 	assert.True(t, created.Orphan)
 	assert.Nil(t, created.Context)
+}
+
+// multiAnchorContent backs the C1-C5 buildCommentJSON cases (#162): headings
+// with resolvable lines at 5, 9, and 11 so multi-anchor comments span a real
+// line_range.
+//
+//	1  # 認証
+//	2
+//	3  ## トークンの期限
+//	4
+//	5  - アクセストークン: 24 時間
+//	6
+//	7  ## エラー
+//	8
+//	9  - 詳細1: 42
+//	10
+//	11 - 詳細2: 99
+const multiAnchorContent = "# 認証\n\n## トークンの期限\n\n- アクセストークン: 24 時間\n\n" +
+	"## エラー\n\n- 詳細1: 42\n\n- 詳細2: 99\n"
+
+// C1: Anchor only — line_range stays "[n,n]" and orphan=false, matching the
+// pre-#162 single-anchor shape exactly (also covered end-to-end by
+// TestComments_CRUDLifecycle).
+func TestBuildCommentJSON_C1_SingleAnchorUnchanged(t *testing.T) {
+	useTempReviewStore(t)
+	h, root := setupFilesHandler(t)
+	require.NoError(t, os.WriteFile(filepath.Join(root, "doc.md"), []byte(multiAnchorContent), 0o644))
+	require.Equal(t, http.StatusOK, serve(h, httptest.NewRequest(http.MethodPost, "/api/ingest/doc.md", nil)).Code)
+
+	rec := postJSON(t, h, http.MethodPost, "/api/comments/doc.md", handler.CreateCommentRequest{
+		Scope: "inline", Body: "x", Anchor: anchor("## トークンの期限", "24 時間"),
+	})
+	require.Equal(t, http.StatusCreated, rec.Code)
+	var created handler.CommentJSON
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&created))
+	require.NotNil(t, created.Context)
+	assert.Equal(t, [2]int{5, 5}, created.Context.LineRange)
+	assert.False(t, created.Orphan)
+}
+
+// C2: Anchor(L5) + Anchors(L9, L11) — line_range becomes [min,max] across all
+// resolved anchors.
+func TestBuildCommentJSON_C2_MultiAnchorLineRangeSpansAll(t *testing.T) {
+	useTempReviewStore(t)
+	h, root := setupFilesHandler(t)
+	require.NoError(t, os.WriteFile(filepath.Join(root, "doc.md"), []byte(multiAnchorContent), 0o644))
+	require.Equal(t, http.StatusOK, serve(h, httptest.NewRequest(http.MethodPost, "/api/ingest/doc.md", nil)).Code)
+
+	rec := postJSON(t, h, http.MethodPost, "/api/comments/doc.md", handler.CreateCommentRequest{
+		Scope: "inline", Body: "x",
+		Anchor: anchor("## トークンの期限", "24 時間"),
+		Anchors: []reviewstore.Anchor{
+			*anchor("## エラー", "詳細1: 42"),
+			*anchor("## エラー", "詳細2: 99"),
+		},
+	})
+	require.Equal(t, http.StatusCreated, rec.Code)
+	var created handler.CommentJSON
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&created))
+	require.NotNil(t, created.Context)
+	assert.Equal(t, [2]int{5, 11}, created.Context.LineRange)
+	assert.False(t, created.Orphan)
+}
+
+// C3: Anchor unresolvable, one of Anchors resolvable — orphan=false, and
+// line_range is computed only from the anchor(s) that actually resolved.
+func TestBuildCommentJSON_C3_PartiallyResolvedIsNotOrphan(t *testing.T) {
+	useTempReviewStore(t)
+	h, root := setupFilesHandler(t)
+	require.NoError(t, os.WriteFile(filepath.Join(root, "doc.md"), []byte(multiAnchorContent), 0o644))
+	require.Equal(t, http.StatusOK, serve(h, httptest.NewRequest(http.MethodPost, "/api/ingest/doc.md", nil)).Code)
+
+	rec := postJSON(t, h, http.MethodPost, "/api/comments/doc.md", handler.CreateCommentRequest{
+		Scope:  "inline",
+		Body:   "x",
+		Anchor: anchor("", "存在しない"),
+		Anchors: []reviewstore.Anchor{
+			*anchor("## エラー", "詳細1: 42"),
+		},
+	})
+	require.Equal(t, http.StatusCreated, rec.Code)
+	var created handler.CommentJSON
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&created))
+	require.NotNil(t, created.Context)
+	assert.Equal(t, [2]int{9, 9}, created.Context.LineRange)
+	assert.False(t, created.Orphan)
+}
+
+// C4: every anchor fails to resolve — orphan=true, context nil.
+func TestBuildCommentJSON_C4_AllUnresolvedIsOrphan(t *testing.T) {
+	useTempReviewStore(t)
+	h, root := setupFilesHandler(t)
+	require.NoError(t, os.WriteFile(filepath.Join(root, "doc.md"), []byte(multiAnchorContent), 0o644))
+	require.Equal(t, http.StatusOK, serve(h, httptest.NewRequest(http.MethodPost, "/api/ingest/doc.md", nil)).Code)
+
+	rec := postJSON(t, h, http.MethodPost, "/api/comments/doc.md", handler.CreateCommentRequest{
+		Scope:  "inline",
+		Body:   "x",
+		Anchor: anchor("", "存在しない1"),
+		Anchors: []reviewstore.Anchor{
+			*anchor("", "存在しない2"),
+		},
+	})
+	require.Equal(t, http.StatusCreated, rec.Code)
+	var created handler.CommentJSON
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&created))
+	assert.Nil(t, created.Context)
+	assert.True(t, created.Orphan)
+}
+
+// C5: global comment (no anchor(s)) — context nil, orphan=false; existing
+// behavior must be unaffected by the multi-anchor resolution added for #162.
+func TestBuildCommentJSON_C5_GlobalUnaffected(t *testing.T) {
+	useTempReviewStore(t)
+	h, root := setupFilesHandler(t)
+	require.NoError(t, os.WriteFile(filepath.Join(root, "doc.md"), []byte(multiAnchorContent), 0o644))
+	require.Equal(t, http.StatusOK, serve(h, httptest.NewRequest(http.MethodPost, "/api/ingest/doc.md", nil)).Code)
+
+	rec := postJSON(t, h, http.MethodPost, "/api/comments/doc.md", handler.CreateCommentRequest{
+		Scope: "global", Body: "全体コメント",
+	})
+	require.Equal(t, http.StatusCreated, rec.Code)
+	var created handler.CommentJSON
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&created))
+	assert.Nil(t, created.Context)
+	assert.False(t, created.Orphan)
 }
 
 func TestComments_NonMarkdownRejected(t *testing.T) {
@@ -201,4 +330,72 @@ func TestReviewMarkdown_OpenOnly(t *testing.T) {
 	md := rec.Body.String()
 	assert.Contains(t, md, "open のまま")
 	assert.NotContains(t, md, "解決済み")
+}
+
+// D2: a single-anchor comment's rendered Markdown must not change at all from
+// before #162 — same "見出し(L行)" / snippet block as always (backward compat
+// with `mr review`/`mr comments`, cmd/mr/format.go).
+func TestReviewMarkdown_D2_SingleAnchorUnchanged(t *testing.T) {
+	useTempReviewStore(t)
+	h, root := setupFilesHandler(t)
+	content := "# 認証\n\n## トークンの期限\n\n- アクセストークン: 24 時間\n"
+	require.NoError(t, os.WriteFile(filepath.Join(root, "doc.md"), []byte(content), 0o644))
+	require.Equal(t, http.StatusOK, serve(h, httptest.NewRequest(http.MethodPost, "/api/ingest/doc.md", nil)).Code)
+	require.Equal(t, http.StatusCreated, postJSON(t, h, http.MethodPost, "/api/comments/doc.md",
+		handler.CreateCommentRequest{
+			Scope: "inline", Body: "36 時間では？",
+			Anchor: anchor("## トークンの期限", "24 時間"),
+		}).Code)
+
+	rec := serve(h, httptest.NewRequest(http.MethodGet, "/api/review/doc.md", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	md := rec.Body.String()
+	assert.Contains(t, md, "## c-001 [inline] ## トークンの期限 (L5)\n\n")
+	assert.Contains(t, md, "> 対象: 24 時間\n\n")
+}
+
+// D1: a multi-anchor comment lists every anchor's "見出し(L行)" label, joined
+// the same way as `mr review`/`mr comments` (cmd/mr/format.go).
+func TestReviewMarkdown_D1_MultiAnchorListsEveryLocation(t *testing.T) {
+	useTempReviewStore(t)
+	h, root := setupFilesHandler(t)
+	require.NoError(t, os.WriteFile(filepath.Join(root, "doc.md"), []byte(multiAnchorContent), 0o644))
+	require.Equal(t, http.StatusOK, serve(h, httptest.NewRequest(http.MethodPost, "/api/ingest/doc.md", nil)).Code)
+	require.Equal(t, http.StatusCreated, postJSON(t, h, http.MethodPost, "/api/comments/doc.md",
+		handler.CreateCommentRequest{
+			Scope: "inline", Body: "複数行コメント",
+			Anchor: anchor("## トークンの期限", "24 時間"),
+			Anchors: []reviewstore.Anchor{
+				*anchor("## エラー", "詳細1: 42"),
+			},
+		}).Code)
+
+	rec := serve(h, httptest.NewRequest(http.MethodGet, "/api/review/doc.md", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	md := rec.Body.String()
+	assert.Contains(t, md, "## c-001 [inline] ## トークンの期限 (L5), ## エラー (L9)\n\n")
+	assert.Contains(t, md, "> 対象: 24 時間\n\n")
+	assert.Contains(t, md, "> 対象: 詳細1: 42\n\n")
+}
+
+// D3: when one anchor is orphaned, resolved anchors still show their line
+// number and the orphan is called out inline alongside them.
+func TestReviewMarkdown_D3_PartialOrphanIsCalledOutInline(t *testing.T) {
+	useTempReviewStore(t)
+	h, root := setupFilesHandler(t)
+	require.NoError(t, os.WriteFile(filepath.Join(root, "doc.md"), []byte(multiAnchorContent), 0o644))
+	require.Equal(t, http.StatusOK, serve(h, httptest.NewRequest(http.MethodPost, "/api/ingest/doc.md", nil)).Code)
+	require.Equal(t, http.StatusCreated, postJSON(t, h, http.MethodPost, "/api/comments/doc.md",
+		handler.CreateCommentRequest{
+			Scope: "inline", Body: "一部 orphan",
+			Anchor: anchor("## トークンの期限", "24 時間"),
+			Anchors: []reviewstore.Anchor{
+				*anchor("", "存在しないテキスト"),
+			},
+		}).Code)
+
+	rec := serve(h, httptest.NewRequest(http.MethodGet, "/api/review/doc.md", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	md := rec.Body.String()
+	assert.Contains(t, md, "## c-001 [inline] ## トークンの期限 (L5), ⚠ orphan（対象テキストが見つかりません）\n\n")
 }
