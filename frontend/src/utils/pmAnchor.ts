@@ -20,16 +20,35 @@ export interface PmAnchor {
 }
 
 /**
- * One document block (paragraph, heading, list item, …) flattened for
- * anchoring. `start` is the ProseMirror position of the block's first text
- * character; `end` is the position just past the block node.
+ * One anchorable unit (paragraph, heading, list item, table cell, code-block
+ * line, …) flattened for anchoring. `start` is the ProseMirror position of
+ * the unit's first text character; `end` is the position just past it.
  */
 export interface AnchorBlock {
   start: number;
   end: number;
   text: string;
-  /** Heading stack in effect at this block, outermost first ("## Title" form). */
+  /** Heading stack in effect at this unit, outermost first ("## Title" form). */
   headingStack: string[];
+  /**
+   * Identifies which Markdown *line* this unit came from (#163 / #164). The
+   * backend (`internal/reviewstore/comments.go` ResolveAnchor) counts
+   * `occurrence` per Markdown line, scanned with `strings.Split(content,
+   * "\n")`. Most ProseMirror textblocks are already 1:1 with a Markdown
+   * line, so they get a unique `lineGroup` each (same as an index). Two
+   * structures break that 1:1 mapping and need `lineGroup` to fix it back up:
+   *   - a fenced code block is *one* PM textblock spanning *N* Markdown
+   *     lines — extractAnchorBlocks splits it into N units, each its own
+   *     lineGroup (so none of them carry a literal "\n" in `text`, unlike
+   *     the backend's per-line snippets).
+   *   - a table row is *N* PM textblocks (one per cell) on *one* Markdown
+   *     line — extractAnchorBlocks gives every cell in the row the same
+   *     lineGroup, so counting groups (not units) agrees with the backend's
+   *     one-line-one-occurrence-slot view.
+   * occurrence counting (resolveAnchorInBlocks / computeAnchorInBlocks) is
+   * therefore done per distinct `lineGroup`, not per unit.
+   */
+  lineGroup: number;
 }
 
 function suffixMatch(stack: string[], want: string[]): boolean {
@@ -67,9 +86,13 @@ export function stripBlockMarkers(snippet: string): string {
 }
 
 /**
- * resolveAnchorInBlocks returns the PM range of the occurrence-th block that
- * contains the snippet under a matching heading path, or null when orphaned.
- * The range covers the first snippet match within that block.
+ * resolveAnchorInBlocks returns the PM range of the occurrence-th *Markdown
+ * line* (`lineGroup`) that contains the snippet under a matching heading
+ * path, or null when orphaned. The range covers the first snippet match
+ * within the first unit of that line group (#163 / #164: a line group can
+ * span several units — a table row's cells — and only the first match in
+ * document order is addressable; see the accepted limitation on
+ * `AnchorBlock.lineGroup`).
  *
  * Exact matching runs first and owns `occurrence`. Only when it finds nothing
  * does the marker-stripped fallback run (#168), and that fallback deliberately
@@ -91,15 +114,20 @@ export function resolveAnchorInBlocks(
   const underHeading = (b: AnchorBlock) =>
     !anchor.heading_path.length || suffixMatch(b.headingStack, anchor.heading_path);
 
-  let seen = 0;
+  let groupsSeen = 0;
+  let lastCountedGroup: number | null = null;
   for (const b of blocks) {
     const idx = b.text.indexOf(anchor.snippet);
     if (idx === -1 || !underHeading(b)) continue;
-    if (seen === anchor.occurrence) {
+    // A later unit in the same lineGroup (e.g. another cell in the row we
+    // already counted) is not a new occurrence.
+    if (b.lineGroup === lastCountedGroup) continue;
+    if (groupsSeen === anchor.occurrence) {
       const from = b.start + idx;
       return { from, to: from + anchor.snippet.length };
     }
-    seen++;
+    groupsSeen++;
+    lastCountedGroup = b.lineGroup;
   }
 
   const bare = stripBlockMarkers(anchor.snippet);
@@ -114,9 +142,14 @@ export function resolveAnchorInBlocks(
 
 /**
  * computeAnchorInBlocks builds the anchor for a snippet located in
- * blocks[blockIndex]: the heading stack there, plus the count of earlier blocks
- * (document order) carrying the same snippet under the same heading path. This
- * is the inverse of resolveAnchorInBlocks.
+ * blocks[blockIndex]: the heading stack there, plus the count of distinct
+ * earlier `lineGroup`s (document order) carrying the same snippet under the
+ * same heading path. This is the inverse of resolveAnchorInBlocks.
+ *
+ * Counting is per `lineGroup`, not per unit (#163 / #164): an earlier unit
+ * that shares blockIndex's own lineGroup (e.g. the sibling cell in the same
+ * table row) is the *same* occurrence as the target, not a distinct prior
+ * one, so it is excluded even though its array index is smaller.
  */
 export function computeAnchorInBlocks(
   blocks: ReadonlyArray<AnchorBlock>,
@@ -125,18 +158,19 @@ export function computeAnchorInBlocks(
 ): PmAnchor {
   const target = blocks[blockIndex];
   const heading_path = target ? target.headingStack : [];
-  let occurrence = 0;
+  const seenGroups = new Set<number>();
   for (let i = 0; i < blockIndex; i++) {
     const b = blocks[i];
+    if (target && b.lineGroup === target.lineGroup) continue;
     // Exact matching only. Snippets authored here come from ProseMirror block
     // text, which never carries a block marker, so the #168 fallback has
     // nothing to do — and counting stripped matches would inflate `occurrence`
     // past what the exact-match resolve path will count back.
     if (b.text.indexOf(snippet) === -1) continue;
     if (heading_path.length && !suffixMatch(b.headingStack, heading_path)) continue;
-    occurrence++;
+    seenGroups.add(b.lineGroup);
   }
-  return { heading_path, snippet, occurrence };
+  return { heading_path, snippet, occurrence: seenGroups.size };
 }
 
 /** blockIndexAtPos finds the block whose range contains the PM position. */
@@ -151,26 +185,78 @@ export function blockIndexAtPos(
   return -1;
 }
 
-/** extractAnchorBlocks flattens the document into anchorable blocks. */
+/**
+ * extractAnchorBlocks flattens the document into anchorable units, walked
+ * manually (rather than via `doc.descendants`) so table rows can thread a
+ * shared `lineGroup` down to their cells' textblocks (#164) and fenced code
+ * blocks can be split into one unit per Markdown line (#163) — both need
+ * more context than a flat per-node callback exposes.
+ */
 export function extractAnchorBlocks(doc: ProseMirrorNode): AnchorBlock[] {
   const blocks: AnchorBlock[] = [];
-  const stack: { text: string; level: number }[] = [];
-  doc.descendants((node, pos) => {
-    if (!node.isTextblock) return true;
-    const text = node.textContent;
-    if (node.type.name === "heading") {
-      const level = Number(node.attrs.level) || 1;
-      while (stack.length && stack[stack.length - 1].level >= level) stack.pop();
-      stack.push({ text: `${"#".repeat(level)} ${text.trim()}`, level });
-    }
-    blocks.push({
-      start: pos + 1,
-      end: pos + node.nodeSize,
-      text,
-      headingStack: stack.map((s) => s.text),
+  const headingStack: { text: string; level: number }[] = [];
+  let nextLineGroup = 0;
+
+  // `pos` is the ProseMirror position immediately before `parent` (-1 for the
+  // document root, whose content starts at position 0). `rowGroup` is the
+  // lineGroup shared by all cells of the table row currently being walked,
+  // or null outside a table row.
+  function walk(parent: ProseMirrorNode, pos: number, rowGroup: number | null): void {
+    parent.forEach((child, offset) => {
+      const childPos = pos + 1 + offset;
+
+      if (child.type.name === "codeBlock") {
+        // One PM textblock, N Markdown lines: split on "\n" so each line is
+        // its own unit and none of them carry a literal newline (#163).
+        const lines = child.textContent.split("\n");
+        let lineStart = childPos + 1;
+        for (const line of lines) {
+          blocks.push({
+            start: lineStart,
+            end: lineStart + line.length,
+            text: line,
+            headingStack: headingStack.map((s) => s.text),
+            lineGroup: nextLineGroup++,
+          });
+          lineStart += line.length + 1; // +1 skips the "\n" separator char.
+        }
+        return;
+      }
+
+      if (child.type.name === "heading") {
+        const level = Number(child.attrs.level) || 1;
+        while (headingStack.length && headingStack[headingStack.length - 1].level >= level) {
+          headingStack.pop();
+        }
+        headingStack.push({
+          text: `${"#".repeat(level)} ${child.textContent.trim()}`,
+          level,
+        });
+      }
+
+      if (child.isTextblock) {
+        blocks.push({
+          start: childPos + 1,
+          end: childPos + child.nodeSize,
+          text: child.textContent,
+          headingStack: headingStack.map((s) => s.text),
+          lineGroup: rowGroup ?? nextLineGroup++,
+        });
+        return;
+      }
+
+      if (child.type.name === "tableRow") {
+        // One Markdown line, N PM textblocks (one per cell): every unit
+        // found while walking this row shares one lineGroup (#164).
+        walk(child, childPos, nextLineGroup++);
+        return;
+      }
+
+      walk(child, childPos, rowGroup);
     });
-    return false;
-  });
+  }
+
+  walk(doc, -1, null);
   return blocks;
 }
 
