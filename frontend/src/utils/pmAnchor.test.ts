@@ -9,6 +9,7 @@ import {
   blockIndexAtPos,
   extractAnchorBlocks,
   resolveAnchorInDoc,
+  stripBlockMarkers,
   type AnchorBlock,
 } from "./pmAnchor";
 
@@ -347,5 +348,149 @@ describe("pmAnchor ProseMirror adapters", () => {
     );
     expect(anchors).toHaveLength(2);
     expect(anchors.map((a) => a.snippet)).toEqual(["item one", "item two"]);
+  });
+});
+
+// #168: snippets written by AI clients keep the raw line's block-level markers
+// (the backend matches Markdown lines, which have them), but ProseMirror block
+// text does not. Measured on a real file: 8 of 9 backend-resolvable comments
+// were unresolvable in the editor for exactly this reason — 7 ordered-list
+// markers and 1 blockquote marker.
+describe("resolveAnchorInBlocks with block-level markers (#168)", () => {
+  const blocks: AnchorBlock[] = [
+    { start: 1, end: 20, text: "同じ移行を他の人が再現できる状態にした", headingStack: ["### 実績"] },
+    { start: 30, end: 60, text: "⚠️ レビューで挙げた 6 件を削除した", headingStack: ["### 実績"] },
+    { start: 70, end: 90, text: "特になし。", headingStack: ["### 課題"] },
+  ];
+
+  it("resolves a snippet carrying an ordered-list marker", () => {
+    const r = resolveAnchorInBlocks(blocks, {
+      heading_path: ["### 実績"],
+      snippet: "4. 同じ移行を他の人が再現できる状態にした",
+      occurrence: 0,
+    });
+    // The range must cover the block text only — the "4. " is not in the doc.
+    expect(r).toEqual({ from: 1, to: 1 + "同じ移行を他の人が再現できる状態にした".length });
+  });
+
+  it("resolves a snippet carrying a blockquote marker", () => {
+    const r = resolveAnchorInBlocks(blocks, {
+      heading_path: ["### 実績"],
+      snippet: "> ⚠️ レビューで挙げた 6 件を削除した",
+      occurrence: 0,
+    });
+    expect(r).toEqual({ from: 30, to: 30 + "⚠️ レビューで挙げた 6 件を削除した".length });
+  });
+
+  it("resolves a blockquote marker written without a space", () => {
+    // CommonMark accepts ">text" and ">>text"; the backend matches the raw
+    // line, so the editor has to strip these forms too.
+    for (const snippet of [">特になし。", ">>特になし。", "> > 特になし。"]) {
+      expect(resolveAnchorInBlocks(blocks, { heading_path: [], snippet, occurrence: 0 })).toEqual(
+        { from: 70, to: 70 + "特になし。".length }
+      );
+    }
+  });
+
+  it("leaves prose that merely starts with a hyphen or digit alone", () => {
+    // "-text" / "1.text" / "#text" are not list items or headings, so nothing
+    // may be stripped — otherwise the fallback would match the wrong block.
+    const prose: AnchorBlock[] = [
+      { start: 1, end: 10, text: "-5 度まで下がった", headingStack: [] },
+    ];
+    expect(stripBlockMarkers("-5 度まで下がった")).toBe("-5 度まで下がった");
+    expect(
+      resolveAnchorInBlocks(prose, {
+        heading_path: [],
+        snippet: "-5 度まで下がった",
+        occurrence: 0,
+      })
+    ).toEqual({ from: 1, to: 1 + "-5 度まで下がった".length });
+  });
+
+  it("resolves nested markers such as '> - '", () => {
+    const r = resolveAnchorInBlocks(blocks, {
+      heading_path: [],
+      snippet: "> - 特になし。",
+      occurrence: 0,
+    });
+    expect(r).toEqual({ from: 70, to: 70 + "特になし。".length });
+  });
+
+  it("prefers an exact match over the stripped form", () => {
+    // A block whose text genuinely starts with "1. " must win against a later
+    // block matching only after stripping, so real content is never skipped.
+    const withLiteral: AnchorBlock[] = [
+      { start: 1, end: 10, text: "1. リテラルな行", headingStack: [] },
+      { start: 20, end: 30, text: "リテラルな行", headingStack: [] },
+    ];
+    const r = resolveAnchorInBlocks(withLiteral, {
+      heading_path: [],
+      snippet: "1. リテラルな行",
+      occurrence: 0,
+    });
+    expect(r).toEqual({ from: 1, to: 1 + "1. リテラルな行".length });
+  });
+
+  it("still returns null when the text is genuinely gone", () => {
+    expect(
+      resolveAnchorInBlocks(blocks, {
+        heading_path: [],
+        snippet: "1. 本文から消えた行",
+        occurrence: 0,
+      })
+    ).toBeNull();
+  });
+
+  it("refuses to guess when the stripped form is ambiguous", () => {
+    // "1. 同じ文" and "2. 同じ文" both strip to "同じ文". The occurrence on a
+    // marker-prefixed snippet was counted against raw Markdown lines, where
+    // "2. 同じ文" appears once — so occurrence 0 means the *second* item. The
+    // stripped set numbers them differently, so committing to an index here
+    // would point at a confidently wrong line. Orphan is the honest answer.
+    const dup: AnchorBlock[] = [
+      { start: 1, end: 10, text: "同じ文", headingStack: ["## A"] },
+      { start: 20, end: 30, text: "同じ文", headingStack: ["## A"] },
+    ];
+    expect(
+      resolveAnchorInBlocks(dup, {
+        heading_path: ["## A"],
+        snippet: "2. 同じ文",
+        occurrence: 0,
+      })
+    ).toBeNull();
+  });
+
+  it("keeps exact matching in charge of occurrence", () => {
+    // When the snippet matches literally, the fallback must not run at all and
+    // occurrence must still select the nth match.
+    const dup: AnchorBlock[] = [
+      { start: 1, end: 10, text: "- 生き残った記号付きの行", headingStack: [] },
+      { start: 20, end: 30, text: "- 生き残った記号付きの行", headingStack: [] },
+    ];
+    expect(
+      resolveAnchorInBlocks(dup, {
+        heading_path: [],
+        snippet: "- 生き残った記号付きの行",
+        occurrence: 1,
+      })
+    ).toEqual({ from: 20, to: 20 + "- 生き残った記号付きの行".length });
+  });
+
+  it("authoring counts only exact matches for occurrence", () => {
+    // computeAnchorInBlocks sees ProseMirror block text, which never carries a
+    // marker; counting stripped matches would inflate occurrence past what the
+    // exact-match resolve path counts back.
+    const dup: AnchorBlock[] = [
+      { start: 1, end: 10, text: "2. マーカー付きの行", headingStack: [] },
+      { start: 20, end: 30, text: "マーカー付きの行", headingStack: [] },
+    ];
+    const anchor = computeAnchorInBlocks(dup, 1, "マーカー付きの行");
+    // Block 0's text contains "マーカー付きの行" literally, so it counts.
+    expect(anchor.occurrence).toBe(1);
+    expect(resolveAnchorInBlocks(dup, anchor)).toEqual({
+      from: 20,
+      to: 20 + "マーカー付きの行".length,
+    });
   });
 });

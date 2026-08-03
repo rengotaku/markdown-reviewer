@@ -298,6 +298,15 @@
   animation: comment-flash 0.35s ease-in-out 4;
 }
 
+/* Transient flash-only highlight (#167): painted by flashCommentRanges to show
+   a jump target with no persistent comment-mark decoration (e.g. a resolved
+   comment, #96/#97). No standing background of its own, so nothing lingers
+   once the flash finishes and clearCommentFlash removes the decoration. */
+.ProseMirror .comment-flash.is-flash {
+  border-radius: 2px;
+  animation: comment-flash 0.35s ease-in-out 4;
+}
+
 /* Standalone comment node — scope="cross-section" / "global". */
 .ProseMirror .standalone-comment {
   margin: 12px 0;

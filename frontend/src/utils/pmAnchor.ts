@@ -38,30 +38,78 @@ function suffixMatch(stack: string[], want: string[]): boolean {
   return want.every((w, i) => stack[off + i] === w);
 }
 
+// Leading block-level Markdown markers: blockquote `>`, bullet `-`/`*`/`+`,
+// ordered `1.`/`1)`, and ATX heading `#`. Applied repeatedly so nested forms
+// like "> - " and ">> " are peeled off too.
+//
+// Only `>` takes an optional trailing space: CommonMark accepts `>text` and
+// `>>text`, whereas `-text`, `1.text` and `#text` are plain text, not list
+// items or headings — requiring the space there keeps ordinary prose that
+// happens to start with a hyphen or a digit from being mangled.
+const BLOCK_MARKER = /^\s*(?:>\s*|[-*+]\s+|\d+[.)]\s+|#{1,6}\s+)/;
+
+/**
+ * stripBlockMarkers removes leading block-level Markdown markers from a
+ * snippet (#168). The backend resolves anchors against raw Markdown *lines*,
+ * which carry these markers, while the editor resolves against ProseMirror
+ * block text, which does not — a list item's textContent has no "1. " and a
+ * blockquote's has no "> ". Snippets written by AI clients sit in between
+ * (inline markup stripped, block markers kept), so the reading side has to
+ * tolerate them or the highlight and the jump both silently do nothing.
+ */
+export function stripBlockMarkers(snippet: string): string {
+  let out = snippet;
+  for (;;) {
+    const next = out.replace(BLOCK_MARKER, "");
+    if (next === out) return out;
+    out = next;
+  }
+}
+
 /**
  * resolveAnchorInBlocks returns the PM range of the occurrence-th block that
  * contains the snippet under a matching heading path, or null when orphaned.
  * The range covers the first snippet match within that block.
+ *
+ * Exact matching runs first and owns `occurrence`. Only when it finds nothing
+ * does the marker-stripped fallback run (#168), and that fallback deliberately
+ * ignores `occurrence`: the number was counted by whoever wrote the anchor
+ * against raw Markdown lines (which carry the marker), so it does not index
+ * into the stripped-match set. Guessing an index across those two different
+ * numbering schemes would point at a confidently wrong line — e.g. "1. 同じ文"
+ * and "2. 同じ文" under one heading both strip to "同じ文", and the backend's
+ * `occurrence: 0` for "2. 同じ文" means the second item, not the first. So the
+ * fallback only commits when it is unambiguous, and otherwise reports the
+ * honest orphan.
  */
 export function resolveAnchorInBlocks(
   blocks: ReadonlyArray<AnchorBlock>,
   anchor: PmAnchor
 ): { from: number; to: number } | null {
   if (!anchor.snippet) return null;
+
+  const underHeading = (b: AnchorBlock) =>
+    !anchor.heading_path.length || suffixMatch(b.headingStack, anchor.heading_path);
+
   let seen = 0;
   for (const b of blocks) {
     const idx = b.text.indexOf(anchor.snippet);
-    if (idx === -1) continue;
-    if (anchor.heading_path.length && !suffixMatch(b.headingStack, anchor.heading_path)) {
-      continue;
-    }
+    if (idx === -1 || !underHeading(b)) continue;
     if (seen === anchor.occurrence) {
       const from = b.start + idx;
       return { from, to: from + anchor.snippet.length };
     }
     seen++;
   }
-  return null;
+
+  const bare = stripBlockMarkers(anchor.snippet);
+  if (bare === anchor.snippet || !bare) return null;
+  const candidates = blocks.filter(
+    (b) => underHeading(b) && b.text.includes(bare)
+  );
+  if (candidates.length !== 1) return null;
+  const from = candidates[0].start + candidates[0].text.indexOf(bare);
+  return { from, to: from + bare.length };
 }
 
 /**
@@ -80,6 +128,10 @@ export function computeAnchorInBlocks(
   let occurrence = 0;
   for (let i = 0; i < blockIndex; i++) {
     const b = blocks[i];
+    // Exact matching only. Snippets authored here come from ProseMirror block
+    // text, which never carries a block marker, so the #168 fallback has
+    // nothing to do — and counting stripped matches would inflate `occurrence`
+    // past what the exact-match resolve path will count back.
     if (b.text.indexOf(snippet) === -1) continue;
     if (heading_path.length && !suffixMatch(b.headingStack, heading_path)) continue;
     occurrence++;
