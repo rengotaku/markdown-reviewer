@@ -78,10 +78,15 @@ export function RootSelect() {
           // 実際とは違うポップアップ種別を予告してしまう（#158 codex review）。
           aria-haspopup="menu"
           aria-expanded={open}
-          // 現在の root 名を必ずアクセシブル名に含める。固定文言だけだと
-          // 子テキスト（root 名）を上書きしてしまい、支援技術に「今どの root を
-          // 見ているか」が伝わらない（#158 codex review round 2）。
-          aria-label={`review root ${label} を切り替え`}
+          // ボタンに aria-label を置くと子要素のテキスト（root 名）と
+          // `•` の aria-label をまとめて上書きするため、伝えたい情報を
+          // すべてここに畳み込む: 現在の root 名（round 2）＋他 root の
+          // 未保存状態（round 3）。#158 codex review。
+          aria-label={
+            dirtyElsewhere
+              ? `review root ${label} を切り替え（他の root に未保存の変更あり）`
+              : `review root ${label} を切り替え`
+          }
           data-testid="sidebar-review-root"
           sx={{
             flexGrow: 1,

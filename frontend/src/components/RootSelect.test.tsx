@@ -126,6 +126,11 @@ describe("RootSelect", () => {
     renderSelect();
 
     expect(screen.getByTestId("sidebar-review-root")).toHaveTextContent("•");
+    // 視覚的な `•` だけでなくアクセシブル名にも載せる。ボタンの aria-label が
+    // 子要素の aria-label を上書きするため（#158 review round 3）。
+    expect(
+      screen.getByRole("button", { name: /他の root に未保存の変更あり/ })
+    ).toBe(screen.getByTestId("sidebar-review-root"));
   });
 
   it("A7: does not show a dirty indicator on the header button for the active root's own unsaved files", () => {
