@@ -415,18 +415,55 @@ describe("resolveAnchorInBlocks with block-level markers (#168)", () => {
     ).toBeNull();
   });
 
-  it("counts marker-prefixed matches consistently when computing occurrence", () => {
-    // Authoring and resolving must agree, otherwise the occurrence-th match
-    // points at a different block on the way back.
+  it("refuses to guess when the stripped form is ambiguous", () => {
+    // "1. 同じ文" and "2. 同じ文" both strip to "同じ文". The occurrence on a
+    // marker-prefixed snippet was counted against raw Markdown lines, where
+    // "2. 同じ文" appears once — so occurrence 0 means the *second* item. The
+    // stripped set numbers them differently, so committing to an index here
+    // would point at a confidently wrong line. Orphan is the honest answer.
     const dup: AnchorBlock[] = [
-      { start: 1, end: 10, text: "重複する行", headingStack: [] },
-      { start: 20, end: 30, text: "重複する行", headingStack: [] },
+      { start: 1, end: 10, text: "同じ文", headingStack: ["## A"] },
+      { start: 20, end: 30, text: "同じ文", headingStack: ["## A"] },
     ];
-    const anchor = computeAnchorInBlocks(dup, 1, "2. 重複する行");
+    expect(
+      resolveAnchorInBlocks(dup, {
+        heading_path: ["## A"],
+        snippet: "2. 同じ文",
+        occurrence: 0,
+      })
+    ).toBeNull();
+  });
+
+  it("keeps exact matching in charge of occurrence", () => {
+    // When the snippet matches literally, the fallback must not run at all and
+    // occurrence must still select the nth match.
+    const dup: AnchorBlock[] = [
+      { start: 1, end: 10, text: "- 生き残った記号付きの行", headingStack: [] },
+      { start: 20, end: 30, text: "- 生き残った記号付きの行", headingStack: [] },
+    ];
+    expect(
+      resolveAnchorInBlocks(dup, {
+        heading_path: [],
+        snippet: "- 生き残った記号付きの行",
+        occurrence: 1,
+      })
+    ).toEqual({ from: 20, to: 20 + "- 生き残った記号付きの行".length });
+  });
+
+  it("authoring counts only exact matches for occurrence", () => {
+    // computeAnchorInBlocks sees ProseMirror block text, which never carries a
+    // marker; counting stripped matches would inflate occurrence past what the
+    // exact-match resolve path counts back.
+    const dup: AnchorBlock[] = [
+      { start: 1, end: 10, text: "2. マーカー付きの行", headingStack: [] },
+      { start: 20, end: 30, text: "マーカー付きの行", headingStack: [] },
+    ];
+    const anchor = computeAnchorInBlocks(dup, 1, "マーカー付きの行");
+    // Block 0's text contains "マーカー付きの行" literally, so it counts.
     expect(anchor.occurrence).toBe(1);
     expect(resolveAnchorInBlocks(dup, anchor)).toEqual({
       from: 20,
-      to: 20 + "重複する行".length,
+      to: 20 + "マーカー付きの行".length,
     });
   });
 });

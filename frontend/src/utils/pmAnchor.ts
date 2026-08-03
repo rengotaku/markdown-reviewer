@@ -62,46 +62,49 @@ export function stripBlockMarkers(snippet: string): string {
 }
 
 /**
- * snippetIndexIn finds the snippet in a block's text, retrying without leading
- * block markers. Returns the match offset and the matched length (which
- * differs from snippet.length when the stripped form matched), or null.
- */
-function snippetIndexIn(
-  text: string,
-  snippet: string
-): { idx: number; len: number } | null {
-  const exact = text.indexOf(snippet);
-  if (exact !== -1) return { idx: exact, len: snippet.length };
-  const bare = stripBlockMarkers(snippet);
-  if (bare === snippet || !bare) return null;
-  const loose = text.indexOf(bare);
-  return loose === -1 ? null : { idx: loose, len: bare.length };
-}
-
-/**
  * resolveAnchorInBlocks returns the PM range of the occurrence-th block that
  * contains the snippet under a matching heading path, or null when orphaned.
  * The range covers the first snippet match within that block.
+ *
+ * Exact matching runs first and owns `occurrence`. Only when it finds nothing
+ * does the marker-stripped fallback run (#168), and that fallback deliberately
+ * ignores `occurrence`: the number was counted by whoever wrote the anchor
+ * against raw Markdown lines (which carry the marker), so it does not index
+ * into the stripped-match set. Guessing an index across those two different
+ * numbering schemes would point at a confidently wrong line — e.g. "1. 同じ文"
+ * and "2. 同じ文" under one heading both strip to "同じ文", and the backend's
+ * `occurrence: 0` for "2. 同じ文" means the second item, not the first. So the
+ * fallback only commits when it is unambiguous, and otherwise reports the
+ * honest orphan.
  */
 export function resolveAnchorInBlocks(
   blocks: ReadonlyArray<AnchorBlock>,
   anchor: PmAnchor
 ): { from: number; to: number } | null {
   if (!anchor.snippet) return null;
+
+  const underHeading = (b: AnchorBlock) =>
+    !anchor.heading_path.length || suffixMatch(b.headingStack, anchor.heading_path);
+
   let seen = 0;
   for (const b of blocks) {
-    const hit = snippetIndexIn(b.text, anchor.snippet);
-    if (hit === null) continue;
-    if (anchor.heading_path.length && !suffixMatch(b.headingStack, anchor.heading_path)) {
-      continue;
-    }
+    const idx = b.text.indexOf(anchor.snippet);
+    if (idx === -1 || !underHeading(b)) continue;
     if (seen === anchor.occurrence) {
-      const from = b.start + hit.idx;
-      return { from, to: from + hit.len };
+      const from = b.start + idx;
+      return { from, to: from + anchor.snippet.length };
     }
     seen++;
   }
-  return null;
+
+  const bare = stripBlockMarkers(anchor.snippet);
+  if (bare === anchor.snippet || !bare) return null;
+  const candidates = blocks.filter(
+    (b) => underHeading(b) && b.text.includes(bare)
+  );
+  if (candidates.length !== 1) return null;
+  const from = candidates[0].start + candidates[0].text.indexOf(bare);
+  return { from, to: from + bare.length };
 }
 
 /**
@@ -120,9 +123,11 @@ export function computeAnchorInBlocks(
   let occurrence = 0;
   for (let i = 0; i < blockIndex; i++) {
     const b = blocks[i];
-    // Same matching rule as resolveAnchorInBlocks, so authoring and resolving
-    // agree on which blocks count towards `occurrence` (#168).
-    if (snippetIndexIn(b.text, snippet) === null) continue;
+    // Exact matching only. Snippets authored here come from ProseMirror block
+    // text, which never carries a block marker, so the #168 fallback has
+    // nothing to do — and counting stripped matches would inflate `occurrence`
+    // past what the exact-match resolve path will count back.
+    if (b.text.indexOf(snippet) === -1) continue;
     if (heading_path.length && !suffixMatch(b.headingStack, heading_path)) continue;
     occurrence++;
   }

@@ -258,6 +258,9 @@ export function EditorPage() {
   // to sweep, and reusing the key for a future re-open of the same path
   // should get a fresh check rather than inherit a stale miss).
   const missingStatFilesRef = useRef<Set<string>>(new Set());
+  // Pending clear for the shared comment-flash decoration (#167), so a second
+  // jump within the flash window does not get cut short by the first timer.
+  const flashTimerRef = useRef<number | null>(null);
 
   // True when some open tab (any root) already has this root/path — used to
   // decide whether an SSE `comments` event should bump the tab-badge sweep
@@ -1373,7 +1376,11 @@ export function EditorPage() {
       node.nodeType === Node.TEXT_NODE ? node.parentElement : (node as HTMLElement);
     target?.scrollIntoView({ behavior: "smooth", block: "center" });
     editor.commands.flashCommentRanges(ranges);
-    window.setTimeout(() => {
+    // The flash decoration set is shared, so a pending clear from an earlier
+    // click would cut this one short. Cancel it and own the timer.
+    if (flashTimerRef.current !== null) window.clearTimeout(flashTimerRef.current);
+    flashTimerRef.current = window.setTimeout(() => {
+      flashTimerRef.current = null;
       if (!editor || editor.isDestroyed) return;
       editor.commands.clearCommentFlash();
     }, 1600);
