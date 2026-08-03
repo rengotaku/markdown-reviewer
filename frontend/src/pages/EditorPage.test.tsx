@@ -1,12 +1,18 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, useLocation } from "react-router-dom";
+import { Editor } from "@tiptap/core";
+import StarterKit from "@tiptap/starter-kit";
 import { EditorPage } from "./EditorPage";
 import { useOpenFiles } from "@/hooks/useOpenFiles";
 import { useToast } from "@/hooks/useToast";
 import { useConfirm } from "@/hooks/useConfirm";
+import { useEditorInstance } from "@/hooks/useEditorInstance";
+import { CommentHighlight } from "@/components/tiptap/extensions/CommentHighlight";
+import { DiffGutter } from "@/components/tiptap/extensions/DiffGutter";
+import type { CommentJSON } from "@/api";
 
 vi.mock("@/components/tiptap/TiptapEditor", () => ({
   TiptapEditor: () => <div data-testid="tiptap-editor" />,
@@ -1038,5 +1044,242 @@ describe("EditorPage", () => {
       const toasts = useToast.getState().toasts;
       expect(toasts.some((t) => t.severity === "error")).toBe(true);
     });
+  });
+});
+
+// #167 A1–A4: clicking a comment's "対象:" label must jump to it regardless of
+// whether CommentHighlight painted a decoration for it — resolved comments
+// intentionally have none (#96/#97), so the jump used to key off the (absent)
+// `[data-comment-id]` decoration and silently do nothing.
+//
+// TiptapEditor is mocked out at the top of this file (no real ProseMirror DOM
+// mounts through it), so these tests build a standalone real `Editor` and
+// hand it to EditorPage via the same `useEditorInstance` store the mocked
+// component would otherwise populate. Once installed, EditorPage's own
+// "push comments into the editor" effect (`setCommentHighlights`) fires against
+// it exactly as it would against the real TiptapEditor instance.
+describe("EditorPage jump to comment (#167)", () => {
+  let fakeEditor: Editor | null = null;
+
+  function installFakeEditor(html: string): Editor {
+    // Mirrors the extension set EditorPage's other effects rely on
+    // (DiffGutter's setDiffGutter command) on top of CommentHighlight.
+    fakeEditor = new Editor({
+      extensions: [StarterKit.configure({ link: false }), CommentHighlight, DiffGutter],
+      content: html,
+    });
+    useEditorInstance.getState().setEditor(fakeEditor);
+    return fakeEditor;
+  }
+
+  function useComments(comments: CommentJSON[]) {
+    return async () => {
+      const { http, HttpResponse } = await import("msw");
+      const { server } = await import("@/test/mocks/server");
+      server.use(
+        http.get("http://localhost:8080/api/stat/*", () =>
+          HttpResponse.json({
+            path: "README.md",
+            root: "mock-root",
+            modified: "2026-05-20T00:00:00Z",
+            created: "2026-05-19T00:00:00Z",
+            state: "review",
+            hasOpenComments: comments.some((c) => c.status === "open"),
+          })
+        ),
+        http.get("http://localhost:8080/api/comments/*", () =>
+          HttpResponse.json({
+            file: "README.md",
+            root: "mock-root",
+            summary: { total: comments.length, by_scope: {}, by_status: {} },
+            comments,
+          })
+        )
+      );
+    };
+  }
+
+  async function openReadmeWithComments(comments: CommentJSON[]) {
+    const user = userEvent.setup();
+    await useComments(comments)();
+    renderPage();
+
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
+    );
+    await user.click(screen.getByTestId("sidebar-file-README.md"));
+    // Comments are only fetched once the file is under review — wait for the
+    // side pane to actually render the row(s) before touching the editor.
+    for (const c of comments) {
+      await waitFor(() =>
+        expect(screen.getByTestId(`comment-context-${c.id}`)).toBeInTheDocument()
+      );
+    }
+    return user;
+  }
+
+  beforeEach(() => {
+    localStorage.clear();
+    useOpenFiles.setState({ files: [], activeIdByRoot: {} });
+    useToast.setState({ toasts: [] });
+    useConfirm.setState({ pending: null, queue: [] });
+    useEditorInstance.setState({ editor: null });
+    // jsdom does not implement scrollIntoView.
+    Element.prototype.scrollIntoView = vi.fn();
+  });
+
+  afterEach(() => {
+    fakeEditor?.destroy();
+    fakeEditor = null;
+    useEditorInstance.setState({ editor: null });
+  });
+
+  it("A1: jumps to a resolved comment's anchor even though it has no decoration", async () => {
+    const comment: CommentJSON = {
+      id: "c-011",
+      scope: "inline",
+      body: "ここ直しました",
+      status: "resolved",
+      anchor: { heading_path: ["## 実績"], snippet: "SLA遵守率 98%", occurrence: 0 },
+      context: { heading_path: ["実績"], line_range: [74, 74] },
+      orphan: false,
+    };
+    const user = await openReadmeWithComments([comment]);
+
+    const ed = installFakeEditor("<h2>実績</h2><p>SLA遵守率 98%</p>");
+    await waitFor(() =>
+      // Resolved comments paint no persistent decoration (#96/#97).
+      expect(ed.view.dom.querySelectorAll('[data-comment-id="c-011"]')).toHaveLength(0)
+    );
+
+    const scrollSpy = vi.mocked(Element.prototype.scrollIntoView);
+    await user.click(screen.getByTestId("comment-context-c-011"));
+
+    await waitFor(() => expect(scrollSpy).toHaveBeenCalled());
+    // Assert *which* element was scrolled to: the live anchor position, not
+    // some unrelated node — resolveAnchorInDoc + domAtPos must have landed on
+    // the paragraph carrying the anchor's snippet.
+    const scrolledEl = scrollSpy.mock.instances[0] as HTMLElement;
+    expect(scrolledEl.textContent).toContain("SLA遵守率 98%");
+
+    // A transient flash decoration takes the place of the (absent) persistent
+    // comment-mark decoration.
+    await waitFor(() =>
+      expect(ed.view.dom.querySelectorAll(".comment-flash.is-flash")).toHaveLength(1)
+    );
+    // The resolved comment's persistent highlight is still not resurrected.
+    expect(ed.view.dom.querySelectorAll(".comment-mark")).toHaveLength(0);
+  });
+
+  it("A2: jumps to an open comment's decoration and flashes it (regression)", async () => {
+    const comment: CommentJSON = {
+      id: "c-020",
+      scope: "inline",
+      body: "ここ直して",
+      status: "open",
+      anchor: { heading_path: ["## 実績"], snippet: "SLA遵守率 98%", occurrence: 0 },
+      context: { heading_path: ["実績"], line_range: [74, 74] },
+      orphan: false,
+    };
+    const user = await openReadmeWithComments([comment]);
+
+    const ed = installFakeEditor("<h2>実績</h2><p>SLA遵守率 98%</p>");
+    await waitFor(() =>
+      expect(ed.view.dom.querySelectorAll('[data-comment-id="c-020"]')).toHaveLength(1)
+    );
+    const decorated = ed.view.dom.querySelector<HTMLElement>('[data-comment-id="c-020"]')!;
+
+    const scrollSpy = vi.mocked(Element.prototype.scrollIntoView);
+    await user.click(screen.getByTestId("comment-context-c-020"));
+
+    await waitFor(() => expect(scrollSpy).toHaveBeenCalled());
+    expect(scrollSpy.mock.instances[0]).toBe(decorated);
+    expect(decorated.classList.contains("is-flash")).toBe(true);
+    // The existing decoration-based flash is used — no transient flash decoration.
+    expect(ed.view.dom.querySelectorAll(".comment-flash")).toHaveLength(0);
+  });
+
+  it("A3: does nothing (no throw, no scroll) when no anchor resolves", async () => {
+    const comment: CommentJSON = {
+      id: "c-030",
+      scope: "inline",
+      body: "もう無い場所を指してる",
+      status: "open",
+      anchor: { heading_path: [], snippet: "vanished text no longer present", occurrence: 0 },
+      context: { heading_path: [], line_range: [10, 10] },
+      orphan: false,
+    };
+    const user = await openReadmeWithComments([comment]);
+    installFakeEditor("<h2>実績</h2><p>SLA遵守率 98%</p>");
+
+    const scrollSpy = vi.mocked(Element.prototype.scrollIntoView);
+    await expect(
+      user.click(screen.getByTestId("comment-context-c-030"))
+    ).resolves.not.toThrow();
+
+    expect(scrollSpy).not.toHaveBeenCalled();
+  });
+
+  it("A4: multi-anchor comment scrolls to the earliest (smallest from) anchor", async () => {
+    const comment: CommentJSON = {
+      id: "c-040",
+      scope: "cross_section",
+      body: "セクションをまたぐコメント",
+      status: "resolved",
+      anchors: [
+        { heading_path: ["## A"], snippet: "first", occurrence: 0 },
+        { heading_path: ["## B"], snippet: "second", occurrence: 0 },
+      ],
+      context: null,
+      orphan: false,
+    };
+    const user = await openReadmeWithComments([comment]);
+    const ed = installFakeEditor(
+      "<h2>A</h2><p>first target</p><h2>B</h2><p>second target</p>"
+    );
+
+    const scrollSpy = vi.mocked(Element.prototype.scrollIntoView);
+    await user.click(screen.getByTestId("comment-context-c-040"));
+
+    await waitFor(() => expect(scrollSpy).toHaveBeenCalled());
+    const scrolledEl = scrollSpy.mock.instances[0] as HTMLElement;
+    // "first" precedes "second" in document order, so its anchor has the
+    // smaller `from` and must be the one scrolled to.
+    expect(scrolledEl.textContent).toContain("first");
+
+    // Both anchors resolve, so both get flashed.
+    await waitFor(() =>
+      expect(ed.view.dom.querySelectorAll(".comment-flash.is-flash")).toHaveLength(2)
+    );
+  });
+
+  it("A5: flashes anchor and anchors together for a multi-line inline comment", async () => {
+    // #162's shape: the first selected block lives in `anchor`, the rest in
+    // `anchors`. Treating the two as mutually exclusive would flash only the
+    // first block and, if `anchor` ever resolved later in the document than an
+    // entry in `anchors`, would scroll to the wrong place.
+    const comment: CommentJSON = {
+      id: "c-041",
+      scope: "inline",
+      body: "複数行に付けたコメント",
+      status: "resolved",
+      anchor: { heading_path: ["## A"], snippet: "first", occurrence: 0 },
+      anchors: [{ heading_path: ["## B"], snippet: "second", occurrence: 0 }],
+      context: null,
+      orphan: false,
+    };
+    const user = await openReadmeWithComments([comment]);
+    const ed = installFakeEditor(
+      "<h2>A</h2><p>first target</p><h2>B</h2><p>second target</p>"
+    );
+
+    const scrollSpy = vi.mocked(Element.prototype.scrollIntoView);
+    await user.click(screen.getByTestId("comment-context-c-041"));
+
+    await waitFor(() => expect(scrollSpy).toHaveBeenCalled());
+    expect((scrollSpy.mock.instances[0] as HTMLElement).textContent).toContain("first");
+    await waitFor(() =>
+      expect(ed.view.dom.querySelectorAll(".comment-flash.is-flash")).toHaveLength(2)
+    );
   });
 });

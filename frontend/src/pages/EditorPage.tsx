@@ -69,7 +69,7 @@ import {
 } from "@/api";
 import { stripHint } from "@/utils/stripHint";
 import { formatLocalTimestamp } from "@/utils/formatTimestamp";
-import { computeAnchorsFromSelection } from "@/utils/pmAnchor";
+import { computeAnchorsFromSelection, resolveAnchorInDoc } from "@/utils/pmAnchor";
 import { lineDiff, hasChanges } from "@/utils/lineDiff";
 import { dirOf } from "@/utils/dirOf";
 import { splitPreamble } from "@/utils/frontmatter";
@@ -1319,22 +1319,63 @@ export function EditorPage() {
     }
   };
 
-  // Scroll to + flash a comment's inline highlight in the editor.
+  // Scroll to + flash a comment's target in the editor.
+  //
+  // #167: this used to key off the CommentHighlight decoration
+  // (`[data-comment-id]`) alone, so resolved comments — which intentionally
+  // carry no decoration (#96/#97) — silently did nothing when clicked. The
+  // jump target is now resolved from the comment's own anchor(s) via
+  // resolveAnchorInDoc, independent of whether a decoration exists:
+  //  - open comment (decoration present): scroll to + flash that decoration,
+  //    exactly as before.
+  //  - resolved comment (no decoration): scroll to the live anchor position
+  //    via editor.view.domAtPos and flash it with a transient decoration
+  //    (CommentHighlight.flashCommentRanges) instead.
+  //  - orphan (no anchor resolves): do nothing, as before — canJump already
+  //    keeps the label from being clickable in this case.
   const handleJumpToComment = (id: string) => {
-    const root = editor?.view?.dom;
-    if (!root) return;
-    const nodes = root.querySelectorAll<HTMLElement>(
+    if (!editor || editor.isDestroyed) return;
+    const comment = comments.find((c) => c.id === id);
+    if (!comment) return;
+
+    // Both fields, not one or the other: a multi-line inline comment (#162)
+    // keeps its first block in `anchor` and the rest in `anchors`, and
+    // cross_section carries `anchors` only.
+    const anchors = [
+      ...(comment.anchor ? [comment.anchor] : []),
+      ...(comment.anchors ?? []),
+    ];
+    const ranges = anchors
+      .map((a) => resolveAnchorInDoc(editor.state.doc, a))
+      .filter((r): r is { from: number; to: number } => r !== null)
+      .sort((a, b) => a.from - b.from);
+    if (ranges.length === 0) return; // orphan: no anchor resolves.
+
+    const root = editor.view.dom;
+    const decorated = root.querySelectorAll<HTMLElement>(
       `[data-comment-id="${CSS.escape(id)}"]`
     );
-    if (nodes.length === 0) return;
-    nodes[0].scrollIntoView({ behavior: "smooth", block: "center" });
-    nodes.forEach((el) => {
-      el.classList.remove("is-flash");
-      void el.offsetWidth; // force reflow so the animation restarts
-      el.classList.add("is-flash");
-    });
+    if (decorated.length > 0) {
+      decorated[0].scrollIntoView({ behavior: "smooth", block: "center" });
+      decorated.forEach((el) => {
+        el.classList.remove("is-flash");
+        void el.offsetWidth; // force reflow so the animation restarts
+        el.classList.add("is-flash");
+      });
+      window.setTimeout(() => {
+        decorated.forEach((el) => el.classList.remove("is-flash"));
+      }, 1600);
+      return;
+    }
+
+    const { node } = editor.view.domAtPos(ranges[0].from);
+    const target =
+      node.nodeType === Node.TEXT_NODE ? node.parentElement : (node as HTMLElement);
+    target?.scrollIntoView({ behavior: "smooth", block: "center" });
+    editor.commands.flashCommentRanges(ranges);
     window.setTimeout(() => {
-      nodes.forEach((el) => el.classList.remove("is-flash"));
+      if (!editor || editor.isDestroyed) return;
+      editor.commands.clearCommentFlash();
     }, 1600);
   };
 

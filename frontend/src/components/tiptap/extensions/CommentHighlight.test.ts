@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach } from "vitest";
 import { Editor } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
 import { CommentHighlight, type HighlightComment } from "./CommentHighlight";
+import { resolveAnchorInDoc } from "@/utils/pmAnchor";
 
 // Exercises the decoration plugin against a real (headless) editor: comments
 // live outside the document, so highlights must appear as inline decorations
@@ -24,6 +25,9 @@ afterEach(() => {
 
 const marks = (ed: Editor) =>
   Array.from(ed.view.dom.querySelectorAll(".comment-mark"));
+
+const flashMarks = (ed: Editor) =>
+  Array.from(ed.view.dom.querySelectorAll(".comment-flash"));
 
 describe("CommentHighlight", () => {
   it("paints an inline decoration for a resolvable anchor", () => {
@@ -170,5 +174,81 @@ describe("CommentHighlight", () => {
       { id: "c1", status: "open", anchor: { heading_path: [], snippet: "alpha", occurrence: 0 } },
     ]);
     expect(ed.state.doc.toJSON()).toEqual(before);
+  });
+});
+
+// #167 B1–B4: flashCommentRanges paints a transient highlight independent of
+// the persistent comment-mark set — the jump-to-comment fix uses this to
+// flash a *resolved* comment's target, which has no comment-mark decoration.
+describe("CommentHighlight flash decorations (#167)", () => {
+  it("B1: flashCommentRanges paints an is-flash decoration over a given range", () => {
+    const ed = makeEditor("<p>alpha beta gamma</p>");
+    const range = resolveAnchorInDoc(ed.state.doc, {
+      heading_path: [],
+      snippet: "alpha",
+      occurrence: 0,
+    });
+    expect(range).not.toBeNull();
+    ed.commands.flashCommentRanges([range!]);
+    const flashes = flashMarks(ed);
+    expect(flashes).toHaveLength(1);
+    expect(flashes[0].classList.contains("is-flash")).toBe(true);
+    expect(flashes[0].textContent).toBe("alpha");
+  });
+
+  it("B2: clearCommentFlash removes the transient decoration", () => {
+    const ed = makeEditor("<p>alpha beta gamma</p>");
+    const range = resolveAnchorInDoc(ed.state.doc, {
+      heading_path: [],
+      snippet: "alpha",
+      occurrence: 0,
+    });
+    ed.commands.flashCommentRanges([range!]);
+    expect(flashMarks(ed)).toHaveLength(1);
+
+    ed.commands.clearCommentFlash();
+    expect(flashMarks(ed)).toHaveLength(0);
+  });
+
+  it("B3: flashing does not resurrect a resolved comment's persistent highlight (#96/#97)", () => {
+    const ed = makeEditor("<p>some target text</p>");
+    ed.commands.setCommentHighlights([
+      {
+        id: "c1",
+        status: "resolved",
+        anchor: { heading_path: [], snippet: "target", occurrence: 0 },
+      },
+    ]);
+    expect(marks(ed)).toHaveLength(0);
+
+    const range = resolveAnchorInDoc(ed.state.doc, {
+      heading_path: [],
+      snippet: "target",
+      occurrence: 0,
+    });
+    ed.commands.flashCommentRanges([range!]);
+
+    // The persistent comment-mark set for the resolved comment stays empty …
+    expect(marks(ed)).toHaveLength(0);
+    // … while the transient flash decoration is painted separately.
+    expect(flashMarks(ed)).toHaveLength(1);
+  });
+
+  it("B4: flashCommentRanges paints one decoration per range for multi-anchor comments", () => {
+    const ed = makeEditor("<h2>A</h2><p>first target</p><h2>B</h2><p>second target</p>");
+    const r1 = resolveAnchorInDoc(ed.state.doc, {
+      heading_path: ["## A"],
+      snippet: "first",
+      occurrence: 0,
+    });
+    const r2 = resolveAnchorInDoc(ed.state.doc, {
+      heading_path: ["## B"],
+      snippet: "second",
+      occurrence: 0,
+    });
+    expect(r1).not.toBeNull();
+    expect(r2).not.toBeNull();
+    ed.commands.flashCommentRanges([r1!, r2!]);
+    expect(flashMarks(ed)).toHaveLength(2);
   });
 });
