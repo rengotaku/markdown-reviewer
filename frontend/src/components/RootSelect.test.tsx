@@ -89,6 +89,15 @@ describe("RootSelect", () => {
     );
   });
 
+  it("A2c: keeps the active root name in the button's accessible name", () => {
+    renderSelect();
+    // 固定文言の aria-label は子テキスト（root 名）を上書きしてしまうため、
+    // アクセシブル名に root 名が残っていることを固定する（#158 review round 2）。
+    expect(
+      screen.getByRole("button", { name: /works/ })
+    ).toBe(screen.getByTestId("sidebar-review-root"));
+  });
+
   it("A4: switches the active root and closes the menu when an item is clicked", async () => {
     const user = userEvent.setup();
     renderSelect();
