@@ -11,6 +11,7 @@ import AddIcon from "@mui/icons-material/Add";
 import DeleteIcon from "@mui/icons-material/Delete";
 import DragIndicatorIcon from "@mui/icons-material/DragIndicator";
 import { moveTableRow, moveTableCol } from "./tableDragDrop";
+import { visibleTableWidth } from "./tableGeometry";
 
 interface TableMenuProps {
   editor: Editor;
@@ -68,7 +69,9 @@ function useTablePosition(
     setPosition({
       top: rect.top + window.scrollY,
       left: rect.left + window.scrollX,
-      width: rect.width,
+      // Not rect.width: the table is a block box that fills the editor column,
+      // so its own rect is always the column's width (#171).
+      width: visibleTableWidth(tableEl),
       height: rect.height,
     });
   }, [hoveredTableRef]);
