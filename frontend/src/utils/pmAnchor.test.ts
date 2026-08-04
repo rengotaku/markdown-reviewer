@@ -1,6 +1,10 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { Editor } from "@tiptap/core";
+import { Editor, type JSONContent } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
+import { Table } from "@tiptap/extension-table";
+import { TableRow } from "@tiptap/extension-table-row";
+import { TableCell } from "@tiptap/extension-table-cell";
+import { TableHeader } from "@tiptap/extension-table-header";
 import {
   resolveAnchorInBlocks,
   computeAnchorInBlocks,
@@ -21,25 +25,34 @@ import {
 //   24 時間 という別の出現
 // Positions are illustrative but internally consistent (start..end per block).
 const blocks: AnchorBlock[] = [
-  { start: 1, end: 5, text: "認証", headingStack: ["# 認証"] },
+  { start: 1, end: 5, text: "認証", headingStack: ["# 認証"], lineGroup: 0 },
   {
     start: 7,
     end: 18,
     text: "トークンの期限",
     headingStack: ["# 認証", "## トークンの期限"],
+    lineGroup: 1,
   },
   {
     start: 20,
     end: 40,
     text: "アクセストークン: 24 時間",
     headingStack: ["# 認証", "## トークンの期限"],
+    lineGroup: 2,
   },
-  { start: 42, end: 48, text: "エラー", headingStack: ["# 認証", "## エラー"] },
+  {
+    start: 42,
+    end: 48,
+    text: "エラー",
+    headingStack: ["# 認証", "## エラー"],
+    lineGroup: 3,
+  },
   {
     start: 50,
     end: 70,
     text: "24 時間 という別の出現",
     headingStack: ["# 認証", "## エラー"],
+    lineGroup: 4,
   },
 ];
 
@@ -82,9 +95,9 @@ describe("pmAnchor", () => {
 
   it("counts occurrence among duplicates under the same heading", () => {
     const dup: AnchorBlock[] = [
-      { start: 1, end: 5, text: "H", headingStack: ["## H"] },
-      { start: 7, end: 10, text: "x y", headingStack: ["## H"] },
-      { start: 12, end: 15, text: "x z", headingStack: ["## H"] },
+      { start: 1, end: 5, text: "H", headingStack: ["## H"], lineGroup: 0 },
+      { start: 7, end: 10, text: "x y", headingStack: ["## H"], lineGroup: 1 },
+      { start: 12, end: 15, text: "x z", headingStack: ["## H"], lineGroup: 2 },
     ];
     const a = computeAnchorInBlocks(dup, 2, "x");
     expect(a.occurrence).toBe(1);
@@ -123,7 +136,9 @@ describe("pmAnchor", () => {
 
   it("computeAnchorAtBlock returns null for a missing or empty block", () => {
     expect(computeAnchorAtBlock(blocks, 99)).toBeNull();
-    const blank: AnchorBlock[] = [{ start: 1, end: 3, text: "   ", headingStack: [] }];
+    const blank: AnchorBlock[] = [
+      { start: 1, end: 3, text: "   ", headingStack: [], lineGroup: 0 },
+    ];
     expect(computeAnchorAtBlock(blank, 0)).toBeNull();
   });
 });
@@ -358,9 +373,21 @@ describe("pmAnchor ProseMirror adapters", () => {
 // markers and 1 blockquote marker.
 describe("resolveAnchorInBlocks with block-level markers (#168)", () => {
   const blocks: AnchorBlock[] = [
-    { start: 1, end: 20, text: "同じ移行を他の人が再現できる状態にした", headingStack: ["### 実績"] },
-    { start: 30, end: 60, text: "⚠️ レビューで挙げた 6 件を削除した", headingStack: ["### 実績"] },
-    { start: 70, end: 90, text: "特になし。", headingStack: ["### 課題"] },
+    {
+      start: 1,
+      end: 20,
+      text: "同じ移行を他の人が再現できる状態にした",
+      headingStack: ["### 実績"],
+      lineGroup: 0,
+    },
+    {
+      start: 30,
+      end: 60,
+      text: "⚠️ レビューで挙げた 6 件を削除した",
+      headingStack: ["### 実績"],
+      lineGroup: 1,
+    },
+    { start: 70, end: 90, text: "特になし。", headingStack: ["### 課題"], lineGroup: 2 },
   ];
 
   it("resolves a snippet carrying an ordered-list marker", () => {
@@ -396,7 +423,7 @@ describe("resolveAnchorInBlocks with block-level markers (#168)", () => {
     // "-text" / "1.text" / "#text" are not list items or headings, so nothing
     // may be stripped — otherwise the fallback would match the wrong block.
     const prose: AnchorBlock[] = [
-      { start: 1, end: 10, text: "-5 度まで下がった", headingStack: [] },
+      { start: 1, end: 10, text: "-5 度まで下がった", headingStack: [], lineGroup: 0 },
     ];
     expect(stripBlockMarkers("-5 度まで下がった")).toBe("-5 度まで下がった");
     expect(
@@ -421,8 +448,8 @@ describe("resolveAnchorInBlocks with block-level markers (#168)", () => {
     // A block whose text genuinely starts with "1. " must win against a later
     // block matching only after stripping, so real content is never skipped.
     const withLiteral: AnchorBlock[] = [
-      { start: 1, end: 10, text: "1. リテラルな行", headingStack: [] },
-      { start: 20, end: 30, text: "リテラルな行", headingStack: [] },
+      { start: 1, end: 10, text: "1. リテラルな行", headingStack: [], lineGroup: 0 },
+      { start: 20, end: 30, text: "リテラルな行", headingStack: [], lineGroup: 1 },
     ];
     const r = resolveAnchorInBlocks(withLiteral, {
       heading_path: [],
@@ -449,8 +476,8 @@ describe("resolveAnchorInBlocks with block-level markers (#168)", () => {
     // stripped set numbers them differently, so committing to an index here
     // would point at a confidently wrong line. Orphan is the honest answer.
     const dup: AnchorBlock[] = [
-      { start: 1, end: 10, text: "同じ文", headingStack: ["## A"] },
-      { start: 20, end: 30, text: "同じ文", headingStack: ["## A"] },
+      { start: 1, end: 10, text: "同じ文", headingStack: ["## A"], lineGroup: 0 },
+      { start: 20, end: 30, text: "同じ文", headingStack: ["## A"], lineGroup: 1 },
     ];
     expect(
       resolveAnchorInBlocks(dup, {
@@ -465,8 +492,8 @@ describe("resolveAnchorInBlocks with block-level markers (#168)", () => {
     // When the snippet matches literally, the fallback must not run at all and
     // occurrence must still select the nth match.
     const dup: AnchorBlock[] = [
-      { start: 1, end: 10, text: "- 生き残った記号付きの行", headingStack: [] },
-      { start: 20, end: 30, text: "- 生き残った記号付きの行", headingStack: [] },
+      { start: 1, end: 10, text: "- 生き残った記号付きの行", headingStack: [], lineGroup: 0 },
+      { start: 20, end: 30, text: "- 生き残った記号付きの行", headingStack: [], lineGroup: 1 },
     ];
     expect(
       resolveAnchorInBlocks(dup, {
@@ -482,8 +509,8 @@ describe("resolveAnchorInBlocks with block-level markers (#168)", () => {
     // marker; counting stripped matches would inflate occurrence past what the
     // exact-match resolve path counts back.
     const dup: AnchorBlock[] = [
-      { start: 1, end: 10, text: "2. マーカー付きの行", headingStack: [] },
-      { start: 20, end: 30, text: "マーカー付きの行", headingStack: [] },
+      { start: 1, end: 10, text: "2. マーカー付きの行", headingStack: [], lineGroup: 0 },
+      { start: 20, end: 30, text: "マーカー付きの行", headingStack: [], lineGroup: 1 },
     ];
     const anchor = computeAnchorInBlocks(dup, 1, "マーカー付きの行");
     // Block 0's text contains "マーカー付きの行" literally, so it counts.
@@ -492,5 +519,265 @@ describe("resolveAnchorInBlocks with block-level markers (#168)", () => {
       from: 20,
       to: 20 + "マーカー付きの行".length,
     });
+  });
+});
+
+// #163 / #164: the frontend must anchor at Markdown-*line* granularity, not
+// ProseMirror-*textblock* granularity, or occurrence disagrees with the
+// backend's per-line scan (internal/reviewstore/comments.go ResolveAnchor).
+// A fenced code block is one PM textblock spanning N Markdown lines (#163);
+// a table row is N PM textblocks (one per cell) spanning one Markdown line
+// (#164). `lineGroup` on AnchorBlock closes that gap: units from the same
+// Markdown line share a `lineGroup`, and occurrence counts groups, not units.
+describe("extractAnchorBlocks / occurrence at Markdown-line granularity (#163 / #164)", () => {
+  let editor: Editor | null = null;
+
+  // Table extensions mirror the production editor (TiptapEditor.tsx) so the
+  // node type names ("table" / "tableRow" / "tableCell") match what
+  // extractAnchorBlocks checks against.
+  function makeEditor(content: string | JSONContent): Editor {
+    editor = new Editor({
+      extensions: [
+        StarterKit.configure({ link: false }),
+        Table.configure({ resizable: false }),
+        TableRow,
+        TableCell,
+        TableHeader,
+      ],
+      content,
+    });
+    return editor;
+  }
+
+  afterEach(() => {
+    editor?.destroy();
+    editor = null;
+  });
+
+  function codeBlockDoc(lines: string[]) {
+    return {
+      type: "doc",
+      content: [
+        {
+          type: "codeBlock",
+          content: lines.length ? [{ type: "text", text: lines.join("\n") }] : [],
+        },
+      ],
+    };
+  }
+
+  function tableDoc(rows: string[][]) {
+    return {
+      type: "doc",
+      content: [
+        {
+          type: "table",
+          content: rows.map((cells) => ({
+            type: "tableRow",
+            content: cells.map((cell) => ({
+              type: "tableCell",
+              content: [{ type: "paragraph", content: cell ? [{ type: "text", text: cell }] : [] }],
+            })),
+          })),
+        },
+      ],
+    };
+  }
+
+  // A1: a 3-line code block becomes 3 units, none carrying a literal newline,
+  // each with a distinct lineGroup.
+  it("A1: splits a fenced code block into one unit per line", () => {
+    const ed = makeEditor(codeBlockDoc(["const a = 1;", "const b = 2;", "return a + b;"]));
+    const blocks = extractAnchorBlocks(ed.state.doc);
+    expect(blocks).toHaveLength(3);
+    expect(blocks.map((b) => b.text)).toEqual([
+      "const a = 1;",
+      "const b = 2;",
+      "return a + b;",
+    ]);
+    for (const b of blocks) expect(b.text).not.toContain("\n");
+    const groups = blocks.map((b) => b.lineGroup);
+    expect(new Set(groups).size).toBe(3);
+  });
+
+  // A2: each line unit's start/end must address exactly that line's text in
+  // the live document (position math check).
+  it("A2: each code-block line unit's start/end addresses that line's text", () => {
+    const ed = makeEditor(codeBlockDoc(["const a = 1;", "const b = 2;", "return a + b;"]));
+    const blocks = extractAnchorBlocks(ed.state.doc);
+    for (const b of blocks) {
+      expect(ed.state.doc.textBetween(b.start, b.end)).toBe(b.text);
+    }
+  });
+
+  // A3: a 2x2 table — same row shares lineGroup, different rows differ.
+  it("A3: table cells in the same row share a lineGroup; different rows differ", () => {
+    const ed = makeEditor(
+      tableDoc([
+        ["a", "b"],
+        ["c", "d"],
+      ])
+    );
+    const blocks = extractAnchorBlocks(ed.state.doc);
+    const byText = (t: string) => blocks.find((b) => b.text === t)!;
+    expect(byText("a").lineGroup).toBe(byText("b").lineGroup);
+    expect(byText("c").lineGroup).toBe(byText("d").lineGroup);
+    expect(byText("a").lineGroup).not.toBe(byText("c").lineGroup);
+  });
+
+  // A4: plain paragraphs/headings/list items keep one unit per textblock and
+  // every lineGroup distinct — unchanged from pre-#163 behavior.
+  it("A4: plain textblocks keep one unit per block with distinct lineGroups (back-compat)", () => {
+    const ed = makeEditor(
+      "<h2>Section</h2><p>alpha</p><ul><li><p>item one</p></li><li><p>item two</p></li></ul>"
+    );
+    const blocks = extractAnchorBlocks(ed.state.doc);
+    expect(blocks.map((b) => b.text)).toEqual(["Section", "alpha", "item one", "item two"]);
+    expect(new Set(blocks.map((b) => b.lineGroup)).size).toBe(blocks.length);
+  });
+
+  // A5: a blank line inside a code block still consumes its own unit /
+  // lineGroup, so line numbering does not drift.
+  it("A5: a blank code-block line still consumes a unit and lineGroup", () => {
+    const ed = makeEditor(codeBlockDoc(["first", "", "third"]));
+    const blocks = extractAnchorBlocks(ed.state.doc);
+    expect(blocks).toHaveLength(3);
+    expect(blocks.map((b) => b.text)).toEqual(["first", "", "third"]);
+    expect(new Set(blocks.map((b) => b.lineGroup)).size).toBe(3);
+  });
+
+  // B1: "| x | x |" — a 1-row table with two identical cells. Anchoring from
+  // the second cell must not see the first cell's match as a distinct
+  // occurrence: they share a lineGroup.
+  it("B1: computeAnchorInBlocks does not count a same-lineGroup match as a separate occurrence", () => {
+    const ed = makeEditor(tableDoc([["x", "x"]]));
+    const blocks = extractAnchorBlocks(ed.state.doc);
+    const secondCellIndex = blocks.map((b) => b.text).lastIndexOf("x");
+    const anchor = computeAnchorInBlocks(blocks, secondCellIndex, "x");
+    expect(anchor.occurrence).toBe(0);
+  });
+
+  // B2: the same string in two different table rows *does* count as two
+  // occurrences (different lineGroups).
+  it("B2: computeAnchorInBlocks counts matches in a different lineGroup as separate occurrences", () => {
+    const ed = makeEditor(tableDoc([["x"], ["x"]]));
+    const blocks = extractAnchorBlocks(ed.state.doc);
+    const secondRowIndex = blocks.map((b) => b.text).lastIndexOf("x");
+    const anchor = computeAnchorInBlocks(blocks, secondRowIndex, "x");
+    expect(anchor.occurrence).toBe(1);
+  });
+
+  // B3: resolving the B1 anchor must not orphan — it resolves to the first
+  // cell in the row that matches (the documented same-row/same-text limit).
+  it("B3: resolveAnchorInBlocks resolves the B1 anchor to the row's first matching cell", () => {
+    const ed = makeEditor(tableDoc([["x", "x"]]));
+    const blocks = extractAnchorBlocks(ed.state.doc);
+    const first = blocks[0];
+    const r = resolveAnchorInBlocks(blocks, { heading_path: [], snippet: "x", occurrence: 0 });
+    expect(r).not.toBeNull();
+    expect(r).toEqual({ from: first.start, to: first.start + 1 });
+  });
+
+  // B4: a repeated line inside a single code block — occurrence 1 resolves
+  // to the second occurrence of that line (distinct lineGroups, unchanged
+  // per-unit counting).
+  it("B4: resolves the second occurrence of a repeated code-block line", () => {
+    const ed = makeEditor(codeBlockDoc(["dup", "other", "dup"]));
+    const blocks = extractAnchorBlocks(ed.state.doc);
+    const r = resolveAnchorInBlocks(blocks, { heading_path: [], snippet: "dup", occurrence: 1 });
+    const secondDup = blocks[2];
+    expect(r).toEqual({ from: secondDup.start, to: secondDup.start + "dup".length });
+  });
+
+  // B5: three plain paragraphs sharing the same text — occurrence 0/1/2 map
+  // to each block in order, matching pre-#163 behavior.
+  it("B5: plain-paragraph occurrence counting is unchanged (back-compat)", () => {
+    const ed = makeEditor("<p>dup</p><p>dup</p><p>dup</p>");
+    const blocks = extractAnchorBlocks(ed.state.doc);
+    for (let i = 0; i < 3; i++) {
+      const r = resolveAnchorInBlocks(blocks, { heading_path: [], snippet: "dup", occurrence: i });
+      expect(r).toEqual({ from: blocks[i].start, to: blocks[i].start + "dup".length });
+    }
+  });
+
+  // C1: selecting a code block's first two lines yields two anchors, neither
+  // carrying a literal newline (the #163 repro case).
+  it("C1: selecting two code-block lines yields two newline-free anchors", () => {
+    const ed = makeEditor(codeBlockDoc(["line one", "line two", "line three"]));
+    const blocks = extractAnchorBlocks(ed.state.doc);
+    const from = blocks[0].start;
+    const to = blocks[1].start + blocks[1].text.length;
+    const anchors = computeAnchorsFromSelection(ed.state.doc, from, to);
+    expect(anchors).toHaveLength(2);
+    for (const a of anchors) expect(a.snippet).not.toContain("\n");
+    expect(anchors.map((a) => a.snippet)).toEqual(["line one", "line two"]);
+  });
+
+  // C2: selecting the whole 3-line code block yields three anchors.
+  it("C2: selecting an entire code block yields one anchor per line", () => {
+    const ed = makeEditor(codeBlockDoc(["line one", "line two", "line three"]));
+    const blocks = extractAnchorBlocks(ed.state.doc);
+    const from = blocks[0].start;
+    const to = blocks[2].start + blocks[2].text.length;
+    const anchors = computeAnchorsFromSelection(ed.state.doc, from, to);
+    expect(anchors).toHaveLength(3);
+    expect(anchors.map((a) => a.snippet)).toEqual(["line one", "line two", "line three"]);
+  });
+
+  // C3: a selection spanning from a preceding paragraph's line end into a
+  // code block's first line only yields the code-block side (the paragraph
+  // side trims to empty and is skipped, per #162's A3 rule) — the surviving
+  // anchor is newline-free.
+  it("C3: a selection crossing into a code block only yields the non-empty code-block side", () => {
+    const ed = new Editor({
+      extensions: [StarterKit.configure({ link: false })],
+      content: {
+        type: "doc",
+        content: [
+          { type: "paragraph", content: [{ type: "text", text: "intro" }] },
+          {
+            type: "codeBlock",
+            content: [{ type: "text", text: "line one\nline two" }],
+          },
+        ],
+      },
+    });
+    try {
+      const blocks = extractAnchorBlocks(ed.state.doc);
+      const paragraphEnd = blocks[0].start + blocks[0].text.length;
+      const firstLine = blocks.find((b) => b.text === "line one")!;
+      const to = firstLine.start + "line".length; // partway into the first line only
+      const anchors = computeAnchorsFromSelection(ed.state.doc, paragraphEnd, to);
+      expect(anchors).toHaveLength(1);
+      expect(anchors[0].snippet).toBe("line");
+      for (const a of anchors) expect(a.snippet).not.toContain("\n");
+    } finally {
+      ed.destroy();
+    }
+  });
+
+  // C4: selecting two cells in the same table row yields two anchors, both
+  // occurrence 0 (same lineGroup).
+  it("C4: selecting two same-row cells yields two anchors both at occurrence 0", () => {
+    const ed = makeEditor(tableDoc([["a", "b"]]));
+    const blocks = extractAnchorBlocks(ed.state.doc);
+    const from = blocks[0].start;
+    const to = blocks[1].start + blocks[1].text.length;
+    const anchors = computeAnchorsFromSelection(ed.state.doc, from, to);
+    expect(anchors).toHaveLength(2);
+    expect(anchors.map((a) => a.snippet)).toEqual(["a", "b"]);
+    expect(anchors.every((a) => a.occurrence === 0)).toBe(true);
+  });
+
+  // C5: selecting across two paragraphs still yields two anchors (#162
+  // behavior preserved by this change).
+  it("C5: selecting across two paragraphs still yields two anchors (#162 preserved)", () => {
+    const ed = makeEditor("<p>first para</p><p>second para</p>");
+    const blocks = extractAnchorBlocks(ed.state.doc);
+    const from = blocks[0].start;
+    const to = blocks[1].start + blocks[1].text.length;
+    const anchors = computeAnchorsFromSelection(ed.state.doc, from, to);
+    expect(anchors).toHaveLength(2);
+    expect(anchors.map((a) => a.snippet)).toEqual(["first para", "second para"]);
   });
 });

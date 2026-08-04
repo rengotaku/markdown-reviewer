@@ -225,6 +225,48 @@ func TestResolveAnchor_InlineMarkupInHeading(t *testing.T) {
 	}
 }
 
+// TestResolveAnchor_CodeBlockLine (#163 D1/D2) pins down the contract the
+// frontend must match: ResolveAnchor scans Markdown *lines*, so a snippet for
+// one fenced-code-block line resolves, but a snippet spanning two lines
+// (carrying a literal "\n") can never match any single line and orphans.
+// This is the backend-side half of the #163 fix: the frontend now splits
+// code blocks into one anchor per line so it never authors a D2-shaped
+// snippet.
+func TestResolveAnchor_CodeBlockLine(t *testing.T) {
+	content := "# Title\n\n```go\nconst a = 1\nconst b = 2\n```\n"
+
+	// D1: a single line's snippet (no newline) resolves to that line.
+	lr, ok := ResolveAnchor(content, Anchor{Snippet: "const b = 2", Occurrence: 0})
+	if !ok || lr[0] != 5 || lr[1] != 5 {
+		t.Fatalf("D1: want line 5, got %v ok=%v", lr, ok)
+	}
+
+	// D2: a snippet spanning two lines (as a single PM code-block textblock
+	// would produce pre-#163) can never match a `strings.Split` line and
+	// orphans. This is the regression #163 was filed against — pin it here
+	// so the backend contract stays fixed even if ResolveAnchor changes.
+	if _, ok := ResolveAnchor(content, Anchor{Snippet: "const a = 1\nconst b = 2", Occurrence: 0}); ok {
+		t.Fatal("D2: expected orphan for a snippet spanning two lines")
+	}
+}
+
+// TestResolveAnchor_TableRowOccurrence (#164 D3) pins down the accepted
+// limitation for a Markdown table row with duplicate cell text: the backend
+// only has one line to offer, so occurrence 0 resolves to that line and any
+// higher occurrence on the same line orphans.
+func TestResolveAnchor_TableRowOccurrence(t *testing.T) {
+	content := "| x | x |\n| --- | --- |\n"
+
+	lr, ok := ResolveAnchor(content, Anchor{Snippet: "x", Occurrence: 0})
+	if !ok || lr[0] != 1 {
+		t.Fatalf("D3: want line 1 for occurrence 0, got %v ok=%v", lr, ok)
+	}
+
+	if _, ok := ResolveAnchor(content, Anchor{Snippet: "x", Occurrence: 1}); ok {
+		t.Fatal("D3: expected orphan for occurrence 1 — the row is only one line")
+	}
+}
+
 func TestStripInlineMarkup(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"## 👁️ 台帳サマリ（`_watchlist.md` 全アクティブ行）", "## 👁️ 台帳サマリ（_watchlist.md 全アクティブ行）"},
