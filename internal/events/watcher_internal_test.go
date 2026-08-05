@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -152,4 +153,169 @@ func TestAddTree_AllowsConfiguredRoot(t *testing.T) {
 	require.NoError(t, w.addTree(root))
 
 	assert.Contains(t, w.fsw.WatchList(), root)
+}
+
+// --- unchanged-state suppression (issue #176) --------------------------------
+
+// nextBroadcast returns the next event on ch, or fails if none arrives. Used
+// instead of a bare receive so a suppression bug surfaces as "timed out
+// waiting for the first broadcast" rather than a hang.
+func nextBroadcast(t *testing.T, ch <-chan Event) Event {
+	t.Helper()
+	select {
+	case ev := <-ch:
+		return ev
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for a broadcast")
+		return Event{}
+	}
+}
+
+// assertNoBroadcast fails if anything is broadcast within the grace period.
+func assertNoBroadcast(t *testing.T, ch <-chan Event) {
+	t.Helper()
+	select {
+	case ev := <-ch:
+		t.Fatalf("unexpected broadcast: %+v", ev)
+	case <-time.After(debounceWindow * 3):
+	}
+}
+
+// scheduleAndWait drives schedule() and waits out the debounce window so the
+// timer has fired (successfully broadcasting or suppressing) before the test
+// asserts on the channel.
+func scheduleAndWait(w *Watcher, ev Event) {
+	w.schedule(ev)
+	time.Sleep(debounceWindow * 2)
+}
+
+// TestSchedule_IdenticalPayloadAcrossDebounceWindow_BroadcastsOnce is the
+// core regression for issue #176: debouncing only collapses bursts inside its
+// window, so a second fsnotify event landing after it (a tool rewriting the
+// same bytes 300ms later, a repeated `touch` to the same timestamp) used to
+// re-announce a state every client already had.
+func TestSchedule_IdenticalPayloadAcrossDebounceWindow_BroadcastsOnce(t *testing.T) {
+	t.Parallel()
+	w := newWatcherForRoots(t, "works")
+	ch, unsubscribe := w.hub.Subscribe()
+	defer unsubscribe()
+
+	ev := Event{Kind: KindFile, Root: "works", Path: "doc.md", Mtime: "2026-08-05T04:46:58Z", Sha: "sha-1"}
+
+	scheduleAndWait(w, ev)
+	assert.Equal(t, ev, nextBroadcast(t, ch))
+
+	// Same state again, well outside the debounce window.
+	scheduleAndWait(w, ev)
+	assertNoBroadcast(t, ch)
+}
+
+func TestSchedule_ChangedShaSameMtime_IsBroadcast(t *testing.T) {
+	// Same-second double save (#119): the mtime can't tell these apart, so
+	// suppression must key on the whole payload — sha included.
+	t.Parallel()
+	w := newWatcherForRoots(t, "works")
+	ch, unsubscribe := w.hub.Subscribe()
+	defer unsubscribe()
+
+	first := Event{Kind: KindFile, Root: "works", Path: "doc.md", Mtime: "2026-08-05T04:46:58Z", Sha: "sha-1"}
+	second := first
+	second.Sha = "sha-2"
+
+	scheduleAndWait(w, first)
+	assert.Equal(t, first, nextBroadcast(t, ch))
+
+	scheduleAndWait(w, second)
+	assert.Equal(t, second, nextBroadcast(t, ch))
+}
+
+func TestSchedule_SameShaNewMtime_IsBroadcast(t *testing.T) {
+	// A touch (bytes unchanged, mtime bumped) is a real state change the
+	// client reconciles against — the frontend acknowledges the new mtime so
+	// later comparisons stay on the sha-first path.
+	t.Parallel()
+	w := newWatcherForRoots(t, "works")
+	ch, unsubscribe := w.hub.Subscribe()
+	defer unsubscribe()
+
+	first := Event{Kind: KindFile, Root: "works", Path: "doc.md", Mtime: "2026-08-05T04:46:58Z", Sha: "sha-1"}
+	second := first
+	second.Mtime = "2026-08-05T04:47:10Z"
+
+	scheduleAndWait(w, first)
+	assert.Equal(t, first, nextBroadcast(t, ch))
+
+	scheduleAndWait(w, second)
+	assert.Equal(t, second, nextBroadcast(t, ch))
+}
+
+func TestSchedule_SamePathDifferentKinds_AreIndependent(t *testing.T) {
+	// tree and file events for one write share root+path; suppressing one
+	// must never suppress the other (they drive different refetches).
+	t.Parallel()
+	w := newWatcherForRoots(t, "works")
+	ch, unsubscribe := w.hub.Subscribe()
+	defer unsubscribe()
+
+	tree := Event{Kind: KindTree, Root: "works", Path: "doc.md", Mtime: "2026-08-05T04:46:58Z"}
+	file := Event{Kind: KindFile, Root: "works", Path: "doc.md", Mtime: "2026-08-05T04:46:58Z", Sha: "sha-1"}
+
+	scheduleAndWait(w, tree)
+	assert.Equal(t, tree, nextBroadcast(t, ch))
+	scheduleAndWait(w, file)
+	assert.Equal(t, file, nextBroadcast(t, ch))
+}
+
+func TestSchedule_MissingIdentityFields_AreNeverSuppressed(t *testing.T) {
+	// An empty sha/mtime means the emitter couldn't read that state (file
+	// removed or unreadable between the fsnotify event and the stat/read),
+	// which proves nothing about whether it changed. Dropping such an event
+	// would leave clients stale until their next poll, so identical repeats
+	// are still delivered (fail-open).
+	t.Parallel()
+	cases := []struct {
+		name string
+		ev   Event
+	}{
+		{"file without sha", Event{Kind: KindFile, Root: "works", Path: "doc.md", Mtime: "2026-08-05T04:46:58Z"}},
+		{"file without mtime", Event{Kind: KindFile, Root: "works", Path: "doc.md", Sha: "sha-1"}},
+		{"tree without mtime", Event{Kind: KindTree, Root: "works", Path: "doc.md"}},
+		{"comments without mtime", Event{Kind: KindComments, Root: "works", Path: "doc.md"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			w := newWatcherForRoots(t, "works")
+			ch, unsubscribe := w.hub.Subscribe()
+			defer unsubscribe()
+
+			scheduleAndWait(w, tc.ev)
+			assert.Equal(t, tc.ev, nextBroadcast(t, ch))
+			scheduleAndWait(w, tc.ev)
+			assert.Equal(t, tc.ev, nextBroadcast(t, ch))
+		})
+	}
+}
+
+func TestAcceptLocked_ResetsMemoryAtCap(t *testing.T) {
+	// The map is bounded so a long-lived daemon over a large tree can't grow
+	// it without limit; a reset only costs one redundant broadcast per key.
+	t.Parallel()
+	w := newWatcherForRoots(t, "works")
+
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for i := 0; i < maxRememberedEvents; i++ {
+		ev := Event{Kind: KindFile, Root: "works", Path: "doc" + strconv.Itoa(i) + ".md", Mtime: "m", Sha: "s"}
+		require.True(t, w.acceptLocked(string(ev.Kind)+"|"+ev.Root+"|"+ev.Path, ev))
+	}
+	require.Len(t, w.lastSent, maxRememberedEvents)
+
+	// One more entry trips the cap: the map is dropped, then repopulated with
+	// just this event.
+	overflow := Event{Kind: KindFile, Root: "works", Path: "overflow.md", Mtime: "m", Sha: "s"}
+	assert.True(t, w.acceptLocked("file|works|overflow.md", overflow))
+	assert.Len(t, w.lastSent, 1)
+	// The freshly-remembered event is still suppressed on an exact repeat.
+	assert.False(t, w.acceptLocked("file|works|overflow.md", overflow))
 }

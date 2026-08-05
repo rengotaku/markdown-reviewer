@@ -22,6 +22,14 @@ import (
 // atomic save) into a single broadcast Event.
 const debounceWindow = 200 * time.Millisecond
 
+// maxRememberedEvents bounds the lastSent map (issue #176). One entry per
+// (kind, root, path) that has ever changed while the process ran, so a
+// long-lived daemon over a large tree could otherwise grow it without limit.
+// On overflow the whole map is dropped rather than evicting one entry at a
+// time: the only cost of forgetting a key is one redundant broadcast the next
+// time that path changes, so an O(1) reset beats the bookkeeping an LRU needs.
+const maxRememberedEvents = 4096
+
 // Watcher watches every configured root (canonical .md tree) plus the
 // reviewstore sidecar tree (review.json files) and pushes coalesced change
 // notifications to a Hub. fsnotify only watches individual directories (not
@@ -40,6 +48,11 @@ type Watcher struct {
 	timers  map[string]*time.Timer
 	pending map[string]Event
 
+	// lastSent remembers the payload of the most recent broadcast per
+	// debounce key so an unchanged state isn't re-announced (issue #176).
+	// Bounded by maxRememberedEvents.
+	lastSent map[string]Event
+
 	mu sync.Mutex
 }
 
@@ -51,12 +64,13 @@ func NewWatcher(hub *Hub, roots *files.Roots) (*Watcher, error) {
 		return nil, err
 	}
 	return &Watcher{
-		hub:     hub,
-		roots:   roots,
-		fsw:     fsw,
-		ready:   make(chan struct{}),
-		timers:  make(map[string]*time.Timer),
-		pending: make(map[string]Event),
+		hub:      hub,
+		roots:    roots,
+		fsw:      fsw,
+		ready:    make(chan struct{}),
+		timers:   make(map[string]*time.Timer),
+		pending:  make(map[string]Event),
+		lastSent: make(map[string]Event),
 	}, nil
 }
 
@@ -366,6 +380,14 @@ func (w *Watcher) handleSidecarEvent(ev fsnotify.Event) {
 // schedule debounces ev by (kind, root, path): repeated events for the same
 // key within debounceWindow reset the timer and keep only the latest
 // payload, so a burst of writes to one file broadcasts exactly once.
+//
+// Debouncing alone only collapses bursts *inside* the window. fsnotify events
+// that straddle it — a tool rewriting the same bytes 300ms later, a repeated
+// `touch` to the same timestamp — used to produce a second broadcast with a
+// byte-identical payload (issue #176), costing every client a redundant
+// /api/stat (kind=file) or /api/dirs + /api/files refetch (kind=tree) for a
+// state it already has. So the timer also compares against the last payload
+// actually broadcast for this key and stays silent when nothing changed.
 func (w *Watcher) schedule(ev Event) {
 	key := string(ev.Kind) + "|" + ev.Root + "|" + ev.Path
 
@@ -381,11 +403,51 @@ func (w *Watcher) schedule(ev Event) {
 		out, ok := w.pending[key]
 		delete(w.pending, key)
 		delete(w.timers, key)
+		// Decide (and record) under the same lock as the pending/timer
+		// cleanup, so two timers firing concurrently can't both conclude
+		// they're the first to send this payload.
+		send := ok && w.acceptLocked(key, out)
 		w.mu.Unlock()
-		if ok {
+		if send {
 			w.hub.Broadcast(out)
 		}
 	})
+}
+
+// acceptLocked reports whether ev should be broadcast for key, remembering it
+// as the last-sent payload when it should. Caller must hold w.mu.
+//
+// Suppression requires positive proof that the state is unchanged, i.e. an
+// identical payload whose identity fields are actually populated (see
+// hasStateIdentity) — anything less is broadcast. Missing a notification
+// leaves a client stale until its next poll; a redundant one only costs a
+// refetch, so the tie is broken toward delivering.
+func (w *Watcher) acceptLocked(key string, ev Event) bool {
+	if prev, seen := w.lastSent[key]; seen && hasStateIdentity(ev) && prev == ev {
+		return false
+	}
+	if len(w.lastSent) >= maxRememberedEvents {
+		w.lastSent = make(map[string]Event)
+	}
+	w.lastSent[key] = ev
+	return true
+}
+
+// hasStateIdentity reports whether ev carries enough information to prove
+// "the state behind this event is the same one the previous event described".
+//
+// A KindFile event needs its content hash (mtime alone has second precision,
+// so two different same-second writes share it) plus an mtime; tree/comments
+// events carry no sha and are identified by mtime alone. An empty field means
+// the emitter couldn't read that state (file removed or unreadable between
+// the fsnotify event and the stat/read), which proves nothing — such events
+// are never suppressed. That also keeps the ErrEventOverflow fallback in
+// handleFsError (a bare KindTree with no path/mtime) always deliverable.
+func hasStateIdentity(ev Event) bool {
+	if ev.Mtime == "" {
+		return false
+	}
+	return ev.Kind != KindFile || ev.Sha != ""
 }
 
 // stopAllTimers cancels any in-flight debounce timers on shutdown so no
