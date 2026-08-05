@@ -341,6 +341,42 @@ func TestSchedule_UndeliveredEventIsNotRemembered(t *testing.T) {
 	assert.Equal(t, ev, nextBroadcast(t, ch))
 }
 
+func TestSchedule_NewSubscriberRetiresSuppression(t *testing.T) {
+	// Broadcast only proves the event reached each subscriber's channel — the
+	// connection can die before the handler flushes it — and a client that
+	// connects afterwards never saw it at all. So a new subscription must
+	// invalidate what the watcher thinks the audience knows, otherwise an
+	// identical follow-up event is suppressed and (since only the active file
+	// is reconciled on reconnect) the tree/comments views can stay stale.
+	t.Parallel()
+	w := newWatcherForRoots(t, "works")
+	first, unsubscribeFirst := w.hub.Subscribe()
+	defer unsubscribeFirst()
+
+	ev := Event{Kind: KindFile, Root: "works", Path: "doc.md", Mtime: "2026-08-05T04:46:58Z", Sha: "sha-1"}
+	fp := stateFingerprint(ev.Sha, ev.Mtime)
+
+	scheduleAndWait(w, ev, fp)
+	assert.Equal(t, ev, nextBroadcast(t, first))
+
+	// Suppression is armed for this exact state.
+	scheduleAndWait(w, ev, fp)
+	assertNoBroadcast(t, first)
+
+	// A reconnect (or a second tab) subscribes: the audience changed, so the
+	// same state must be announced again.
+	second, unsubscribeSecond := w.hub.Subscribe()
+	defer unsubscribeSecond()
+
+	scheduleAndWait(w, ev, fp)
+	assert.Equal(t, ev, nextBroadcast(t, second))
+	assert.Equal(t, ev, nextBroadcast(t, first))
+
+	// ...and it re-arms for the new audience.
+	scheduleAndWait(w, ev, fp)
+	assertNoBroadcast(t, second)
+}
+
 func TestSchedule_ResetsMemoryAtCap(t *testing.T) {
 	// The map is bounded so a long-lived daemon over a large tree can't grow
 	// it without limit; a reset only costs one redundant broadcast per key.
@@ -349,7 +385,7 @@ func TestSchedule_ResetsMemoryAtCap(t *testing.T) {
 
 	w.mu.Lock()
 	for i := 0; i < maxRememberedEvents; i++ {
-		w.lastSent["file|works|doc"+strconv.Itoa(i)+".md"] = "sha|m"
+		w.lastSent["file|works|doc"+strconv.Itoa(i)+".md"] = sentState{fingerprint: "sha|m"}
 	}
 	require.Len(t, w.lastSent, maxRememberedEvents)
 	w.mu.Unlock()
@@ -364,5 +400,5 @@ func TestSchedule_ResetsMemoryAtCap(t *testing.T) {
 	got := w.lastSent
 	w.mu.Unlock()
 	assert.Len(t, got, 1)
-	assert.Equal(t, fp, got["file|works|overflow.md"])
+	assert.Equal(t, fp, got["file|works|overflow.md"].fingerprint)
 }

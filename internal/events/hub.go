@@ -60,7 +60,9 @@ const subscriberBuffer = 64
 // The zero value is not usable; use NewHub.
 type Hub struct {
 	subs map[chan Event]struct{}
-	mu   sync.Mutex
+	// epoch increments on every Subscribe. See SubscriberEpoch.
+	epoch uint64
+	mu    sync.Mutex
 }
 
 // NewHub creates an empty Hub ready to accept subscribers.
@@ -76,6 +78,7 @@ func (h *Hub) Subscribe() (<-chan Event, func()) {
 	ch := make(chan Event, subscriberBuffer)
 	h.mu.Lock()
 	h.subs[ch] = struct{}{}
+	h.epoch++
 	h.mu.Unlock()
 
 	unsubscribe := func() {
@@ -114,6 +117,22 @@ func (h *Hub) Broadcast(ev Event) bool {
 		}
 	}
 	return deliveredAll
+}
+
+// SubscriberEpoch reports how many subscriptions this Hub has handed out over
+// its lifetime. It changes whenever a client connects (including a reconnect
+// after a drop) and never goes backwards.
+//
+// It exists so a producer can tell "the audience is unchanged" from "somebody
+// new is listening". A successful Broadcast only proves the event reached each
+// subscriber's channel, not that it was written to the socket before the
+// connection died — so any optimization that skips a notification because the
+// audience "already has that state" (the watcher's #176 suppression) must
+// treat a new epoch as invalidating what it thinks the audience knows.
+func (h *Hub) SubscriberEpoch() uint64 {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.epoch
 }
 
 // SubscriberCount reports how many clients are currently connected. Used by

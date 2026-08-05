@@ -111,6 +111,63 @@ func TestHub_SlowSubscriberDropsInsteadOfBlocking(t *testing.T) {
 	}
 }
 
+func TestHub_BroadcastReportsIncompleteDelivery(t *testing.T) {
+	// The bool is what lets a producer avoid treating a dropped event as
+	// delivered state (issue #176): true only while every subscriber accepted
+	// it, including the vacuous no-subscriber case.
+	t.Parallel()
+	hub := events.NewHub()
+
+	assert.True(t, hub.Broadcast(events.Event{Kind: events.KindTree, Root: "works"}),
+		"no subscribers means nothing was missed")
+
+	slow, unsubSlow := hub.Subscribe()
+	defer unsubSlow()
+
+	// Fill the subscriber's buffer without draining it.
+	full := false
+	for i := 0; i < 500; i++ {
+		if !hub.Broadcast(events.Event{Kind: events.KindTree, Root: "works", Path: "flood.md"}) {
+			full = true
+			break
+		}
+	}
+	require.True(t, full, "expected Broadcast to report a drop once the buffer filled")
+
+	// Draining makes room again, so delivery is reported complete once more.
+	<-slow
+	assert.True(t, hub.Broadcast(events.Event{Kind: events.KindTree, Root: "works", Path: "flood.md"}))
+}
+
+func TestHub_SubscriberEpochAdvancesOnEachSubscribe(t *testing.T) {
+	// The watcher keys its "clients already know this state" memo on the
+	// epoch, so it must advance for every new connection (a reconnect included)
+	// and stay put otherwise.
+	t.Parallel()
+	hub := events.NewHub()
+
+	start := hub.SubscriberEpoch()
+	hub.Broadcast(events.Event{Kind: events.KindTree, Root: "works"})
+	assert.Equal(t, start, hub.SubscriberEpoch(), "broadcasting is not a new audience")
+
+	_, unsubA := hub.Subscribe()
+	afterA := hub.SubscriberEpoch()
+	assert.Greater(t, afterA, start)
+
+	_, unsubB := hub.Subscribe()
+	afterB := hub.SubscriberEpoch()
+	assert.Greater(t, afterB, afterA)
+
+	// Leaving doesn't rewind it: a later reconnect must not be mistaken for
+	// the audience that was there before.
+	unsubA()
+	unsubB()
+	assert.Equal(t, afterB, hub.SubscriberEpoch())
+	_, unsubC := hub.Subscribe()
+	defer unsubC()
+	assert.Greater(t, hub.SubscriberEpoch(), afterB)
+}
+
 func TestEvent_Marshal(t *testing.T) {
 	t.Parallel()
 	ev := events.Event{Kind: events.KindFile, Root: "works", Path: "a.md", Mtime: "2026-05-20T00:00:00Z"}

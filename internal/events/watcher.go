@@ -48,10 +48,10 @@ type Watcher struct {
 	timers  map[string]*time.Timer
 	pending map[string]pendingEvent
 
-	// lastSent remembers the fingerprint of the state most recently broadcast
-	// (and accepted by every subscriber) per debounce key, so an unchanged
-	// state isn't re-announced (issue #176). Bounded by maxRememberedEvents.
-	lastSent map[string]string
+	// lastSent remembers the state most recently broadcast (and accepted by
+	// every subscriber) per debounce key, so an unchanged state isn't
+	// re-announced (issue #176). Bounded by maxRememberedEvents.
+	lastSent map[string]sentState
 
 	mu sync.Mutex
 }
@@ -62,6 +62,19 @@ type Watcher struct {
 type pendingEvent struct {
 	ev          Event
 	fingerprint string
+}
+
+// sentState is what the watcher believes connected clients already know: a
+// state fingerprint plus the Hub subscriber epoch it was sent under.
+//
+// The epoch is what keeps "they already have this" honest. Enqueueing into a
+// subscriber's channel isn't proof the bytes reached the browser (the
+// connection can die before the handler flushes), and a client that connects
+// later never saw the event at all. Both cases bump the epoch, which retires
+// every memo, so the next event — even an identical one — is delivered.
+type sentState struct {
+	fingerprint string
+	epoch       uint64
 }
 
 // NewWatcher creates a Watcher for the given roots, broadcasting through
@@ -78,7 +91,7 @@ func NewWatcher(hub *Hub, roots *files.Roots) (*Watcher, error) {
 		ready:    make(chan struct{}),
 		timers:   make(map[string]*time.Timer),
 		pending:  make(map[string]pendingEvent),
-		lastSent: make(map[string]string),
+		lastSent: make(map[string]sentState),
 	}, nil
 }
 
@@ -416,6 +429,12 @@ func (w *Watcher) handleSidecarEvent(ev fsnotify.Event) {
 // (kind=tree). So the timer also compares fingerprint against the last state
 // successfully broadcast for this key and stays silent when nothing changed.
 //
+// Suppression is deliberately conservative: it needs a known state
+// (fingerprint != ""), a fully-delivered previous broadcast, and the same
+// audience (see sentState.epoch). Anything else broadcasts, because a missed
+// notification leaves a client stale while a redundant one only costs a
+// refetch.
+//
 // fingerprint identifies the on-disk state behind ev (see stateFingerprint);
 // pass "" when it couldn't be determined, which disables suppression for that
 // event.
@@ -430,11 +449,21 @@ func (w *Watcher) schedule(ev Event, fingerprint string) {
 		t.Stop()
 	}
 	w.timers[key] = time.AfterFunc(debounceWindow, func() {
+		// Read the epoch before broadcasting: a client that subscribes while
+		// this event is in flight must not be counted as having received it,
+		// and recording the older epoch is what makes the next identical event
+		// go out for them.
+		epoch := w.hub.SubscriberEpoch()
+
 		w.mu.Lock()
 		p, ok := w.pending[key]
 		delete(w.pending, key)
 		delete(w.timers, key)
-		suppress := ok && p.fingerprint != "" && w.lastSent[key] == p.fingerprint
+		prev, remembered := w.lastSent[key]
+		suppress := ok && remembered &&
+			p.fingerprint != "" &&
+			prev.fingerprint == p.fingerprint &&
+			prev.epoch == epoch
 		w.mu.Unlock()
 		if !ok || suppress {
 			return
@@ -449,15 +478,14 @@ func (w *Watcher) schedule(ev Event, fingerprint string) {
 			// remember such a state: that client's polling is disabled while
 			// SSE is connected, so suppressing the identical follow-up (the
 			// only thing that could still repair it) would leave it stale
-			// indefinitely. Drop any older fingerprint too, for the same
-			// reason.
+			// indefinitely. Drop any older memo too, for the same reason.
 			delete(w.lastSent, key)
 			return
 		}
 		if len(w.lastSent) >= maxRememberedEvents {
-			w.lastSent = make(map[string]string)
+			w.lastSent = make(map[string]sentState)
 		}
-		w.lastSent[key] = p.fingerprint
+		w.lastSent[key] = sentState{fingerprint: p.fingerprint, epoch: epoch}
 	})
 }
 
