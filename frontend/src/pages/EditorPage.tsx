@@ -355,6 +355,31 @@ export function EditorPage() {
     setSseConnected(sseConnected);
   }, [sseConnected, setSseConnected]);
 
+  // Re-sync the active tab on every SSE (re)connect (#173). The push channel
+  // can only carry changes that happen *while* it is connected, so anything
+  // that changed while the page was closed — or during a drop (laptop sleep,
+  // server restart) — never produces a `file` event. useOpenFiles persists
+  // markdown/savedMarkdown to localStorage, so without a reconcile on
+  // rehydrate the tab keeps rendering its old buffer indefinitely (a hard
+  // reload doesn't help: localStorage survives it), and saving from that
+  // stale baseline would overwrite the external change.
+  //
+  // Nothing else covers this window: on mount fileEventTrigger is still 0 (so
+  // useFileWatcher's trigger path doesn't fire) and the interval fallback is
+  // cleared the instant `sseConnected` flips true, before its first +5s tick.
+  // Bumping the trigger here runs the same reconcile the SSE onFile handler
+  // uses (sha compare -> silent reload + toast when clean, confirm dialog when
+  // dirty), which is a no-op whenever the sha still matches. Inactive tabs are
+  // covered by the existing revalidate-on-reactivation path (#119 case 6).
+  const prevSseConnectedRef = useRef(false);
+  useEffect(() => {
+    const wasConnected = prevSseConnectedRef.current;
+    prevSseConnectedRef.current = sseConnected;
+    if (sseConnected && !wasConnected) {
+      setFileEventTrigger((n) => n + 1);
+    }
+  }, [sseConnected]);
+
   // Sticky "has the SSE channel ever connected" flag (#119 case 4). Once
   // true it stays true, so a later drop shows the disconnected badge below —
   // but the badge never flashes before the first successful connection
