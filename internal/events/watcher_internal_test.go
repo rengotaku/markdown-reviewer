@@ -183,9 +183,10 @@ func assertNoBroadcast(t *testing.T, ch <-chan Event) {
 
 // scheduleAndWait drives schedule() and waits out the debounce window so the
 // timer has fired (successfully broadcasting or suppressing) before the test
-// asserts on the channel.
-func scheduleAndWait(w *Watcher, ev Event) {
-	w.schedule(ev)
+// asserts on the channel. The fingerprint mirrors what the production emitters
+// derive from the file (see stateFingerprint).
+func scheduleAndWait(w *Watcher, ev Event, fingerprint string) {
+	w.schedule(ev, fingerprint)
 	time.Sleep(debounceWindow * 2)
 }
 
@@ -201,18 +202,19 @@ func TestSchedule_IdenticalPayloadAcrossDebounceWindow_BroadcastsOnce(t *testing
 	defer unsubscribe()
 
 	ev := Event{Kind: KindFile, Root: "works", Path: "doc.md", Mtime: "2026-08-05T04:46:58Z", Sha: "sha-1"}
+	fp := stateFingerprint(ev.Sha, ev.Mtime)
 
-	scheduleAndWait(w, ev)
+	scheduleAndWait(w, ev, fp)
 	assert.Equal(t, ev, nextBroadcast(t, ch))
 
 	// Same state again, well outside the debounce window.
-	scheduleAndWait(w, ev)
+	scheduleAndWait(w, ev, fp)
 	assertNoBroadcast(t, ch)
 }
 
 func TestSchedule_ChangedShaSameMtime_IsBroadcast(t *testing.T) {
-	// Same-second double save (#119): the mtime can't tell these apart, so
-	// suppression must key on the whole payload — sha included.
+	// Same-second double save (#119): the mtime can't tell these apart, so the
+	// fingerprint has to carry the content hash.
 	t.Parallel()
 	w := newWatcherForRoots(t, "works")
 	ch, unsubscribe := w.hub.Subscribe()
@@ -222,10 +224,10 @@ func TestSchedule_ChangedShaSameMtime_IsBroadcast(t *testing.T) {
 	second := first
 	second.Sha = "sha-2"
 
-	scheduleAndWait(w, first)
+	scheduleAndWait(w, first, stateFingerprint(first.Sha, first.Mtime))
 	assert.Equal(t, first, nextBroadcast(t, ch))
 
-	scheduleAndWait(w, second)
+	scheduleAndWait(w, second, stateFingerprint(second.Sha, second.Mtime))
 	assert.Equal(t, second, nextBroadcast(t, ch))
 }
 
@@ -242,16 +244,17 @@ func TestSchedule_SameShaNewMtime_IsBroadcast(t *testing.T) {
 	second := first
 	second.Mtime = "2026-08-05T04:47:10Z"
 
-	scheduleAndWait(w, first)
+	scheduleAndWait(w, first, stateFingerprint(first.Sha, first.Mtime))
 	assert.Equal(t, first, nextBroadcast(t, ch))
 
-	scheduleAndWait(w, second)
+	scheduleAndWait(w, second, stateFingerprint(second.Sha, second.Mtime))
 	assert.Equal(t, second, nextBroadcast(t, ch))
 }
 
 func TestSchedule_SamePathDifferentKinds_AreIndependent(t *testing.T) {
-	// tree and file events for one write share root+path; suppressing one
-	// must never suppress the other (they drive different refetches).
+	// tree and file events for one write share root+path *and* fingerprint;
+	// suppressing one must never suppress the other (they drive different
+	// refetches), which is why the memo is keyed by kind too.
 	t.Parallel()
 	w := newWatcherForRoots(t, "works")
 	ch, unsubscribe := w.hub.Subscribe()
@@ -259,63 +262,107 @@ func TestSchedule_SamePathDifferentKinds_AreIndependent(t *testing.T) {
 
 	tree := Event{Kind: KindTree, Root: "works", Path: "doc.md", Mtime: "2026-08-05T04:46:58Z"}
 	file := Event{Kind: KindFile, Root: "works", Path: "doc.md", Mtime: "2026-08-05T04:46:58Z", Sha: "sha-1"}
+	fp := stateFingerprint(file.Sha, file.Mtime)
 
-	scheduleAndWait(w, tree)
+	scheduleAndWait(w, tree, fp)
 	assert.Equal(t, tree, nextBroadcast(t, ch))
-	scheduleAndWait(w, file)
+	scheduleAndWait(w, file, fp)
 	assert.Equal(t, file, nextBroadcast(t, ch))
 }
 
-func TestSchedule_MissingIdentityFields_AreNeverSuppressed(t *testing.T) {
-	// An empty sha/mtime means the emitter couldn't read that state (file
+func TestSchedule_UnknownState_IsNeverSuppressed(t *testing.T) {
+	// An empty fingerprint means the emitter couldn't read the state (file
 	// removed or unreadable between the fsnotify event and the stat/read),
 	// which proves nothing about whether it changed. Dropping such an event
 	// would leave clients stale until their next poll, so identical repeats
 	// are still delivered (fail-open).
 	t.Parallel()
-	cases := []struct {
-		name string
-		ev   Event
-	}{
-		{"file without sha", Event{Kind: KindFile, Root: "works", Path: "doc.md", Mtime: "2026-08-05T04:46:58Z"}},
-		{"file without mtime", Event{Kind: KindFile, Root: "works", Path: "doc.md", Sha: "sha-1"}},
-		{"tree without mtime", Event{Kind: KindTree, Root: "works", Path: "doc.md"}},
-		{"comments without mtime", Event{Kind: KindComments, Root: "works", Path: "doc.md"}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			w := newWatcherForRoots(t, "works")
-			ch, unsubscribe := w.hub.Subscribe()
-			defer unsubscribe()
+	w := newWatcherForRoots(t, "works")
+	ch, unsubscribe := w.hub.Subscribe()
+	defer unsubscribe()
 
-			scheduleAndWait(w, tc.ev)
-			assert.Equal(t, tc.ev, nextBroadcast(t, ch))
-			scheduleAndWait(w, tc.ev)
-			assert.Equal(t, tc.ev, nextBroadcast(t, ch))
-		})
-	}
+	ev := Event{Kind: KindFile, Root: "works", Path: "doc.md", Mtime: "2026-08-05T04:46:58Z"}
+
+	scheduleAndWait(w, ev, "")
+	assert.Equal(t, ev, nextBroadcast(t, ch))
+	scheduleAndWait(w, ev, "")
+	assert.Equal(t, ev, nextBroadcast(t, ch))
 }
 
-func TestAcceptLocked_ResetsMemoryAtCap(t *testing.T) {
+func TestStateFingerprint_RequiresBothShaAndMtime(t *testing.T) {
+	t.Parallel()
+	assert.Empty(t, stateFingerprint("", "2026-08-05T04:46:58Z"), "sha alone is unknown state")
+	assert.Empty(t, stateFingerprint("sha-1", ""), "mtime alone is unknown state")
+	assert.NotEmpty(t, stateFingerprint("sha-1", "2026-08-05T04:46:58Z"))
+	// Distinct states must not collide.
+	assert.NotEqual(t,
+		stateFingerprint("sha-1", "2026-08-05T04:46:58Z"),
+		stateFingerprint("sha-1", "2026-08-05T04:47:10Z"))
+	assert.NotEqual(t,
+		stateFingerprint("sha-1", "2026-08-05T04:46:58Z"),
+		stateFingerprint("sha-2", "2026-08-05T04:46:58Z"))
+}
+
+func TestSchedule_UndeliveredEventIsNotRemembered(t *testing.T) {
+	// Hub.Broadcast drops an event for any subscriber whose buffer is full.
+	// Such a client has its polling disabled while SSE is connected, so the
+	// identical follow-up event is the only thing that could still repair it —
+	// suppressing that would leave it stale indefinitely.
+	t.Parallel()
+	w := newWatcherForRoots(t, "works")
+
+	// A subscriber that never reads: fill its buffer so every later Broadcast
+	// reports incomplete delivery.
+	_, unsubscribeStuck := w.hub.Subscribe()
+	defer unsubscribeStuck()
+	for i := 0; i < subscriberBuffer; i++ {
+		w.hub.Broadcast(Event{Kind: KindTree, Root: "works", Path: "filler.md", Mtime: "m"})
+	}
+	require.False(t, w.hub.Broadcast(Event{Kind: KindTree, Root: "works", Path: "filler.md", Mtime: "m"}),
+		"buffer should be full by now")
+
+	// A live subscriber to observe what actually goes out.
+	ch, unsubscribe := w.hub.Subscribe()
+	defer unsubscribe()
+
+	ev := Event{Kind: KindFile, Root: "works", Path: "doc.md", Mtime: "2026-08-05T04:46:58Z", Sha: "sha-1"}
+	fp := stateFingerprint(ev.Sha, ev.Mtime)
+
+	scheduleAndWait(w, ev, fp)
+	assert.Equal(t, ev, nextBroadcast(t, ch))
+
+	w.mu.Lock()
+	_, remembered := w.lastSent["file|works|doc.md"]
+	w.mu.Unlock()
+	assert.False(t, remembered, "an event not delivered to every subscriber must not be remembered")
+
+	// ...so the identical repeat still goes out.
+	scheduleAndWait(w, ev, fp)
+	assert.Equal(t, ev, nextBroadcast(t, ch))
+}
+
+func TestSchedule_ResetsMemoryAtCap(t *testing.T) {
 	// The map is bounded so a long-lived daemon over a large tree can't grow
 	// it without limit; a reset only costs one redundant broadcast per key.
 	t.Parallel()
 	w := newWatcherForRoots(t, "works")
 
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	for i := 0; i < maxRememberedEvents; i++ {
-		ev := Event{Kind: KindFile, Root: "works", Path: "doc" + strconv.Itoa(i) + ".md", Mtime: "m", Sha: "s"}
-		require.True(t, w.acceptLocked(string(ev.Kind)+"|"+ev.Root+"|"+ev.Path, ev))
+		w.lastSent["file|works|doc"+strconv.Itoa(i)+".md"] = "sha|m"
 	}
 	require.Len(t, w.lastSent, maxRememberedEvents)
+	w.mu.Unlock()
 
-	// One more entry trips the cap: the map is dropped, then repopulated with
-	// just this event.
-	overflow := Event{Kind: KindFile, Root: "works", Path: "overflow.md", Mtime: "m", Sha: "s"}
-	assert.True(t, w.acceptLocked("file|works|overflow.md", overflow))
-	assert.Len(t, w.lastSent, 1)
-	// The freshly-remembered event is still suppressed on an exact repeat.
-	assert.False(t, w.acceptLocked("file|works|overflow.md", overflow))
+	// One more remembered state trips the cap: the map is dropped, then
+	// repopulated with just this key.
+	ev := Event{Kind: KindFile, Root: "works", Path: "overflow.md", Mtime: "2026-08-05T04:46:58Z", Sha: "sha-1"}
+	fp := stateFingerprint(ev.Sha, ev.Mtime)
+	scheduleAndWait(w, ev, fp)
+
+	w.mu.Lock()
+	got := w.lastSent
+	w.mu.Unlock()
+	assert.Len(t, got, 1)
+	assert.Equal(t, fp, got["file|works|overflow.md"])
 }

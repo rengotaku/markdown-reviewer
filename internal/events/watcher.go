@@ -46,14 +46,22 @@ type Watcher struct {
 	ready chan struct{}
 
 	timers  map[string]*time.Timer
-	pending map[string]Event
+	pending map[string]pendingEvent
 
-	// lastSent remembers the payload of the most recent broadcast per
-	// debounce key so an unchanged state isn't re-announced (issue #176).
-	// Bounded by maxRememberedEvents.
-	lastSent map[string]Event
+	// lastSent remembers the fingerprint of the state most recently broadcast
+	// (and accepted by every subscriber) per debounce key, so an unchanged
+	// state isn't re-announced (issue #176). Bounded by maxRememberedEvents.
+	lastSent map[string]string
 
 	mu sync.Mutex
+}
+
+// pendingEvent is a debounced event plus the fingerprint of the on-disk state
+// it describes. The fingerprint is deliberately not part of Event: it can be
+// content-precise (a sha) even for kinds whose wire payload carries no sha.
+type pendingEvent struct {
+	ev          Event
+	fingerprint string
 }
 
 // NewWatcher creates a Watcher for the given roots, broadcasting through
@@ -69,8 +77,8 @@ func NewWatcher(hub *Hub, roots *files.Roots) (*Watcher, error) {
 		fsw:      fsw,
 		ready:    make(chan struct{}),
 		timers:   make(map[string]*time.Timer),
-		pending:  make(map[string]Event),
-		lastSent: make(map[string]Event),
+		pending:  make(map[string]pendingEvent),
+		lastSent: make(map[string]string),
 	}, nil
 }
 
@@ -339,8 +347,14 @@ func (w *Watcher) handleCanonicalEvent(ev fsnotify.Event) {
 			sha = files.Sha256Hex(data)
 		}
 		relSlash := filepath.ToSlash(rel)
-		w.schedule(Event{Kind: KindTree, Root: root.Name, Path: relSlash, Mtime: mtime})
-		w.schedule(Event{Kind: KindFile, Root: root.Name, Path: relSlash, Mtime: mtime, Sha: sha})
+		// Both events describe the same on-disk state, so they share one
+		// fingerprint — the tree event carries no sha on the wire (clients only
+		// need "the listing changed") but must still be deduped by content,
+		// since two same-second writes produce an identical tree payload while
+		// the listing's size/order can differ (issue #176).
+		fp := stateFingerprint(sha, mtime)
+		w.schedule(Event{Kind: KindTree, Root: root.Name, Path: relSlash, Mtime: mtime}, fp)
+		w.schedule(Event{Kind: KindFile, Root: root.Name, Path: relSlash, Mtime: mtime, Sha: sha}, fp)
 		return
 	}
 }
@@ -372,7 +386,20 @@ func (w *Watcher) handleSidecarEvent(ev fsnotify.Event) {
 		if info, err := os.Stat(ev.Name); err == nil {
 			mtime = info.ModTime().UTC().Format(time.RFC3339)
 		}
-		w.schedule(Event{Kind: KindComments, Root: root.Name, Path: filepath.ToSlash(relDir), Mtime: mtime})
+		// The comments payload has no sha on the wire, but dedup still needs a
+		// content-precise fingerprint: mtime is RFC3339 (second precision), so
+		// two different review.json saves inside one second would otherwise
+		// look identical and the second would be dropped — leaving a client
+		// whose comment polling is disabled (SSE connected) without the newer
+		// comments until some unrelated event arrives.
+		sha := ""
+		if data, err := os.ReadFile(ev.Name); err == nil {
+			sha = files.Sha256Hex(data)
+		}
+		w.schedule(
+			Event{Kind: KindComments, Root: root.Name, Path: filepath.ToSlash(relDir), Mtime: mtime},
+			stateFingerprint(sha, mtime),
+		)
 		return
 	}
 }
@@ -383,71 +410,76 @@ func (w *Watcher) handleSidecarEvent(ev fsnotify.Event) {
 //
 // Debouncing alone only collapses bursts *inside* the window. fsnotify events
 // that straddle it — a tool rewriting the same bytes 300ms later, a repeated
-// `touch` to the same timestamp — used to produce a second broadcast with a
-// byte-identical payload (issue #176), costing every client a redundant
-// /api/stat (kind=file) or /api/dirs + /api/files refetch (kind=tree) for a
-// state it already has. So the timer also compares against the last payload
-// actually broadcast for this key and stays silent when nothing changed.
-func (w *Watcher) schedule(ev Event) {
+// `touch` to the same timestamp — used to produce a second broadcast for a
+// state every client already had (issue #176), costing each of them a
+// redundant /api/stat (kind=file) or /api/dirs + /api/files refetch
+// (kind=tree). So the timer also compares fingerprint against the last state
+// successfully broadcast for this key and stays silent when nothing changed.
+//
+// fingerprint identifies the on-disk state behind ev (see stateFingerprint);
+// pass "" when it couldn't be determined, which disables suppression for that
+// event.
+func (w *Watcher) schedule(ev Event, fingerprint string) {
 	key := string(ev.Kind) + "|" + ev.Root + "|" + ev.Path
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	w.pending[key] = ev
+	w.pending[key] = pendingEvent{ev: ev, fingerprint: fingerprint}
 	if t, ok := w.timers[key]; ok {
 		t.Stop()
 	}
 	w.timers[key] = time.AfterFunc(debounceWindow, func() {
 		w.mu.Lock()
-		out, ok := w.pending[key]
+		p, ok := w.pending[key]
 		delete(w.pending, key)
 		delete(w.timers, key)
-		// Decide (and record) under the same lock as the pending/timer
-		// cleanup, so two timers firing concurrently can't both conclude
-		// they're the first to send this payload.
-		send := ok && w.acceptLocked(key, out)
+		suppress := ok && p.fingerprint != "" && w.lastSent[key] == p.fingerprint
 		w.mu.Unlock()
-		if send {
-			w.hub.Broadcast(out)
+		if !ok || suppress {
+			return
 		}
+
+		delivered := w.hub.Broadcast(p.ev)
+
+		w.mu.Lock()
+		defer w.mu.Unlock()
+		if !delivered || p.fingerprint == "" {
+			// A subscriber whose buffer was full didn't get this event. Never
+			// remember such a state: that client's polling is disabled while
+			// SSE is connected, so suppressing the identical follow-up (the
+			// only thing that could still repair it) would leave it stale
+			// indefinitely. Drop any older fingerprint too, for the same
+			// reason.
+			delete(w.lastSent, key)
+			return
+		}
+		if len(w.lastSent) >= maxRememberedEvents {
+			w.lastSent = make(map[string]string)
+		}
+		w.lastSent[key] = p.fingerprint
 	})
 }
 
-// acceptLocked reports whether ev should be broadcast for key, remembering it
-// as the last-sent payload when it should. Caller must hold w.mu.
+// stateFingerprint builds the dedup key for the on-disk state an event
+// describes: the content hash plus the mtime it was observed with.
 //
-// Suppression requires positive proof that the state is unchanged, i.e. an
-// identical payload whose identity fields are actually populated (see
-// hasStateIdentity) — anything less is broadcast. Missing a notification
-// leaves a client stale until its next poll; a redundant one only costs a
-// refetch, so the tie is broken toward delivering.
-func (w *Watcher) acceptLocked(key string, ev Event) bool {
-	if prev, seen := w.lastSent[key]; seen && hasStateIdentity(ev) && prev == ev {
-		return false
-	}
-	if len(w.lastSent) >= maxRememberedEvents {
-		w.lastSent = make(map[string]Event)
-	}
-	w.lastSent[key] = ev
-	return true
-}
-
-// hasStateIdentity reports whether ev carries enough information to prove
-// "the state behind this event is the same one the previous event described".
+// Both parts are required. sha alone would suppress a `touch` (same bytes, new
+// mtime), which clients need in order to acknowledge the new mtime; mtime
+// alone is RFC3339 second precision, so two different writes landing in one
+// second would look identical. An empty result means "unknown state" — the
+// emitter couldn't stat or read the file (removed or unreadable between the
+// fsnotify event and the read) — and disables suppression, because missing a
+// notification leaves a client stale while a redundant one only costs a
+// refetch.
 //
-// A KindFile event needs its content hash (mtime alone has second precision,
-// so two different same-second writes share it) plus an mtime; tree/comments
-// events carry no sha and are identified by mtime alone. An empty field means
-// the emitter couldn't read that state (file removed or unreadable between
-// the fsnotify event and the stat/read), which proves nothing — such events
-// are never suppressed. That also keeps the ErrEventOverflow fallback in
-// handleFsError (a bare KindTree with no path/mtime) always deliverable.
-func hasStateIdentity(ev Event) bool {
-	if ev.Mtime == "" {
-		return false
+// Events that never go through schedule (the ErrEventOverflow fallback in
+// handleFsError) are unaffected and always delivered.
+func stateFingerprint(sha, mtime string) string {
+	if sha == "" || mtime == "" {
+		return ""
 	}
-	return ev.Kind != KindFile || ev.Sha != ""
+	return sha + "|" + mtime
 }
 
 // stopAllTimers cancels any in-flight debounce timers on shutdown so no

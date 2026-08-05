@@ -89,21 +89,31 @@ func (h *Hub) Subscribe() (<-chan Event, func()) {
 	return ch, unsubscribe
 }
 
-// Broadcast fans ev out to every currently-subscribed channel. A slow
-// subscriber whose buffer is full has the event dropped for it rather than
-// blocking every other subscriber (and the watcher goroutine) — SSE events
-// here are a "something changed, go re-fetch" hint, so an occasional missed
-// notification is harmless as long as the next one arrives.
-func (h *Hub) Broadcast(ev Event) {
+// Broadcast fans ev out to every currently-subscribed channel and reports
+// whether every one of them accepted it. A slow subscriber whose buffer is
+// full has the event dropped for it rather than blocking every other
+// subscriber (and the watcher goroutine) — SSE events here are a "something
+// changed, go re-fetch" hint, so an occasional missed notification is harmless
+// as long as the next one arrives.
+//
+// The return value is what lets the caller keep that promise: a dropped event
+// must not be treated as delivered state, or a later "nothing changed since"
+// optimization (the watcher's #176 suppression) would cancel the very
+// notification that would have repaired the client. Vacuously true when there
+// are no subscribers — a client that connects later re-fetches on mount.
+func (h *Hub) Broadcast(ev Event) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	deliveredAll := true
 	for ch := range h.subs {
 		select {
 		case ch <- ev:
 		default:
 			// Drop for this slow subscriber; don't block the others.
+			deliveredAll = false
 		}
 	}
+	return deliveredAll
 }
 
 // SubscriberCount reports how many clients are currently connected. Used by

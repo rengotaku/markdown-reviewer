@@ -290,6 +290,49 @@ func TestWatcher_SidecarUpdate_EmitsComments(t *testing.T) {
 	assert.NotEmpty(t, got.Mtime)
 }
 
+// TestWatcher_SidecarSameSecondDifferentContent_EmitsBothComments guards the
+// unchanged-state suppression (#176) against over-reach on comments events:
+// their wire payload has no sha and their mtime is RFC3339 (second precision),
+// so two different review.json saves inside one second look identical from the
+// payload alone. Dropping the second would hide a comment from a client whose
+// comment polling is disabled (SSE connected) until some unrelated event.
+func TestWatcher_SidecarSameSecondDifferentContent_EmitsBothComments(t *testing.T) {
+	// Not t.Parallel(): t.Setenv forbids it.
+	configDir := t.TempDir()
+	t.Setenv("REVIEWER_CONFIG_DIR", configDir)
+
+	roots, root := newTestRoots(t)
+	require.NoError(t, os.WriteFile(filepath.Join(root, "doc.md"), []byte("# hello\n"), 0o644))
+	require.NoError(t, reviewstore.Ingest("works", "doc.md"))
+
+	ch, stop := startWatcher(t, roots)
+	defer stop()
+
+	entryDir, err := reviewstore.EntryDir("works", "doc.md")
+	require.NoError(t, err)
+	reviewJSON := filepath.Join(entryDir, reviewstore.ReviewFileName)
+
+	// Two different sidecar states pinned to the same second-precision mtime,
+	// far enough apart that the debounce window can't merge them.
+	sameSecond := time.Date(2026, 8, 5, 4, 46, 58, 0, time.UTC)
+	write := func(body string) {
+		require.NoError(t, os.WriteFile(reviewJSON, []byte(body), 0o644))
+		require.NoError(t, os.Chtimes(reviewJSON, sameSecond, sameSecond))
+	}
+
+	write(`{"comments":[{"id":"c-001"}]}`)
+	time.Sleep(debounceGap)
+	write(`{"comments":[{"id":"c-001"},{"id":"c-002"}]}`)
+
+	// Both saves must be announced, even though the two payloads are equal.
+	for i := 0; i < 2; i++ {
+		got := waitForEvent(t, ch, func(e events.Event) bool {
+			return e.Kind == events.KindComments && e.Path == "doc.md"
+		})
+		assert.Equal(t, "works", got.Root)
+	}
+}
+
 func TestWatcher_DebounceCoalescesBurstIntoOneEvent(t *testing.T) {
 	t.Parallel()
 	roots, root := newTestRoots(t)
