@@ -289,6 +289,24 @@ func TestSchedule_UnknownState_IsNeverSuppressed(t *testing.T) {
 	assert.Equal(t, ev, nextBroadcast(t, ch))
 }
 
+func TestDebounceKey_CannotCollideAcrossRootAndPath(t *testing.T) {
+	// The key groups a debounce timer and a suppression memo, so two different
+	// files sharing one would swallow an event for the wrong file. A printable
+	// separator makes that reachable whenever a root name (operator-supplied
+	// via REVIEW_ROOTS) contains it.
+	t.Parallel()
+	assert.NotEqual(t,
+		debounceKey(Event{Kind: KindFile, Root: "a", Path: "b|c.md"}),
+		debounceKey(Event{Kind: KindFile, Root: "a|b", Path: "c.md"}))
+	assert.NotEqual(t,
+		debounceKey(Event{Kind: KindFile, Root: "a", Path: "b"}),
+		debounceKey(Event{Kind: KindFile, Root: "a", Path: "b/"}))
+	// Same triple is the same key (that's what makes debouncing work).
+	assert.Equal(t,
+		debounceKey(Event{Kind: KindFile, Root: "works", Path: "doc.md", Mtime: "m1", Sha: "s1"}),
+		debounceKey(Event{Kind: KindFile, Root: "works", Path: "doc.md", Mtime: "m2", Sha: "s2"}))
+}
+
 func TestStateFingerprint_RequiresBothShaAndMtime(t *testing.T) {
 	t.Parallel()
 	assert.Empty(t, stateFingerprint("", "2026-08-05T04:46:58Z"), "sha alone is unknown state")
@@ -332,7 +350,7 @@ func TestSchedule_UndeliveredEventIsNotRemembered(t *testing.T) {
 	assert.Equal(t, ev, nextBroadcast(t, ch))
 
 	w.mu.Lock()
-	_, remembered := w.lastSent["file|works|doc.md"]
+	_, remembered := w.lastSent[debounceKey(ev)]
 	w.mu.Unlock()
 	assert.False(t, remembered, "an event not delivered to every subscriber must not be remembered")
 
@@ -385,7 +403,8 @@ func TestSchedule_ResetsMemoryAtCap(t *testing.T) {
 
 	w.mu.Lock()
 	for i := 0; i < maxRememberedEvents; i++ {
-		w.lastSent["file|works|doc"+strconv.Itoa(i)+".md"] = sentState{fingerprint: "sha|m"}
+		key := debounceKey(Event{Kind: KindFile, Root: "works", Path: "doc" + strconv.Itoa(i) + ".md"})
+		w.lastSent[key] = sentState{fingerprint: "sha|m"}
 	}
 	require.Len(t, w.lastSent, maxRememberedEvents)
 	w.mu.Unlock()
@@ -400,5 +419,5 @@ func TestSchedule_ResetsMemoryAtCap(t *testing.T) {
 	got := w.lastSent
 	w.mu.Unlock()
 	assert.Len(t, got, 1)
-	assert.Equal(t, fp, got["file|works|overflow.md"].fingerprint)
+	assert.Equal(t, fp, got[debounceKey(ev)].fingerprint)
 }

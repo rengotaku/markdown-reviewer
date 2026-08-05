@@ -439,7 +439,7 @@ func (w *Watcher) handleSidecarEvent(ev fsnotify.Event) {
 // pass "" when it couldn't be determined, which disables suppression for that
 // event.
 func (w *Watcher) schedule(ev Event, fingerprint string) {
-	key := string(ev.Kind) + "|" + ev.Root + "|" + ev.Path
+	key := debounceKey(ev)
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -487,6 +487,19 @@ func (w *Watcher) schedule(ev Event, fingerprint string) {
 		}
 		w.lastSent[key] = sentState{fingerprint: p.fingerprint, epoch: epoch}
 	})
+}
+
+// debounceKey identifies the stream of events about one thing: a kind + root +
+// path triple.
+//
+// The separator is NUL, which cannot appear in a filesystem path, so no
+// combination of root name and relative path can produce the same key as a
+// different combination — with a printable separator, root "a" + path "b|c.md"
+// and a root literally named "a|b" + path "c.md" would collide and the two
+// files would share one debounce timer and one suppression memo, silently
+// swallowing an event for the wrong file.
+func debounceKey(ev Event) string {
+	return string(ev.Kind) + "\x00" + ev.Root + "\x00" + ev.Path
 }
 
 // stateFingerprint builds the dedup key for the on-disk state an event
