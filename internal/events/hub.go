@@ -60,7 +60,9 @@ const subscriberBuffer = 64
 // The zero value is not usable; use NewHub.
 type Hub struct {
 	subs map[chan Event]struct{}
-	mu   sync.Mutex
+	// epoch increments on every Subscribe. See SubscriberEpoch.
+	epoch uint64
+	mu    sync.Mutex
 }
 
 // NewHub creates an empty Hub ready to accept subscribers.
@@ -76,6 +78,7 @@ func (h *Hub) Subscribe() (<-chan Event, func()) {
 	ch := make(chan Event, subscriberBuffer)
 	h.mu.Lock()
 	h.subs[ch] = struct{}{}
+	h.epoch++
 	h.mu.Unlock()
 
 	unsubscribe := func() {
@@ -89,21 +92,47 @@ func (h *Hub) Subscribe() (<-chan Event, func()) {
 	return ch, unsubscribe
 }
 
-// Broadcast fans ev out to every currently-subscribed channel. A slow
-// subscriber whose buffer is full has the event dropped for it rather than
-// blocking every other subscriber (and the watcher goroutine) — SSE events
-// here are a "something changed, go re-fetch" hint, so an occasional missed
-// notification is harmless as long as the next one arrives.
-func (h *Hub) Broadcast(ev Event) {
+// Broadcast fans ev out to every currently-subscribed channel and reports
+// whether every one of them accepted it. A slow subscriber whose buffer is
+// full has the event dropped for it rather than blocking every other
+// subscriber (and the watcher goroutine) — SSE events here are a "something
+// changed, go re-fetch" hint, so an occasional missed notification is harmless
+// as long as the next one arrives.
+//
+// The return value is what lets the caller keep that promise: a dropped event
+// must not be treated as delivered state, or a later "nothing changed since"
+// optimization (the watcher's #176 suppression) would cancel the very
+// notification that would have repaired the client. Vacuously true when there
+// are no subscribers — a client that connects later re-fetches on mount.
+func (h *Hub) Broadcast(ev Event) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	deliveredAll := true
 	for ch := range h.subs {
 		select {
 		case ch <- ev:
 		default:
 			// Drop for this slow subscriber; don't block the others.
+			deliveredAll = false
 		}
 	}
+	return deliveredAll
+}
+
+// SubscriberEpoch reports how many subscriptions this Hub has handed out over
+// its lifetime. It changes whenever a client connects (including a reconnect
+// after a drop) and never goes backwards.
+//
+// It exists so a producer can tell "the audience is unchanged" from "somebody
+// new is listening". A successful Broadcast only proves the event reached each
+// subscriber's channel, not that it was written to the socket before the
+// connection died — so any optimization that skips a notification because the
+// audience "already has that state" (the watcher's #176 suppression) must
+// treat a new epoch as invalidating what it thinks the audience knows.
+func (h *Hub) SubscriberEpoch() uint64 {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.epoch
 }
 
 // SubscriberCount reports how many clients are currently connected. Used by

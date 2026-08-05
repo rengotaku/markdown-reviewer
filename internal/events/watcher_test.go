@@ -15,6 +15,11 @@ import (
 	"markdown-reviewer/internal/reviewstore"
 )
 
+// debounceGap is comfortably wider than the watcher's internal debounce
+// window (200ms, unexported), so successive filesystem writes in a test land
+// in separate coalescing windows instead of being merged into one broadcast.
+const debounceGap = 400 * time.Millisecond
+
 // waitForEvent drains ch until pred matches or the timeout elapses, so
 // tests aren't tripped up by unrelated coalesced events (e.g. a directory
 // create firing before the file write settles).
@@ -285,6 +290,49 @@ func TestWatcher_SidecarUpdate_EmitsComments(t *testing.T) {
 	assert.NotEmpty(t, got.Mtime)
 }
 
+// TestWatcher_SidecarSameSecondDifferentContent_EmitsBothComments guards the
+// unchanged-state suppression (#176) against over-reach on comments events:
+// their wire payload has no sha and their mtime is RFC3339 (second precision),
+// so two different review.json saves inside one second look identical from the
+// payload alone. Dropping the second would hide a comment from a client whose
+// comment polling is disabled (SSE connected) until some unrelated event.
+func TestWatcher_SidecarSameSecondDifferentContent_EmitsBothComments(t *testing.T) {
+	// Not t.Parallel(): t.Setenv forbids it.
+	configDir := t.TempDir()
+	t.Setenv("REVIEWER_CONFIG_DIR", configDir)
+
+	roots, root := newTestRoots(t)
+	require.NoError(t, os.WriteFile(filepath.Join(root, "doc.md"), []byte("# hello\n"), 0o644))
+	require.NoError(t, reviewstore.Ingest("works", "doc.md"))
+
+	ch, stop := startWatcher(t, roots)
+	defer stop()
+
+	entryDir, err := reviewstore.EntryDir("works", "doc.md")
+	require.NoError(t, err)
+	reviewJSON := filepath.Join(entryDir, reviewstore.ReviewFileName)
+
+	// Two different sidecar states pinned to the same second-precision mtime,
+	// far enough apart that the debounce window can't merge them.
+	sameSecond := time.Date(2026, 8, 5, 4, 46, 58, 0, time.UTC)
+	write := func(body string) {
+		require.NoError(t, os.WriteFile(reviewJSON, []byte(body), 0o644))
+		require.NoError(t, os.Chtimes(reviewJSON, sameSecond, sameSecond))
+	}
+
+	write(`{"comments":[{"id":"c-001"}]}`)
+	time.Sleep(debounceGap)
+	write(`{"comments":[{"id":"c-001"},{"id":"c-002"}]}`)
+
+	// Both saves must be announced, even though the two payloads are equal.
+	for i := 0; i < 2; i++ {
+		got := waitForEvent(t, ch, func(e events.Event) bool {
+			return e.Kind == events.KindComments && e.Path == "doc.md"
+		})
+		assert.Equal(t, "works", got.Root)
+	}
+}
+
 func TestWatcher_DebounceCoalescesBurstIntoOneEvent(t *testing.T) {
 	t.Parallel()
 	roots, root := newTestRoots(t)
@@ -311,5 +359,54 @@ func TestWatcher_DebounceCoalescesBurstIntoOneEvent(t *testing.T) {
 		}
 	case <-time.After(400 * time.Millisecond):
 		// No extra event — correct.
+	}
+}
+
+// TestWatcher_RepeatedIdenticalWrites_NeverEmitSamePayloadTwice covers issue
+// #176 end-to-end over a real filesystem: writes that repeat the same state
+// with gaps wider than debounceWindow (a tool rewriting identical bytes, an
+// idempotent `touch`) must not re-announce a state clients already have.
+//
+// Asserted as "no identical payload appears twice" rather than an exact event
+// count, because how many fsnotify events a given OS reports for a write +
+// utimes pair (and therefore how the mtimes land) isn't part of the contract —
+// re-announcing the *same* payload is what #176 is about.
+func TestWatcher_RepeatedIdenticalWrites_NeverEmitSamePayloadTwice(t *testing.T) {
+	t.Parallel()
+	roots, root := newTestRoots(t)
+	target := filepath.Join(root, "doc.md")
+	content := []byte("# same\n")
+	// Pin the mtime so every round describes an identical on-disk state (a
+	// natural mtime could straddle a second boundary and legitimately differ).
+	pinned := time.Date(2026, 8, 5, 4, 46, 58, 0, time.UTC)
+
+	ch, stop := startWatcher(t, roots)
+	defer stop()
+
+	for i := 0; i < 3; i++ {
+		require.NoError(t, os.WriteFile(target, content, 0o644))
+		require.NoError(t, os.Chtimes(target, pinned, pinned))
+		time.Sleep(debounceGap)
+	}
+
+	// Drain everything the watcher produced for this path and look for an
+	// exact repeat.
+	seen := map[events.Event]int{}
+	deadline := time.After(time.Second)
+drain:
+	for {
+		select {
+		case ev := <-ch:
+			if ev.Path != "doc.md" {
+				continue
+			}
+			seen[ev]++
+		case <-deadline:
+			break drain
+		}
+	}
+	require.NotEmpty(t, seen, "expected at least one event for the first write")
+	for ev, n := range seen {
+		assert.Equal(t, 1, n, "identical payload broadcast %d times: %+v", n, ev)
 	}
 }

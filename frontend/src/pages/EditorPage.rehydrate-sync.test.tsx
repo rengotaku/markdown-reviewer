@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { http, HttpResponse } from "msw";
@@ -142,7 +142,7 @@ describe("EditorPage rehydrate/reconnect reconcile (#173)", () => {
       expect(screen.getByTestId("editor-active-path")).toHaveTextContent("README.md")
     );
 
-    MockEventSource.instances[0].emitOpen();
+    await act(async () => MockEventSource.instances[0].emitOpen());
 
     await waitFor(() => {
       const f = useOpenFiles.getState().files.find((x) => x.id === "a")!;
@@ -192,7 +192,7 @@ describe("EditorPage rehydrate/reconnect reconcile (#173)", () => {
       expect(screen.getByTestId("editor-active-path")).toHaveTextContent("README.md")
     );
 
-    MockEventSource.instances[0].emitOpen();
+    await act(async () => MockEventSource.instances[0].emitOpen());
 
     // Give the reconcile time to (incorrectly) reload before asserting it didn't.
     await new Promise((r) => setTimeout(r, 100));
@@ -217,21 +217,18 @@ describe("EditorPage rehydrate/reconnect reconcile (#173)", () => {
     );
 
     const source = MockEventSource.instances[0];
-    source.emitOpen();
-    // Let the first connect's reconcile settle (nothing has changed yet, so it
-    // is a no-op) before simulating the drop.
-    await new Promise((r) => setTimeout(r, 50));
+    // Each transition is committed on its own (act flushes it) — a real
+    // EventSource retries after a backoff, so onerror and the following onopen
+    // never land in the same render batch. Emitting both without a flush in
+    // between would coalesce into "still connected", leaving no transition to
+    // react to.
+    await act(async () => source.emitOpen());
+    // The first connect's reconcile is a no-op: nothing has changed yet.
     expect(useOpenFiles.getState().files[0].markdown).toBe("# stale buffer");
 
-    source.emitError();
-    // A real EventSource retries after a backoff, so onerror and the following
-    // onopen never land in the same task/render batch — yield here so React
-    // actually observes the disconnected state in between (otherwise the two
-    // updates coalesce into "still connected" and there is no transition to
-    // react to).
-    await new Promise((r) => setTimeout(r, 0));
+    await act(async () => source.emitError());
     serveExternallyUpdatedReadme("# README.md\n\nchanged during the outage");
-    source.emitOpen();
+    await act(async () => source.emitOpen());
 
     await waitFor(() => {
       const f = useOpenFiles.getState().files.find((x) => x.id === "a")!;
@@ -261,7 +258,7 @@ describe("EditorPage rehydrate/reconnect reconcile (#173)", () => {
       expect(screen.getByTestId("editor-active-path")).toHaveTextContent("README.md")
     );
 
-    MockEventSource.instances[0].emitOpen();
+    await act(async () => MockEventSource.instances[0].emitOpen());
 
     await waitFor(() => expect(useConfirm.getState().pending).not.toBeNull());
     expect(useOpenFiles.getState().files[0].markdown).toBe("# my unsaved edits");
