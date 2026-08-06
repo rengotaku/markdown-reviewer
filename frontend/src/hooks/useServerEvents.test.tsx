@@ -274,6 +274,46 @@ describe("useServerEvents", () => {
       expect(onResume).toHaveBeenCalledTimes(1);
     });
 
+    // `suspended` is what lets poll fallbacks tell "the stream broke" apart
+    // from "we hung up on purpose" — useFileWatcher has no visibility check
+    // of its own, so without it a hidden tab starts a 5s /api/stat poll.
+    it("reports suspended only while hidden", async () => {
+      const { result } = renderHook(() => useServerEvents({}));
+      act(() => MockEventSource.instances[0].emitOpen());
+      await waitFor(() => expect(result.current.connected).toBe(true));
+      expect(result.current.suspended).toBe(false);
+
+      act(() => setVisibility("hidden"));
+      await waitFor(() => expect(result.current.suspended).toBe(true));
+      expect(result.current.connected).toBe(false);
+
+      act(() => setVisibility("visible"));
+      await waitFor(() => expect(result.current.suspended).toBe(false));
+    });
+
+    it("does not report suspended for a plain connection drop", async () => {
+      const { result } = renderHook(() => useServerEvents({}));
+      const instance = MockEventSource.instances[0];
+
+      act(() => instance.emitOpen());
+      await waitFor(() => expect(result.current.connected).toBe(true));
+      act(() => instance.emitError());
+      await waitFor(() => expect(result.current.connected).toBe(false));
+
+      // Still visible, so the polling fallback must actually run.
+      expect(result.current.suspended).toBe(false);
+    });
+
+    it("reports suspended when mounted hidden", () => {
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        get: () => "hidden",
+      });
+      const { result } = renderHook(() => useServerEvents({}));
+      expect(result.current.suspended).toBe(true);
+      expect(result.current.connected).toBe(false);
+    });
+
     it("stops reacting to visibility changes after unmount", () => {
       const { unmount } = renderHook(() => useServerEvents({}));
       expect(MockEventSource.instances).toHaveLength(1);

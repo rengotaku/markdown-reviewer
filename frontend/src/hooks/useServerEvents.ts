@@ -56,8 +56,23 @@ export interface UseServerEventsCallbacks {
  */
 export function useServerEvents(callbacks: UseServerEventsCallbacks): {
   connected: boolean;
+  suspended: boolean;
 } {
   const [connected, setConnected] = useState(false);
+  // `connected: false` alone can't tell "the stream broke, fall back to
+  // polling" apart from "we hung up on purpose because nobody is looking".
+  // Poll fallbacks that don't check visibility themselves must stand down in
+  // the second case — otherwise freeing the SSE slot just trades one
+  // background connection for a stream of periodic ones.
+  //
+  // Seeded from the current visibility rather than defaulting to false so a
+  // tab that mounts already-hidden (restored session, background-opened
+  // link) is suspended from its very first render — setting it from the
+  // effect body instead would be a cascading render, and would leave one
+  // render where the fallbacks think they should poll.
+  const [suspended, setSuspended] = useState(
+    () => document.visibilityState === "hidden"
+  );
 
   // Stash the latest callbacks so the EventSource effect doesn't have to
   // tear down/reconnect every time a caller passes a fresh closure.
@@ -137,12 +152,15 @@ export function useServerEvents(callbacks: UseServerEventsCallbacks): {
       if (isHidden()) {
         closeStream();
         missedWhileHidden = true;
+        setSuspended(true);
       } else {
+        setSuspended(false);
         openStream();
       }
     };
 
     if (isHidden()) {
+      // `suspended` is already true from the initial state above.
       missedWhileHidden = true;
     } else {
       openStream();
@@ -153,8 +171,9 @@ export function useServerEvents(callbacks: UseServerEventsCallbacks): {
     return () => {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       closeStream();
+      setSuspended(false);
     };
   }, []);
 
-  return { connected };
+  return { connected, suspended };
 }
