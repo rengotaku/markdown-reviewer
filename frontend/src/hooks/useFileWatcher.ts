@@ -108,6 +108,12 @@ export function useFileWatcher(
             useOpenFiles
               .getState()
               .acknowledgeExternalChange(live.id, stat.modified, stat.sha);
+            // #178 round 4: a `touch` (or a rewrite with identical bytes) on
+            // the file the user is actively viewing was already confirmed
+            // content-unchanged right here — there is nothing to tell the
+            // user is "unread", so clear any mark an earlier tree/dir-diff
+            // signal may have set for it.
+            clearChanged(live.root, live.path);
           }
           return;
         }
@@ -123,6 +129,10 @@ export function useFileWatcher(
             useOpenFiles
               .getState()
               .acknowledgeExternalChange(live.id, live.serverModified, stat.sha);
+            // #178 round 4: same rationale as the sha-match touch case above
+            // — this backfill only runs when the mtime hasn't moved at all,
+            // so there is no external change to report as unread either.
+            clearChanged(live.root, live.path);
           }
           return;
         }

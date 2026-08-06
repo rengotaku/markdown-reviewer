@@ -333,7 +333,15 @@ export function EditorPage() {
       // `ev.path` is empty for the server's ErrEventOverflow fallback (it
       // couldn't enumerate exactly what changed under a root) — skip those,
       // same as useDirChangeWatcher skips entries it can't attribute.
-      if (ev.path && !isSelfWrite(ev.root, ev.path, ev.mtime ?? "")) {
+      // `ev.mtime` is empty when the server's os.Stat failed while building
+      // the event (round 4 — typically the file was deleted; internal/
+      // events/watcher.go) — skip marking there too: if the file is gone,
+      // an ancestor directory could never clear this mark via the dir-diff
+      // fallback (that path only clears marks it can see disappear from a
+      // listing it's actually watching), so it would otherwise linger
+      // forever. We don't know the file's true state here, and an unmarked
+      // path is the safe default either way.
+      if (ev.path && ev.mtime && !isSelfWrite(ev.root, ev.path, ev.mtime)) {
         markChanged(ev.root, ev.path);
       }
     },

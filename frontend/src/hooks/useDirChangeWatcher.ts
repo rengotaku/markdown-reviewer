@@ -43,8 +43,14 @@ import type { DirListResponse } from "@/api";
  *     keeping an ancestor directory's dot lit via
  *     useChangedPaths.hasChangedUnder with no way for the user to ever clear
  *     it by opening the file.
- *   - Modifications are de-duplicated by `${path}@${mtime}` so the same
- *     change isn't processed twice on consecutive refetches.
+ *   - Modifications are de-duplicated by a `${root}\0${path}@${mtime}`
+ *     signature (round 4: NUL-separated like useChangedPaths' own keys,
+ *     rather than `:` — root/path can contain either character) so the
+ *     same change isn't processed twice on consecutive refetches. The root
+ *     must be part of the signature: each root has its own dir-query
+ *     snapshots, and without it two different roots' same path updating to
+ *     the same second-precision mtime would collide, silently dropping
+ *     whichever one was processed second.
  *   - A diff that matches a registered self-write signature (#178 — this
  *     app's own atomic save, whose PUT response and a later dir refetch
  *     report the same root/path/mtime) is skipped instead of marked, so
@@ -62,8 +68,10 @@ export function useDirChangeWatcher() {
   // Last seen entries per dir-query path (the second element of ["dir", path]).
   // Map<dirQueryPath, Map<entryPath, mtime>>
   const snapshotsRef = useRef<Map<string, Map<string, string>>>(new Map());
-  // Set of "entryPath@mtime" we've already processed — guards against a query
-  // emitting the same data twice (e.g. structuralSharing no-op refetches).
+  // Set of `${root}\0${entryPath}@${mtime}` signatures already processed —
+  // guards against a query emitting the same data twice (e.g.
+  // structuralSharing no-op refetches). Root-scoped (round 4) so the same
+  // path hitting the same mtime under two different roots doesn't collide.
   const announcedRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
@@ -115,7 +123,7 @@ export function useDirChangeWatcher() {
         const isModified = !isNew && prevMtime !== (entry.modified ?? "");
         if (!isNew && !isModified) continue;
 
-        const sig = `${entry.path}@${entry.modified ?? ""}`;
+        const sig = `${dirRoot}\0${entry.path}@${entry.modified ?? ""}`;
         if (announcedRef.current.has(sig)) continue;
         announcedRef.current.add(sig);
 

@@ -51,4 +51,32 @@ describe("ToastViewport", () => {
     expect(onClick).toHaveBeenCalledTimes(1);
     expect(useToast.getState().toasts).toHaveLength(0);
   });
+
+  // #178 round 5 (codex review, must-fix): re-showing an identical
+  // message+severity collapses into the same queue slot with a new id
+  // (useToast) — this remounts the Snackbar here (`key={current?.id}`),
+  // which is what actually resets autoHideDuration so a repeated "Saved"
+  // toast doesn't vanish 5s after the *first* click while the user keeps
+  // clicking Save.
+  it("remounts the Snackbar under a new key when an identical toast is re-shown", () => {
+    render(<ToastViewport />);
+    act(() => {
+      useToast.getState().show("「edit-me.md」を保存しました", "success");
+    });
+    const firstAlert = screen.getByRole("alert");
+    const firstId = useToast.getState().toasts[0].id;
+
+    act(() => {
+      useToast.getState().show("「edit-me.md」を保存しました", "success");
+    });
+
+    // Same queue slot (still exactly one toast, same text) but a genuinely
+    // new DOM node — proof the Snackbar remounted rather than just having
+    // its text silently stay the same underneath an untouched timer.
+    expect(useToast.getState().toasts).toHaveLength(1);
+    expect(useToast.getState().toasts[0].id).not.toBe(firstId);
+    const secondAlert = screen.getByRole("alert");
+    expect(secondAlert).toHaveTextContent("「edit-me.md」を保存しました");
+    expect(secondAlert).not.toBe(firstAlert);
+  });
 });

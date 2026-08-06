@@ -260,6 +260,54 @@ describe("useDirChangeWatcher", () => {
     expect(useChangedPaths.getState().isChanged("mock-root", "a.md")).toBe(false);
   });
 
+  // #178 round 4 (codex review, adopted): the de-dup signature used to omit
+  // the root (`${path}@${mtime}` only), so two different roots' listings
+  // reporting the same path at the same second-precision mtime collided —
+  // whichever root's update this hook processed second was silently
+  // dropped, leaving that root's copy unmarked.
+  it("marks the same path independently across two roots hitting the same mtime", async () => {
+    const { Wrapper, client } = makeWrapper();
+    renderHook(() => useDirChangeWatcher(), { wrapper: Wrapper });
+
+    act(() => {
+      client.setQueryData(dirQueryKey("root-a", ""), {
+        entries: [
+          { name: "a.md", path: "a.md", type: "file", modified: "2026-05-20T00:00:00Z" },
+        ],
+      });
+    });
+    act(() => {
+      client.setQueryData(dirQueryKey("root-b", ""), {
+        entries: [
+          { name: "a.md", path: "a.md", type: "file", modified: "2026-05-20T00:00:00Z" },
+        ],
+      });
+    });
+
+    // Both roots' a.md independently advance to the exact same new mtime.
+    act(() => {
+      client.setQueryData(dirQueryKey("root-a", ""), {
+        entries: [
+          { name: "a.md", path: "a.md", type: "file", modified: "2026-05-22T00:00:00Z" },
+        ],
+      });
+    });
+    act(() => {
+      client.setQueryData(dirQueryKey("root-b", ""), {
+        entries: [
+          { name: "a.md", path: "a.md", type: "file", modified: "2026-05-22T00:00:00Z" },
+        ],
+      });
+    });
+
+    await waitFor(() =>
+      expect(useChangedPaths.getState().isChanged("root-a", "a.md")).toBe(true)
+    );
+    await waitFor(() =>
+      expect(useChangedPaths.getState().isChanged("root-b", "a.md")).toBe(true)
+    );
+  });
+
   it("never shows a toast", async () => {
     const { Wrapper, client } = makeWrapper();
     const showSpy = vi.spyOn(useToast.getState(), "show");

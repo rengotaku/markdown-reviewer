@@ -114,6 +114,36 @@ describe("EditorPage SSE tree-event unread marking (#178 round 3)", () => {
     expect(useChangedPaths.getState().changed.size).toBe(0);
   });
 
+  // #178 round 4 (codex review, must-fix): the server's os.Stat can fail
+  // while building the tree event (typically because the file was deleted —
+  // internal/events/watcher.go), leaving `mtime` empty. Marking it anyway
+  // would create a mark nothing can ever clear: the dir-diff fallback only
+  // clears marks for paths it observes disappearing from a listing it's
+  // actually watching (e.g. a collapsed ancestor's listing is never
+  // fetched), so an ancestor directory's dot could stay lit forever.
+  it("does not mark anything for a tree event with an empty mtime (deleted-file fallback)", async () => {
+    renderPage();
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-dir-docs")).toBeInTheDocument()
+    );
+
+    const instance = MockEventSource.instances[0];
+    instance.emitMessage({
+      kind: "tree",
+      root: "mock-root",
+      path: "docs/api/spec.md",
+      mtime: "",
+    });
+
+    await new Promise((r) => setTimeout(r, 30));
+    expect(
+      useChangedPaths.getState().isChanged("mock-root", "docs/api/spec.md")
+    ).toBe(false);
+    expect(
+      screen.queryByTestId("sidebar-changed-dot-docs")
+    ).not.toBeInTheDocument();
+  });
+
   it("does not mark when the tree event's mtime matches a registered self-write signature", async () => {
     renderPage();
     await waitFor(() =>

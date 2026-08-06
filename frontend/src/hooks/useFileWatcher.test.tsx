@@ -326,6 +326,74 @@ describe("useFileWatcher", () => {
     });
   });
 
+  // #178 round 4 (codex review, adopted): a touch (or a rewrite with
+  // identical bytes) on the actively-viewed file confirms via sha that
+  // nothing actually changed, but that reconcile path used to `return`
+  // before reaching clearChanged — so an unread mark set by an earlier
+  // tree/dir-diff signal stayed lit on a file the user is already looking
+  // at, with nothing new to see. AI tools/editors that rewrite a file with
+  // the same content are a real source of this, not hypothetical.
+  it("clears the file's unread mark on a sha-confirmed touch (mtime bumped, content unchanged)", async () => {
+    const id = seedActiveFile({
+      name: "a.md",
+      path: "a.md",
+      markdown: "old content",
+      serverModified: "2026-05-20T00:00:00Z",
+      serverSha: "sha-same",
+    });
+    useChangedPaths.getState().mark(ROOT, "a.md");
+
+    server.use(
+      http.get(`${API_BASE}/api/stat/a.md`, () =>
+        HttpResponse.json({
+          path: "a.md",
+          modified: "2026-05-21T00:00:00Z", // mtime bumped
+          sha: "sha-same", // content unchanged
+        })
+      )
+    );
+
+    renderHook(() => useFileWatcher(POLL_MS), { wrapper });
+
+    await waitFor(() => {
+      const f = useOpenFiles.getState().files.find((x) => x.id === id)!;
+      expect(f.serverModified).toBe("2026-05-21T00:00:00Z");
+    });
+    expect(useChangedPaths.getState().isChanged(ROOT, "a.md")).toBe(false);
+  });
+
+  // #178 round 4 (codex review, adopted): same rationale as the touch case
+  // above, for the no-sha-baseline backfill path — once the sha is learned
+  // and mtimes agree, there is nothing external to report as unread either.
+  it("clears the file's unread mark when a rehydrated tab's serverSha is backfilled (mtime unchanged)", async () => {
+    const id = seedActiveFile({
+      name: "a.md",
+      path: "a.md",
+      markdown: "old content",
+      serverModified: "2026-05-20T00:00:00Z",
+      // serverSha intentionally omitted — simulates a tab persisted before #119.
+    });
+    useChangedPaths.getState().mark(ROOT, "a.md");
+
+    server.use(
+      http.get(`${API_BASE}/api/stat/a.md`, () =>
+        HttpResponse.json({
+          path: "a.md",
+          modified: "2026-05-20T00:00:00Z", // same mtime as baseline
+          sha: "sha-backfilled",
+        })
+      )
+    );
+
+    renderHook(() => useFileWatcher(POLL_MS), { wrapper });
+
+    await waitFor(() => {
+      const f = useOpenFiles.getState().files.find((x) => x.id === id)!;
+      expect(f.serverSha).toBe("sha-backfilled");
+    });
+    expect(useChangedPaths.getState().isChanged(ROOT, "a.md")).toBe(false);
+  });
+
   // --- sha-first comparison (#119) ------------------------------------------
 
   it("case 1: reloads when the sha differs even though mtime is identical (same-second double save)", async () => {
