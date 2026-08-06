@@ -1,51 +1,50 @@
 import { useEffect, useRef } from "react";
 import { useQueryClient, type QueryCacheNotifyEvent } from "@tanstack/react-query";
-import { useToast } from "@/hooks/useToast";
-import type { DirListResponse, DirEntryApi } from "@/api";
-
-interface UseDirChangeWatcherOpts {
-  /** Called when the user clicks a notification for a markdown file. */
-  onOpenFile: (path: string) => void;
-  /** Called when the user clicks a notification for a directory. */
-  onSelectDir: (path: string) => void;
-}
+import { useChangedPaths } from "@/hooks/useChangedPaths";
+import type { DirListResponse } from "@/api";
 
 /**
  * Subscribes to the react-query cache and diffs successive `useDir` snapshots
  * for the same query key. When the tree auto-refresh surfaces a new entry or
- * an mtime-changed entry, a clickable toast is shown so the user can jump
- * straight to the change.
+ * an mtime-changed entry (file OR directory), it is recorded in the
+ * changed-paths store (#178) so the sidebar can show a passive "unread" dot
+ * instead of a toast popup — saves/directory churn no longer interrupt the
+ * editor with a stream of notifications.
  *
  * Subtleties worth knowing about:
  *
  *   - First snapshot per query key is treated as a baseline only — we don't
- *     want a flood of "new file" toasts the instant the app boots.
- *   - Removed entries are intentionally NOT surfaced as toasts. They don't
- *     navigate anywhere useful, and they tend to fire during in-app actions
- *     (saveAs / cleanup) where they'd just be noise.
+ *     want the whole tree marked "changed" the instant the app boots.
+ *   - Removed entries are intentionally NOT marked. They don't correspond to
+ *     anything the user can still open, and they tend to fire during in-app
+ *     actions (saveAs / cleanup) where they'd just be noise.
+ *   - Directory entries ARE marked directly, not just derived from their
+ *     children (#178 round 2 fix): while a directory is collapsed, its
+ *     `useDir` query never mounts, so a change to a file inside it (e.g. an
+ *     external editor saving `docs/foo.md` while `docs/` sits collapsed) is
+ *     only ever observable here as `docs`'s own mtime moving. Skipping
+ *     directory entries would silently drop that signal and the unread dot
+ *     would never appear. useChangedPaths.hasChangedUnder additionally ORs
+ *     in any already-known marked descendant once a directory is expanded.
  *   - Modifications are de-duplicated by `${path}@${mtime}` so the same
- *     change isn't announced twice on consecutive refetches.
+ *     change isn't processed twice on consecutive refetches.
+ *   - A diff that exactly matches a registered self-write signature (#178 —
+ *     this app's own atomic save, whose PUT response and the next dir
+ *     refetch report the same root/path/mtime) is consumed instead of
+ *     marked, so saving a file from inside the app doesn't light up its own
+ *     unread dot.
  */
-export function useDirChangeWatcher({
-  onOpenFile,
-  onSelectDir,
-}: UseDirChangeWatcherOpts) {
+export function useDirChangeWatcher() {
   const queryClient = useQueryClient();
-  const showToast = useToast((s) => s.show);
+  const mark = useChangedPaths((s) => s.mark);
+  const consumeSelfWrite = useChangedPaths((s) => s.consumeSelfWrite);
 
   // Last seen entries per dir-query path (the second element of ["dir", path]).
   // Map<dirQueryPath, Map<entryPath, mtime>>
   const snapshotsRef = useRef<Map<string, Map<string, string>>>(new Map());
-  // Set of "entryPath@mtime" we've already announced — guards against a query
+  // Set of "entryPath@mtime" we've already processed — guards against a query
   // emitting the same data twice (e.g. structuralSharing no-op refetches).
   const announcedRef = useRef<Set<string>>(new Set());
-
-  // Stash the latest callbacks so the cache subscription doesn't have to
-  // tear down/re-subscribe each render.
-  const callbacksRef = useRef({ onOpenFile, onSelectDir });
-  useEffect(() => {
-    callbacksRef.current = { onOpenFile, onSelectDir };
-  }, [onOpenFile, onSelectDir]);
 
   useEffect(() => {
     const cache = queryClient.getQueryCache();
@@ -73,27 +72,26 @@ export function useDirChangeWatcher({
       snapshotsRef.current.set(snapshotKey, next);
 
       if (!prev) {
-        // First snapshot — record as baseline without firing toasts.
+        // First snapshot — record as baseline without marking anything.
         return;
       }
 
-      const changed: DirEntryApi[] = [];
       for (const entry of data.entries) {
+        // Files and directories are marked the same way (see docstring
+        // above) — a directory's own mtime moving is treated as "something
+        // changed underneath" while it's collapsed and its children aren't
+        // individually observable yet.
         const prevMtime = prev.get(entry.path);
+        const isNew = prevMtime === undefined;
+        const isModified = !isNew && prevMtime !== (entry.modified ?? "");
+        if (!isNew && !isModified) continue;
+
         const sig = `${entry.path}@${entry.modified ?? ""}`;
-        if (prevMtime === undefined) {
-          // New entry that we didn't know about.
-          if (!announcedRef.current.has(sig)) {
-            changed.push(entry);
-            announcedRef.current.add(sig);
-          }
-        } else if (prevMtime !== (entry.modified ?? "")) {
-          // Existing entry with newer mtime.
-          if (!announcedRef.current.has(sig)) {
-            changed.push(entry);
-            announcedRef.current.add(sig);
-          }
-        }
+        if (announcedRef.current.has(sig)) continue;
+        announcedRef.current.add(sig);
+
+        if (consumeSelfWrite(dirRoot, entry.path, entry.modified ?? "")) continue;
+        mark(dirRoot, entry.path);
       }
 
       // Bound the announced-set so it doesn't grow unboundedly across a long
@@ -101,29 +99,8 @@ export function useDirChangeWatcher({
       if (announcedRef.current.size > 500) {
         announcedRef.current.clear();
       }
-
-      for (const entry of changed) {
-        const { onOpenFile: openFile, onSelectDir: selectDir } =
-          callbacksRef.current;
-        const label = entry.type === "dir" ? "フォルダを開く" : "ファイルを開く";
-        const verb =
-          prev.has(entry.path) ? "更新" : "追加";
-        const kind = entry.type === "dir" ? "フォルダ" : "ファイル";
-        showToast(`${kind}を${verb}: ${entry.path}`, "info", {
-          action: {
-            label,
-            onClick: () => {
-              if (entry.type === "dir") {
-                selectDir(entry.path);
-              } else {
-                openFile(entry.path);
-              }
-            },
-          },
-        });
-      }
     });
 
     return unsubscribe;
-  }, [queryClient, showToast]);
+  }, [queryClient, mark, consumeSelfWrite]);
 }

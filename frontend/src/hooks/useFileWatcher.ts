@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { readFile, statFile } from "@/api";
 import { useOpenFiles } from "@/hooks/useOpenFiles";
 import { useActiveRoot } from "@/hooks/useActiveRoot";
+import { useChangedPaths } from "@/hooks/useChangedPaths";
 import { useConfirm } from "@/hooks/useConfirm";
 import { useToast } from "@/hooks/useToast";
 
@@ -48,6 +49,11 @@ export function useFileWatcher(
 ) {
   const confirm = useConfirm((s) => s.confirm);
   const showToast = useToast((s) => s.show);
+  // #178 round 2: an active-tab file the watcher just reconciled (either by
+  // silently taking the external content, or by the user explicitly
+  // deciding to ignore it) is no longer "unread" — clear its sidebar dot
+  // alongside the existing reconcile logic below.
+  const clearChanged = useChangedPaths((s) => s.clear);
   const { active: activeRoot } = useActiveRoot();
   const paused = opts?.paused ?? false;
   const trigger = opts?.trigger ?? 0;
@@ -135,6 +141,7 @@ export function useFileWatcher(
               fresh.created,
               fresh.sha
             );
+          clearChanged(live.root, live.path);
           showToast(
             `「${live.name}」が外部で更新されたため再読み込みしました`,
             "info"
@@ -173,6 +180,7 @@ export function useFileWatcher(
               fresh.created,
               fresh.sha
             );
+          clearChanged(live.root, live.path);
           showToast(`「${live.name}」を外部の最新内容で再読み込みしました`, "info");
         } catch (err) {
           showToast(
@@ -186,6 +194,9 @@ export function useFileWatcher(
         useOpenFiles
           .getState()
           .acknowledgeExternalChange(live.id, stat.modified, stat.sha);
+        // The user explicitly decided to ignore this external change (#178
+        // round 2) — it's been seen and dismissed, not left unread.
+        clearChanged(live.root, live.path);
         showToast(
           `「${live.name}」の編集を保持しました（外部変更は無視）`,
           "warning"
@@ -215,5 +226,5 @@ export function useFileWatcher(
       cancelled = true;
       window.clearInterval(handle);
     };
-  }, [activeRoot, confirm, showToast, intervalMs, paused, trigger]);
+  }, [activeRoot, confirm, showToast, clearChanged, intervalMs, paused, trigger]);
 }
