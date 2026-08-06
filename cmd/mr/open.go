@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 
 	"markdown-reviewer/internal/serverdefaults"
@@ -30,14 +31,34 @@ func cmdOpen(args []string) error {
 		return err
 	}
 	link := deeplink(baseURL(launchdPort), root, rel)
+	// Printed before the launch so a launcher failure still leaves the caller
+	// with a usable URL.
 	fmt.Println(link)
 	if flags["print"] != "" {
 		return nil
 	}
-	if err := exec.Command("open", link).Run(); err != nil {
-		return fmt.Errorf("launching the browser failed (%w); the URL above still works", err)
+	launcher, err := browserCommandFor(runtime.GOOS)
+	if err != nil {
+		return err
+	}
+	if err := exec.Command(launcher, link).Run(); err != nil {
+		return fmt.Errorf("launching the browser with %s failed (%w); the URL above still works", launcher, err)
 	}
 	return nil
+}
+
+// browserCommandFor names the "open this URL" helper for goos. Both release
+// targets in .goreleaser.yaml are covered; anything else gets an explicit
+// error rather than a guess, since the URL is already on stdout by then.
+func browserCommandFor(goos string) (string, error) {
+	switch goos {
+	case "darwin":
+		return "open", nil
+	case "linux":
+		return "xdg-open", nil
+	default:
+		return "", fmt.Errorf("no known browser launcher on %s; open the URL above manually (or use --print)", goos)
+	}
 }
 
 // deeplink builds the URL that opens rel in root: the `root` + `select_file`

@@ -110,3 +110,16 @@ func TestCmdOpen_RejectsPathOutsideRoots(t *testing.T) {
 		t.Errorf("cmdOpen() error = %v, want a containment error", err)
 	}
 }
+
+func TestBrowserCommandFor(t *testing.T) {
+	// Both release targets in .goreleaser.yaml must resolve to a launcher.
+	for goos, want := range map[string]string{"darwin": "open", "linux": "xdg-open"} {
+		got, err := browserCommandFor(goos)
+		if err != nil || got != want {
+			t.Errorf("browserCommandFor(%q) = (%q, %v), want (%q, nil)", goos, got, err, want)
+		}
+	}
+	if _, err := browserCommandFor("plan9"); err == nil {
+		t.Error("browserCommandFor(\"plan9\") = nil error, want an error naming the platform")
+	}
+}
