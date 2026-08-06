@@ -37,6 +37,18 @@ class MockEventSource {
   }
 }
 
+/**
+ * jsdom reports `visibilityState: "visible"` and has no way to change it, so
+ * tests override the getter directly and dispatch the event the browser would.
+ */
+function setVisibility(state: DocumentVisibilityState) {
+  Object.defineProperty(document, "visibilityState", {
+    configurable: true,
+    get: () => state,
+  });
+  document.dispatchEvent(new Event("visibilitychange"));
+}
+
 describe("useServerEvents", () => {
   beforeEach(() => {
     MockEventSource.instances = [];
@@ -45,6 +57,10 @@ describe("useServerEvents", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      get: () => "visible",
+    });
   });
 
   it("connects to /api/events and reports connected=true on open", async () => {
@@ -155,5 +171,118 @@ describe("useServerEvents", () => {
     vi.stubGlobal("EventSource", undefined);
     const { result } = renderHook(() => useServerEvents({}));
     expect(result.current.connected).toBe(false);
+  });
+
+  // #183: an SSE stream holds one of the browser's 6 per-origin HTTP/1.1
+  // connections for as long as the tab lives. Background tabs must give
+  // theirs back or the sidebar's /api/dirs requests never get a slot.
+  describe("visibility", () => {
+    it("closes the stream and reports disconnected while the tab is hidden", async () => {
+      const { result } = renderHook(() => useServerEvents({}));
+      const instance = MockEventSource.instances[0];
+      act(() => instance.emitOpen());
+      await waitFor(() => expect(result.current.connected).toBe(true));
+
+      act(() => setVisibility("hidden"));
+
+      expect(instance.closed).toBe(true);
+      await waitFor(() => expect(result.current.connected).toBe(false));
+      // No replacement stream while hidden — that would defeat the point.
+      expect(MockEventSource.instances).toHaveLength(1);
+    });
+
+    it("re-opens a new stream when the tab becomes visible again", async () => {
+      const { result } = renderHook(() => useServerEvents({}));
+      act(() => MockEventSource.instances[0].emitOpen());
+      await waitFor(() => expect(result.current.connected).toBe(true));
+
+      act(() => setVisibility("hidden"));
+      act(() => setVisibility("visible"));
+
+      expect(MockEventSource.instances).toHaveLength(2);
+      const reopened = MockEventSource.instances[1];
+      expect(reopened.closed).toBe(false);
+      act(() => reopened.emitOpen());
+      await waitFor(() => expect(result.current.connected).toBe(true));
+    });
+
+    it("dispatches events from the re-opened stream", async () => {
+      const onTree = vi.fn();
+      renderHook(() => useServerEvents({ onTree }));
+
+      act(() => setVisibility("hidden"));
+      act(() => setVisibility("visible"));
+
+      act(() =>
+        MockEventSource.instances[1].emitMessage({
+          kind: "tree",
+          root: "works",
+          path: "after-resume.md",
+        })
+      );
+
+      await waitFor(() =>
+        expect(onTree).toHaveBeenCalledWith({
+          kind: "tree",
+          root: "works",
+          path: "after-resume.md",
+        })
+      );
+    });
+
+    it("calls onResume when re-opening after hidden, but not on first connect", () => {
+      const onResume = vi.fn();
+      renderHook(() => useServerEvents({ onResume }));
+      expect(onResume).not.toHaveBeenCalled();
+
+      act(() => setVisibility("hidden"));
+      expect(onResume).not.toHaveBeenCalled();
+
+      act(() => setVisibility("visible"));
+      expect(onResume).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not call onResume for EventSource's own reconnects", async () => {
+      const onResume = vi.fn();
+      const { result } = renderHook(() => useServerEvents({ onResume }));
+      const instance = MockEventSource.instances[0];
+
+      act(() => instance.emitOpen());
+      act(() => instance.emitError());
+      await waitFor(() => expect(result.current.connected).toBe(false));
+      act(() => instance.emitOpen());
+      await waitFor(() => expect(result.current.connected).toBe(true));
+
+      expect(onResume).not.toHaveBeenCalled();
+    });
+
+    it("stays closed when mounted hidden, and resumes on first show", () => {
+      const onResume = vi.fn();
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        get: () => "hidden",
+      });
+
+      renderHook(() => useServerEvents({ onResume }));
+      expect(MockEventSource.instances).toHaveLength(0);
+
+      act(() => setVisibility("visible"));
+
+      expect(MockEventSource.instances).toHaveLength(1);
+      // The caller's initial load ran at mount; anything that changed before
+      // the tab was first shown is a gap just like a mid-session drop.
+      expect(onResume).toHaveBeenCalledTimes(1);
+    });
+
+    it("stops reacting to visibility changes after unmount", () => {
+      const { unmount } = renderHook(() => useServerEvents({}));
+      expect(MockEventSource.instances).toHaveLength(1);
+
+      unmount();
+      act(() => setVisibility("hidden"));
+      act(() => setVisibility("visible"));
+
+      expect(MockEventSource.instances).toHaveLength(1);
+    });
   });
 });

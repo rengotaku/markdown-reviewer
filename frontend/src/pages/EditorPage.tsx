@@ -376,6 +376,17 @@ export function EditorPage() {
       // the tab lift the exclusion.
       if (isPathOpen(ev.root, ev.path)) setReviewRefresh((n) => n + 1);
     },
+    // The stream is dropped while the tab is hidden (#183), so `tree` events
+    // fired in that window never arrived. Re-read the listings the same way
+    // onTree does — without a path to attribute them to, the only safe
+    // assumption is that anything under any root may have moved.
+    //
+    // The active tab's *body* is covered separately by the reconcile on
+    // sseConnected false->true below (#173); this is only about the sidebar.
+    onResume: () => {
+      void queryClient.invalidateQueries({ queryKey: ["dir"] });
+      void queryClient.invalidateQueries({ queryKey: ["files"] });
+    },
   });
   useEffect(() => {
     setSseConnected(sseConnected);
