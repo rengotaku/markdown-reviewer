@@ -7,7 +7,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"markdown-reviewer/internal/launchd"
+	"markdown-reviewer/internal/serverdefaults"
 )
 
 // baseURLEnv mirrors the server's hint override (internal/handler/hint.go):
@@ -55,7 +55,8 @@ func deeplink(base, root, rel string) string {
 //  2. PORT — the same env var the server honours, for a foreground run.
 //  3. the launchd plist's PORT — the usual case: the agent holds the port and
 //     this CLI runs without the agent's environment.
-//  4. launchd.DefaultPort — what `service install` would have written.
+//  4. serverdefaults.Port — no agent installed, so the server is presumably
+//     running in the foreground on the port it defaults to.
 //
 // plistPort is injected so the precedence is testable without a real plist.
 func baseURL(plistPort func() (string, error)) string {
@@ -69,7 +70,7 @@ func baseURL(plistPort func() (string, error)) string {
 		}
 	}
 	if port == "" {
-		port = launchd.DefaultPort
+		port = serverdefaults.Port
 	}
 	return "http://localhost:" + port
 }

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"markdown-reviewer/internal/launchd"
+	"markdown-reviewer/internal/serverdefaults"
 )
 
 // noPlist stands in for a machine without an installed launchd agent.
@@ -69,14 +69,17 @@ func TestBaseURL_Precedence(t *testing.T) {
 			want:      "http://localhost:15174",
 		},
 		{
-			name:      "falls back to the packaged default when the plist is unreadable",
+			// No launchd agent means the server is presumably running in the
+			// foreground, where it defaults to serverdefaults.Port — guessing
+			// the agent's port here would build an unreachable URL.
+			name:      "falls back to the server's own default when the plist is unreadable",
 			plistPort: noPlist,
-			want:      "http://localhost:" + launchd.DefaultPort,
+			want:      "http://localhost:" + serverdefaults.Port,
 		},
 		{
 			name:      "falls back when the plist holds an empty PORT",
 			plistPort: func() (string, error) { return "  ", nil },
-			want:      "http://localhost:" + launchd.DefaultPort,
+			want:      "http://localhost:" + serverdefaults.Port,
 		},
 	}
 	for _, c := range cases {
