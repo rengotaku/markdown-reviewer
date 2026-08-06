@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { Sidebar } from "./Sidebar";
 import { useUIStore } from "@/hooks/useUIStore";
+import { useChangedPaths } from "@/hooks/useChangedPaths";
 
 function renderWithProviders(ui: React.ReactElement, initialPath = "/") {
   const client = new QueryClient({
@@ -317,6 +318,106 @@ describe("Sidebar recent view (#68)", () => {
     );
     expect(
       screen.queryByTestId("sidebar-recent-file-docs/intro.md")
+    ).not.toBeInTheDocument();
+  });
+});
+
+describe("Sidebar changed-paths dots (#178)", () => {
+  beforeEach(() => {
+    useUIStore.setState({ sidebarViewMode: "tree" });
+    useChangedPaths.setState({ changed: new Set(), selfWrites: new Set() });
+  });
+
+  it("shows an unread dot on a file row registered as changed", async () => {
+    renderWithProviders(<Sidebar onSelect={() => {}} />);
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
+    );
+    expect(
+      screen.queryByTestId("sidebar-changed-dot-README.md")
+    ).not.toBeInTheDocument();
+
+    useChangedPaths.getState().mark("mock-root", "README.md");
+
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-changed-dot-README.md")).toBeInTheDocument()
+    );
+  });
+
+  it("shows a dot on an ancestor directory only when a descendant is changed", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<Sidebar onSelect={() => {}} />);
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-dir-docs")).toBeInTheDocument()
+    );
+    expect(
+      screen.queryByTestId("sidebar-changed-dot-docs")
+    ).not.toBeInTheDocument();
+
+    useChangedPaths.getState().mark("mock-root", "docs/intro.md");
+
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-changed-dot-docs")).toBeInTheDocument()
+    );
+    // Expanding the directory surfaces the file-level dot too.
+    await user.click(screen.getByTestId("sidebar-dir-docs"));
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("sidebar-changed-dot-docs/intro.md")
+      ).toBeInTheDocument()
+    );
+    // A sibling directory with no changed descendants stays undotted.
+    expect(
+      screen.queryByTestId("sidebar-changed-dot-docs/api")
+    ).not.toBeInTheDocument();
+  });
+
+  it("clears the dot once the file is opened", async () => {
+    const user = userEvent.setup();
+    const onSelect = vi.fn((path: string) => {
+      // Mirrors EditorPage.handleSelect's clearChanged call (#178) — Sidebar
+      // itself never mutates the store, the caller does on "open".
+      useChangedPaths.getState().clear("mock-root", path);
+    });
+    useChangedPaths.getState().mark("mock-root", "README.md");
+    renderWithProviders(<Sidebar onSelect={onSelect} />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-changed-dot-README.md")).toBeInTheDocument()
+    );
+
+    await user.click(screen.getByTestId("sidebar-file-README.md"));
+    expect(onSelect).toHaveBeenCalledWith("README.md");
+    await waitFor(() =>
+      expect(
+        screen.queryByTestId("sidebar-changed-dot-README.md")
+      ).not.toBeInTheDocument()
+    );
+  });
+
+  it("shows the dot in the recent view too", async () => {
+    useUIStore.setState({ sidebarViewMode: "recent" });
+    renderWithProviders(<Sidebar onSelect={() => {}} />);
+
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("sidebar-recent-file-docs/intro.md")
+      ).toBeInTheDocument()
+    );
+    expect(
+      screen.queryByTestId("sidebar-changed-dot-docs/intro.md")
+    ).not.toBeInTheDocument();
+
+    useChangedPaths.getState().mark("mock-root", "docs/intro.md");
+
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("sidebar-changed-dot-docs/intro.md")
+      ).toBeInTheDocument()
+    );
+    // An unmarked file in the same list stays undotted.
+    expect(
+      screen.queryByTestId("sidebar-changed-dot-README.md")
     ).not.toBeInTheDocument();
   });
 });

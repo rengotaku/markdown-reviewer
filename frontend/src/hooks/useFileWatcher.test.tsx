@@ -8,6 +8,7 @@ import { server } from "@/test/mocks/server";
 import { useOpenFiles } from "./useOpenFiles";
 import { useConfirm } from "./useConfirm";
 import { useToast } from "./useToast";
+import { useChangedPaths } from "./useChangedPaths";
 import { useFileWatcher } from "./useFileWatcher";
 
 const API_BASE = "http://localhost:8080";
@@ -74,6 +75,7 @@ describe("useFileWatcher", () => {
     useOpenFiles.setState({ files: [], activeIdByRoot: {} });
     useConfirm.setState({ pending: null, queue: [] });
     useToast.setState({ toasts: [] });
+    useChangedPaths.setState({ changed: new Set(), selfWrites: new Set() });
   });
 
   it("silently reloads the active file when external mtime is newer and buffer is clean", async () => {
@@ -256,6 +258,140 @@ describe("useFileWatcher", () => {
       },
       { timeout: 2000 }
     );
+  });
+
+  // --- changed-paths mark clearing (#178 round 2) ---------------------------
+
+  it("clears the file's unread mark once the auto-reload silently applies the external content", async () => {
+    const id = seedActiveFile({
+      name: "a.md",
+      path: "a.md",
+      markdown: "old content",
+      serverModified: "2026-05-20T00:00:00Z",
+    });
+    // Simulate the tree watcher having already flagged this path as unread
+    // (e.g. it was seen while some other tab was active).
+    useChangedPaths.getState().mark(ROOT, "a.md");
+
+    server.use(
+      http.get(`${API_BASE}/api/stat/a.md`, () =>
+        HttpResponse.json({ path: "a.md", modified: "2026-05-21T00:00:00Z" })
+      ),
+      http.get(`${API_BASE}/api/files/a.md`, () =>
+        HttpResponse.json({
+          path: "a.md",
+          content: "new content",
+          modified: "2026-05-21T00:00:00Z",
+        })
+      )
+    );
+
+    renderHook(() => useFileWatcher(POLL_MS), { wrapper });
+
+    await waitFor(
+      () => {
+        const f = useOpenFiles.getState().files.find((x) => x.id === id)!;
+        expect(f.markdown).toBe("new content");
+      },
+      { timeout: 2000 }
+    );
+    expect(useChangedPaths.getState().isChanged(ROOT, "a.md")).toBe(false);
+  });
+
+  it("clears the file's unread mark once the user declines and keeps their own edits", async () => {
+    seedActiveFile({
+      name: "c.md",
+      path: "c.md",
+      markdown: "my edits",
+      serverModified: "2026-05-20T00:00:00Z",
+      isDirty: true,
+    });
+    useChangedPaths.getState().mark(ROOT, "c.md");
+
+    server.use(
+      http.get(`${API_BASE}/api/stat/c.md`, () =>
+        HttpResponse.json({ path: "c.md", modified: "2026-05-21T00:00:00Z" })
+      )
+    );
+
+    renderHook(() => useFileWatcher(POLL_MS), { wrapper });
+
+    await waitFor(() => expect(useConfirm.getState().pending).not.toBeNull(), {
+      timeout: 2000,
+    });
+    act(() => useConfirm.getState().resolve(false));
+
+    await waitFor(() => {
+      expect(useChangedPaths.getState().isChanged(ROOT, "c.md")).toBe(false);
+    });
+  });
+
+  // #178 round 4 (codex review, adopted): a touch (or a rewrite with
+  // identical bytes) on the actively-viewed file confirms via sha that
+  // nothing actually changed, but that reconcile path used to `return`
+  // before reaching clearChanged — so an unread mark set by an earlier
+  // tree/dir-diff signal stayed lit on a file the user is already looking
+  // at, with nothing new to see. AI tools/editors that rewrite a file with
+  // the same content are a real source of this, not hypothetical.
+  it("clears the file's unread mark on a sha-confirmed touch (mtime bumped, content unchanged)", async () => {
+    const id = seedActiveFile({
+      name: "a.md",
+      path: "a.md",
+      markdown: "old content",
+      serverModified: "2026-05-20T00:00:00Z",
+      serverSha: "sha-same",
+    });
+    useChangedPaths.getState().mark(ROOT, "a.md");
+
+    server.use(
+      http.get(`${API_BASE}/api/stat/a.md`, () =>
+        HttpResponse.json({
+          path: "a.md",
+          modified: "2026-05-21T00:00:00Z", // mtime bumped
+          sha: "sha-same", // content unchanged
+        })
+      )
+    );
+
+    renderHook(() => useFileWatcher(POLL_MS), { wrapper });
+
+    await waitFor(() => {
+      const f = useOpenFiles.getState().files.find((x) => x.id === id)!;
+      expect(f.serverModified).toBe("2026-05-21T00:00:00Z");
+    });
+    expect(useChangedPaths.getState().isChanged(ROOT, "a.md")).toBe(false);
+  });
+
+  // #178 round 4 (codex review, adopted): same rationale as the touch case
+  // above, for the no-sha-baseline backfill path — once the sha is learned
+  // and mtimes agree, there is nothing external to report as unread either.
+  it("clears the file's unread mark when a rehydrated tab's serverSha is backfilled (mtime unchanged)", async () => {
+    const id = seedActiveFile({
+      name: "a.md",
+      path: "a.md",
+      markdown: "old content",
+      serverModified: "2026-05-20T00:00:00Z",
+      // serverSha intentionally omitted — simulates a tab persisted before #119.
+    });
+    useChangedPaths.getState().mark(ROOT, "a.md");
+
+    server.use(
+      http.get(`${API_BASE}/api/stat/a.md`, () =>
+        HttpResponse.json({
+          path: "a.md",
+          modified: "2026-05-20T00:00:00Z", // same mtime as baseline
+          sha: "sha-backfilled",
+        })
+      )
+    );
+
+    renderHook(() => useFileWatcher(POLL_MS), { wrapper });
+
+    await waitFor(() => {
+      const f = useOpenFiles.getState().files.find((x) => x.id === id)!;
+      expect(f.serverSha).toBe("sha-backfilled");
+    });
+    expect(useChangedPaths.getState().isChanged(ROOT, "a.md")).toBe(false);
   });
 
   // --- sha-first comparison (#119) ------------------------------------------

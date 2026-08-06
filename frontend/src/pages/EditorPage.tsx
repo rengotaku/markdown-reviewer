@@ -40,6 +40,7 @@ import { useOpenFiles, reattachLegacyFilesToRoot } from "@/hooks/useOpenFiles";
 import { useReadFile, useWriteFile } from "@/hooks/useFileContent";
 import { useFileWatcher } from "@/hooks/useFileWatcher";
 import { useDirChangeWatcher } from "@/hooks/useDirChangeWatcher";
+import { useChangedPaths } from "@/hooks/useChangedPaths";
 import { useServerEvents } from "@/hooks/useServerEvents";
 import { useServerConnection } from "@/hooks/useServerConnection";
 import { useConfirm } from "@/hooks/useConfirm";
@@ -108,8 +109,6 @@ export function EditorPage() {
   const toggleSidebar = useUIStore((s) => s.toggleSidebar);
   const isCommentPaneOpen = useUIStore((s) => s.isCommentPaneOpen);
   const toggleCommentPane = useUIStore((s) => s.toggleCommentPane);
-  const setSelectedDirPath = useUIStore((s) => s.setSelectedDirPath);
-  const setSidebarOpen = useUIStore((s) => s.setSidebarOpen);
   const sidebarWidth = useUIStore((s) => s.sidebarWidth);
   const setSidebarWidth = useUIStore((s) => s.setSidebarWidth);
 
@@ -178,6 +177,15 @@ export function EditorPage() {
   const writeFile = useWriteFile();
   const confirm = useConfirm((s) => s.confirm);
   const showToast = useToast((s) => s.show);
+  // Passive "unread change" tracking (#178) — replaces the old toast-based
+  // dir-change notifications with sidebar dots. markChanged is the primary
+  // path (SSE `tree` events, see onTree below — round 3); clearChanged runs
+  // whenever a file becomes the active tab; registerSelfWrite tags this
+  // app's own saves so the mark sources don't flag a self-save as external.
+  const markChanged = useChangedPaths((s) => s.mark);
+  const clearChanged = useChangedPaths((s) => s.clear);
+  const isSelfWrite = useChangedPaths((s) => s.isSelfWrite);
+  const registerSelfWrite = useChangedPaths((s) => s.registerSelfWrite);
   const editor = useEditorInstance((s) => s.editor);
   const centered = useEditorPrefs((s) => s.centered);
   const toggleCentered = useEditorPrefs((s) => s.toggleCentered);
@@ -318,6 +326,24 @@ export function EditorPage() {
       // common case) stays a no-op here, same as before #114.
       const wasMissing = missingStatFilesRef.current.delete(keyOf(ev.root, ev.path));
       if (wasMissing) setReviewRefresh((n) => n + 1);
+      // #178 round 3: the primary "unread mark" source. Unlike the dir-diff
+      // fallback (useDirChangeWatcher), this carries the exact changed
+      // file's path regardless of the sidebar tree's expand/collapse state,
+      // so a collapsed-and-deeply-nested file's change is never missed.
+      // `ev.path` is empty for the server's ErrEventOverflow fallback (it
+      // couldn't enumerate exactly what changed under a root) — skip those,
+      // same as useDirChangeWatcher skips entries it can't attribute.
+      // `ev.mtime` is empty when the server's os.Stat failed while building
+      // the event (round 4 — typically the file was deleted; internal/
+      // events/watcher.go) — skip marking there too: if the file is gone,
+      // an ancestor directory could never clear this mark via the dir-diff
+      // fallback (that path only clears marks it can see disappear from a
+      // listing it's actually watching), so it would otherwise linger
+      // forever. We don't know the file's true state here, and an unmarked
+      // path is the safe default either way.
+      if (ev.path && ev.mtime && !isSelfWrite(ev.root, ev.path, ev.mtime)) {
+        markChanged(ev.root, ev.path);
+      }
     },
     onFile: (ev) => {
       // A stat-404'd tab (#114) becoming valid again is signaled by its own
@@ -866,17 +892,7 @@ export function EditorPage() {
     setReviewRefresh((n) => n + 1);
   };
 
-  useDirChangeWatcher({
-    onOpenFile: (path) => {
-      void handleSelect(path);
-    },
-    onSelectDir: (path) => {
-      // Highlight + expand the directory in the tree and make sure the
-      // sidebar is visible so the user can actually see the result.
-      setSidebarOpen(true);
-      setSelectedDirPath(path);
-    },
-  });
+  useDirChangeWatcher();
 
   const [searchParams, setSearchParams] = useSearchParams();
   const initialSelectFileRef = useRef(searchParams.get(SELECT_FILE_PARAM));
@@ -996,6 +1012,9 @@ export function EditorPage() {
         message: `「${active.name}」の変更は破棄されます。別のファイルを開きますか？`,
         confirmLabel: "破棄して開く",
       });
+      // #178 round 2: cancelling here means the user never actually saw
+      // `path` — leave its unread mark alone (clearing only below, once a
+      // switch/open has actually happened) so it isn't silently hidden.
       if (!ok) return;
       // Roll the active file back to its saved baseline so its in-memory
       // edits aren't persisted to localStorage and don't reappear when the
@@ -1011,6 +1030,8 @@ export function EditorPage() {
       // same trigger the SSE onFile handler uses so it revalidates this tab
       // right now instead of waiting for the next interval/push event.
       setFileEventTrigger((n) => n + 1);
+      // The switch actually happened — only now has the user "seen" it.
+      clearChanged(activeRoot, path);
       return;
     }
 
@@ -1025,6 +1046,10 @@ export function EditorPage() {
         created: res.created,
         sha: res.sha,
       });
+      // The read succeeded and the tab is now open — only now clear the
+      // mark (#178 round 2: a failed readFile below must leave it in place,
+      // since the user still hasn't actually seen the file).
+      clearChanged(activeRoot, path);
     } catch (err) {
       showToast(
         `ファイルの読み込みに失敗しました: ${(err as Error).message ?? "unknown error"}`,
@@ -1044,6 +1069,10 @@ export function EditorPage() {
     if (!activeRoot) return;
     const changed = v !== (activeFile?.id ?? null);
     setActive(activeRoot, v);
+    // Activating a tab is "opening" it just as much as a sidebar click, so
+    // clear its unread mark the same way handleSelect does (#178).
+    const target = files.find((f) => f.id === v);
+    if (target) clearChanged(activeRoot, target.path);
     if (changed) {
       setFileEventTrigger((n) => n + 1);
     }
@@ -1082,6 +1111,12 @@ export function EditorPage() {
       // A save snapshots the previous content into history (review state only),
       // so refresh the revision list backing the diff picker.
       setReviewRefresh((n) => n + 1);
+      // The save itself shouldn't leave the file "unread" (#178), and its
+      // resulting mtime is this app's own write — the tree watcher's next
+      // dir-poll diff for the same root/path/mtime is its echo, not an
+      // external change, so consume it silently instead of marking it.
+      clearChanged(activeFile.root, activeFile.path);
+      registerSelfWrite(activeFile.root, activeFile.path, res.modified);
       showToast(`「${activeFile.name}」を保存しました`, "success");
     } catch (err) {
       if (err instanceof HTTPError && err.response.status === 412) {
@@ -1100,6 +1135,8 @@ export function EditorPage() {
           });
           markActiveSaved(activeFile.root, res.modified, res.created, res.sha);
           setReviewRefresh((n) => n + 1);
+          clearChanged(activeFile.root, activeFile.path);
+          registerSelfWrite(activeFile.root, activeFile.path, res.modified);
           showToast(`「${activeFile.name}」を保存しました`, "success");
         } catch (retryErr) {
           showToast(

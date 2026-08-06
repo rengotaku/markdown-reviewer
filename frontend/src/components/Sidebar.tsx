@@ -24,10 +24,11 @@ import { useSearchParams } from "react-router-dom";
 import { useDir } from "@/hooks/useDir";
 import { useFiles } from "@/hooks/useFiles";
 import { useActiveRoot } from "@/hooks/useActiveRoot";
+import { useChangedPaths } from "@/hooks/useChangedPaths";
 import { useToast } from "@/hooks/useToast";
 import { useUIStore } from "@/hooks/useUIStore";
 import { formatLocalTimestamp } from "@/utils/formatTimestamp";
-import type { DirEntryApi } from "@/api";
+import type { DirEntryApi, FileEntry } from "@/api";
 import { BAR_HEIGHT } from "@/theme/dimensions";
 
 interface SidebarProps {
@@ -54,12 +55,12 @@ export function Sidebar({ activePath, onSelect }: SidebarProps) {
   const selectedDirPath = useUIStore((s) => s.selectedDirPath);
   const viewMode = useUIStore((s) => s.sidebarViewMode);
   const setSidebarViewMode = useUIStore((s) => s.setSidebarViewMode);
-  const { activePath: reviewRoot } = useActiveRoot();
+  const { active: root, activePath: reviewRoot } = useActiveRoot();
 
   const buildFullPath = (path: string): string => {
     if (!reviewRoot) return path;
-    const root = reviewRoot.replace(/\/+$/, "");
-    return `${root}/${path}`;
+    const rootAbsPath = reviewRoot.replace(/\/+$/, "");
+    return `${rootAbsPath}/${path}`;
   };
 
   const openContextMenu = (e: React.MouseEvent, entry: DirEntryApi) => {
@@ -192,6 +193,7 @@ export function Sidebar({ activePath, onSelect }: SidebarProps) {
         {viewMode === "recent" ? (
           <RecentList
             filter={filter}
+            root={root}
             activePath={activePath}
             onSelect={onSelect}
             onContextMenu={openContextMenu}
@@ -221,6 +223,7 @@ export function Sidebar({ activePath, onSelect }: SidebarProps) {
                   key={entry.path}
                   entry={entry}
                   depth={0}
+                  root={root}
                   activePath={activePath}
                   selectedDirPath={selectedDirPath}
                   onSelect={onSelect}
@@ -269,9 +272,31 @@ export function Sidebar({ activePath, onSelect }: SidebarProps) {
   );
 }
 
+// Small "unread change" indicator (#178): a passive dot rendered next to a
+// file/directory row instead of the popup toasts the tree watcher used to
+// fire. Kept deliberately understated (6px, theme info color) so it reads as
+// a status hint, not an alert.
+function ChangedDot({ path }: { path: string }) {
+  return (
+    <Box
+      component="span"
+      data-testid={`sidebar-changed-dot-${path}`}
+      sx={{
+        width: 6,
+        height: 6,
+        borderRadius: "50%",
+        bgcolor: "info.main",
+        flexShrink: 0,
+        ml: 0.75,
+      }}
+    />
+  );
+}
+
 interface TreeItemProps {
   entry: DirEntryApi;
   depth: number;
+  root: string;
   activePath?: string;
   selectedDirPath?: string | null;
   onSelect: (path: string) => void;
@@ -281,6 +306,7 @@ interface TreeItemProps {
 function TreeItem({
   entry,
   depth,
+  root,
   activePath,
   selectedDirPath,
   onSelect,
@@ -305,6 +331,17 @@ function TreeItem({
   const expanded =
     userExpanded || isAncestorOfActive || isAncestorOfSelectedDir || isSelectedSelf;
   const indent = depth * INDENT_PX + 8;
+
+  // A directory's dot is always derived from its descendants (#178 round 3 —
+  // directories are never marked directly; see useDirChangeWatcher /
+  // EditorPage's onTree docstrings). A file changing anywhere underneath —
+  // however deep, whether or not this directory has ever been expanded —
+  // lights up this ancestor via hasChangedUnder.
+  const isChanged = useChangedPaths((s) =>
+    entry.type === "dir"
+      ? s.hasChangedUnder(root, entry.path)
+      : s.isChanged(root, entry.path)
+  );
 
   if (entry.type === "dir") {
     return (
@@ -331,11 +368,13 @@ function TreeItem({
             slotProps={{ primary: { variant: "body2", noWrap: true } }}
             sx={{ minWidth: 0 }}
           />
+          {isChanged && <ChangedDot path={entry.path} />}
         </ListItemButton>
         {expanded && (
           <DirChildren
             path={entry.path}
             depth={depth + 1}
+            root={root}
             activePath={activePath}
             selectedDirPath={selectedDirPath}
             onSelect={onSelect}
@@ -363,6 +402,7 @@ function TreeItem({
         slotProps={{ primary: { variant: "body2", noWrap: true } }}
         sx={{ minWidth: 0 }}
       />
+      {isChanged && <ChangedDot path={entry.path} />}
     </ListItemButton>
   );
 }
@@ -370,6 +410,7 @@ function TreeItem({
 interface DirChildrenProps {
   path: string;
   depth: number;
+  root: string;
   activePath?: string;
   selectedDirPath?: string | null;
   onSelect: (path: string) => void;
@@ -379,6 +420,7 @@ interface DirChildrenProps {
 function DirChildren({
   path,
   depth,
+  root,
   activePath,
   selectedDirPath,
   onSelect,
@@ -420,6 +462,7 @@ function DirChildren({
           key={child.path}
           entry={child}
           depth={depth}
+          root={root}
           activePath={activePath}
           selectedDirPath={selectedDirPath}
           onSelect={onSelect}
@@ -444,6 +487,7 @@ function baseName(path: string): string {
 
 interface RecentListProps {
   filter: string;
+  root: string;
   activePath?: string;
   onSelect: (path: string) => void;
   onContextMenu: (e: React.MouseEvent, entry: DirEntryApi) => void;
@@ -455,7 +499,7 @@ interface RecentListProps {
  * the /api/files listing — like /api/dirs it only ever returns .md files, so
  * no client-side extension filtering is needed.
  */
-function RecentList({ filter, activePath, onSelect, onContextMenu }: RecentListProps) {
+function RecentList({ filter, root, activePath, onSelect, onContextMenu }: RecentListProps) {
   const { data, isLoading, isError, error } = useFiles();
 
   if (isLoading) {
@@ -501,57 +545,16 @@ function RecentList({ filter, activePath, onSelect, onContextMenu }: RecentListP
   return (
     <>
       <List dense disablePadding>
-        {visible.map((file) => {
-          const name = baseName(file.path);
-          return (
-            <ListItemButton
-              key={file.path}
-              onClick={() => onSelect(file.path)}
-              onContextMenu={(e) =>
-                onContextMenu(e, {
-                  name,
-                  path: file.path,
-                  type: "file",
-                  modified: file.modified,
-                })
-              }
-              selected={file.path === activePath}
-              sx={{ px: 1.5, py: 0.5 }}
-              data-testid={`sidebar-recent-file-${file.path}`}
-            >
-              <Box sx={{ minWidth: 0, width: "100%" }}>
-                <Box
-                  sx={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "baseline",
-                    gap: 1,
-                  }}
-                >
-                  <Typography
-                    variant="caption"
-                    color="text.secondary"
-                    noWrap
-                    sx={{ minWidth: 0 }}
-                    data-testid={`sidebar-recent-dir-${file.path}`}
-                  >
-                    {dirLabel(file.path)}
-                  </Typography>
-                  <Typography
-                    variant="caption"
-                    color="text.secondary"
-                    sx={{ flexShrink: 0 }}
-                  >
-                    {formatLocalTimestamp(file.modified)}
-                  </Typography>
-                </Box>
-                <Typography variant="body2" noWrap>
-                  {name}
-                </Typography>
-              </Box>
-            </ListItemButton>
-          );
-        })}
+        {visible.map((file) => (
+          <RecentRow
+            key={file.path}
+            file={file}
+            root={root}
+            activePath={activePath}
+            onSelect={onSelect}
+            onContextMenu={onContextMenu}
+          />
+        ))}
       </List>
       {filter && visible.length === 0 && (
         <Box sx={{ p: 2 }} data-testid="sidebar-no-match">
@@ -561,5 +564,67 @@ function RecentList({ filter, activePath, onSelect, onContextMenu }: RecentListP
         </Box>
       )}
     </>
+  );
+}
+
+interface RecentRowProps {
+  file: FileEntry;
+  root: string;
+  activePath?: string;
+  onSelect: (path: string) => void;
+  onContextMenu: (e: React.MouseEvent, entry: DirEntryApi) => void;
+}
+
+// Extracted so the changed-dot lookup is one hook call per row (stable
+// across renders) rather than inside RecentList's .map callback.
+function RecentRow({ file, root, activePath, onSelect, onContextMenu }: RecentRowProps) {
+  const name = baseName(file.path);
+  const isChanged = useChangedPaths((s) => s.isChanged(root, file.path));
+
+  return (
+    <ListItemButton
+      onClick={() => onSelect(file.path)}
+      onContextMenu={(e) =>
+        onContextMenu(e, {
+          name,
+          path: file.path,
+          type: "file",
+          modified: file.modified,
+        })
+      }
+      selected={file.path === activePath}
+      sx={{ px: 1.5, py: 0.5 }}
+      data-testid={`sidebar-recent-file-${file.path}`}
+    >
+      <Box sx={{ minWidth: 0, width: "100%" }}>
+        <Box
+          sx={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "baseline",
+            gap: 1,
+          }}
+        >
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            noWrap
+            sx={{ minWidth: 0 }}
+            data-testid={`sidebar-recent-dir-${file.path}`}
+          >
+            {dirLabel(file.path)}
+          </Typography>
+          <Typography variant="caption" color="text.secondary" sx={{ flexShrink: 0 }}>
+            {formatLocalTimestamp(file.modified)}
+          </Typography>
+        </Box>
+        <Box sx={{ display: "flex", alignItems: "center", minWidth: 0 }}>
+          <Typography variant="body2" noWrap sx={{ minWidth: 0 }}>
+            {name}
+          </Typography>
+          {isChanged && <ChangedDot path={file.path} />}
+        </Box>
+      </Box>
+    </ListItemButton>
   );
 }
