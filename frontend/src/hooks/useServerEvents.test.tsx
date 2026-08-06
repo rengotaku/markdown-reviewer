@@ -230,15 +230,45 @@ describe("useServerEvents", () => {
       );
     });
 
-    it("calls onResume when re-opening after hidden, but not on first connect", () => {
+    it("calls onResume once the re-opened stream connects, not on first connect", () => {
       const onResume = vi.fn();
       renderHook(() => useServerEvents({ onResume }));
+      act(() => MockEventSource.instances[0].emitOpen());
       expect(onResume).not.toHaveBeenCalled();
 
       act(() => setVisibility("hidden"));
       expect(onResume).not.toHaveBeenCalled();
 
       act(() => setVisibility("visible"));
+      // Opening the stream isn't enough: the server only forwards events
+      // once it has subscribed us, so a re-read issued before then would
+      // leave an unobserved window.
+      expect(onResume).not.toHaveBeenCalled();
+
+      act(() => MockEventSource.instances[1].emitOpen());
+      expect(onResume).toHaveBeenCalledTimes(1);
+    });
+
+    it("still calls onResume when the re-opened stream connects only after a retry", () => {
+      const onResume = vi.fn();
+      renderHook(() => useServerEvents({ onResume }));
+      act(() => MockEventSource.instances[0].emitOpen());
+
+      act(() => setVisibility("hidden"));
+      act(() => setVisibility("visible"));
+
+      const reopened = MockEventSource.instances[1];
+      act(() => reopened.emitError());
+      expect(onResume).not.toHaveBeenCalled();
+
+      // EventSource retries on the same instance; the pending resume must
+      // survive until it actually connects.
+      act(() => reopened.emitOpen());
+      expect(onResume).toHaveBeenCalledTimes(1);
+
+      // ...and only once.
+      act(() => reopened.emitError());
+      act(() => reopened.emitOpen());
       expect(onResume).toHaveBeenCalledTimes(1);
     });
 
@@ -267,8 +297,9 @@ describe("useServerEvents", () => {
       expect(MockEventSource.instances).toHaveLength(0);
 
       act(() => setVisibility("visible"));
-
       expect(MockEventSource.instances).toHaveLength(1);
+
+      act(() => MockEventSource.instances[0].emitOpen());
       // The caller's initial load ran at mount; anything that changed before
       // the tab was first shown is a gap just like a mid-session drop.
       expect(onResume).toHaveBeenCalledTimes(1);

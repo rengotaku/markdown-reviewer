@@ -22,10 +22,11 @@ export interface UseServerEventsCallbacks {
   /** A sidecar (review.json) changed for a file. */
   onComments?: (ev: ServerEvent) => void;
   /**
-   * The tab came back to the foreground and the stream is being re-opened
+   * The tab came back to the foreground and the stream has re-connected
    * after having been dropped while hidden (#183). Events that happened in
    * that window were never delivered, so the caller must re-read whatever
-   * the stream would otherwise have kept in sync (dir/file listings).
+   * the stream would otherwise have kept in sync (dir/file listings,
+   * sidecar comment state).
    *
    * Not called on the initial connect, and not called for EventSource's own
    * transient reconnects — only for the deliberate hidden→visible cycle,
@@ -105,7 +106,24 @@ export function useServerEvents(callbacks: UseServerEventsCallbacks): {
       const es = new EventSource(`${API_BASE_URL}/api/events`);
       source = es;
 
-      es.onopen = () => setConnected(true);
+      es.onopen = () => {
+        setConnected(true);
+        // Deliberately after the connection is established, not at open()
+        // time: the server only starts forwarding events once it has
+        // subscribed this stream to the hub, so a re-read issued before
+        // then leaves a window whose changes reach neither the refetch nor
+        // the stream — and once connected, the polling fallbacks stand down
+        // and nothing else would notice.
+        //
+        // If the stream never comes up (server down), onResume simply never
+        // fires — and it doesn't need to: `connected` stays false with the
+        // tab visible, so every polling fallback is running and serves the
+        // catch-up itself.
+        if (missedWhileHidden) {
+          missedWhileHidden = false;
+          callbacksRef.current.onResume?.();
+        }
+      };
       // EventSource retries automatically after an error; we only need to
       // reflect the disconnected state so callers' polling fallback resumes
       // until onopen fires again.
@@ -130,15 +148,6 @@ export function useServerEvents(callbacks: UseServerEventsCallbacks): {
             break;
         }
       };
-
-      // Fires on re-open, not on the connection actually being established:
-      // the caller needs to re-read regardless of whether the stream comes
-      // back up, and if it doesn't, its polling fallback is what serves the
-      // refetch anyway.
-      if (missedWhileHidden) {
-        missedWhileHidden = false;
-        callbacksRef.current.onResume?.();
-      }
     };
 
     const closeStream = () => {

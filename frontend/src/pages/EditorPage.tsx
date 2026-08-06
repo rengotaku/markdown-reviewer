@@ -392,6 +392,14 @@ export function EditorPage() {
     onResume: () => {
       void queryClient.invalidateQueries({ queryKey: ["dir"] });
       void queryClient.invalidateQueries({ queryKey: ["files"] });
+      // A tab stat-404'd before we went hidden (#114) is normally un-excluded
+      // by the `file`/`tree` event for its path — exactly the events that got
+      // dropped. The sweep below skips excluded paths, so without clearing
+      // the set first, a file re-created while hidden would stay unchecked
+      // until it changed again or its tab was reactivated. We have no path to
+      // attribute the resume to, so clear the whole set and let the sweep
+      // re-derive it.
+      missingStatFilesRef.current.clear();
       setCommentsRefresh((n) => n + 1);
       setReviewRefresh((n) => n + 1);
     },
