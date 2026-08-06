@@ -2,10 +2,12 @@ package server_test
 
 import (
 	"context"
+	"reflect"
 	"testing"
 	"time"
 
 	"markdown-reviewer/internal/server"
+	"markdown-reviewer/internal/serverdefaults"
 )
 
 // TestRun_ShutsDownOnCtxCancel exercises the contract that Run(ctx) returns
@@ -39,5 +41,21 @@ func TestRun_ShutsDownOnCtxCancel(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Run() did not return within 5s after ctx cancel")
+	}
+}
+
+// TestConfigPortDefaultMatchesServerDefaults guards the one duplication the
+// mr CLI needs: it builds web UI URLs from serverdefaults.Port when no PORT
+// and no launchd plist tell it otherwise, so that constant must stay equal to
+// the default this Config actually applies. A struct tag can't reference a
+// constant, hence the assertion here rather than a shared literal.
+func TestConfigPortDefaultMatchesServerDefaults(t *testing.T) {
+	field, ok := reflect.TypeOf(server.Config{}).FieldByName("Port")
+	if !ok {
+		t.Fatal("server.Config has no Port field")
+	}
+	want := "PORT,default=" + serverdefaults.Port
+	if got := field.Tag.Get("env"); got != want {
+		t.Errorf("Config.Port env tag = %q, want %q (update internal/serverdefaults together with the tag)", got, want)
 	}
 }
