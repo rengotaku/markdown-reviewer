@@ -335,7 +335,7 @@ describe("useServerEvents", () => {
       expect(result.current.suspended).toBe(false);
     });
 
-    it("reports suspended when mounted hidden", () => {
+    it("reports suspended when mounted hidden, and clears it on first show", async () => {
       Object.defineProperty(document, "visibilityState", {
         configurable: true,
         get: () => "hidden",
@@ -343,6 +343,41 @@ describe("useServerEvents", () => {
       const { result } = renderHook(() => useServerEvents({}));
       expect(result.current.suspended).toBe(true);
       expect(result.current.connected).toBe(false);
+
+      act(() => setVisibility("visible"));
+      await waitFor(() => expect(result.current.suspended).toBe(false));
+    });
+
+    // A `suspended` that gets stuck at true pauses useFileWatcher forever,
+    // so the tab stops noticing external edits and can overwrite them from a
+    // stale buffer. It is derived from the DOM rather than mirrored into
+    // state precisely so no code path can strand it.
+    it("tracks visibility even when EventSource is unavailable", async () => {
+      vi.stubGlobal("EventSource", undefined);
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        get: () => "hidden",
+      });
+
+      const { result } = renderHook(() => useServerEvents({}));
+      expect(result.current.suspended).toBe(true);
+
+      act(() => setVisibility("visible"));
+      await waitFor(() => expect(result.current.suspended).toBe(false));
+    });
+
+    it("does not strand suspended when visibility flips repeatedly", async () => {
+      const { result } = renderHook(() => useServerEvents({}));
+
+      for (const state of ["hidden", "visible", "hidden", "visible"] as const) {
+        act(() => setVisibility(state));
+        await waitFor(() =>
+          expect(result.current.suspended).toBe(state === "hidden")
+        );
+      }
+      // Last transition was to visible, so a stream must be live again.
+      const latest = MockEventSource.instances.at(-1)!;
+      expect(latest.closed).toBe(false);
     });
 
     it("stops reacting to visibility changes after unmount", () => {

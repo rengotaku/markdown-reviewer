@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { API_BASE_URL } from "@/api";
 
 /** Discriminant matching the Go side's events.Kind (internal/events/hub.go). */
@@ -55,6 +55,22 @@ export interface UseServerEventsCallbacks {
  * `refetchIntervalInBackground: false`, and this makes the push channel
  * follow the same rule. `onResume` covers the events missed in between.
  */
+/**
+ * Subscribes to the tab's visibility as an external store rather than
+ * mirroring it into state (#183 round 3). Any copy of `document
+ * .visibilityState` held in React state can drift from the real value —
+ * between the render that seeds it and the effect that starts listening,
+ * or in an environment where the listener is never attached at all. A stuck
+ * `suspended: true` would pause useFileWatcher forever, so the value is
+ * always derived from the DOM instead of remembered.
+ */
+function subscribeVisibility(onStoreChange: () => void) {
+  document.addEventListener("visibilitychange", onStoreChange);
+  return () => document.removeEventListener("visibilitychange", onStoreChange);
+}
+
+const isTabHidden = () => document.visibilityState === "hidden";
+
 export function useServerEvents(callbacks: UseServerEventsCallbacks): {
   connected: boolean;
   suspended: boolean;
@@ -65,15 +81,7 @@ export function useServerEvents(callbacks: UseServerEventsCallbacks): {
   // Poll fallbacks that don't check visibility themselves must stand down in
   // the second case — otherwise freeing the SSE slot just trades one
   // background connection for a stream of periodic ones.
-  //
-  // Seeded from the current visibility rather than defaulting to false so a
-  // tab that mounts already-hidden (restored session, background-opened
-  // link) is suspended from its very first render — setting it from the
-  // effect body instead would be a cascading render, and would leave one
-  // render where the fallbacks think they should poll.
-  const [suspended, setSuspended] = useState(
-    () => document.visibilityState === "hidden"
-  );
+  const suspended = useSyncExternalStore(subscribeVisibility, isTabHidden);
 
   // Stash the latest callbacks so the EventSource effect doesn't have to
   // tear down/reconnect every time a caller passes a fresh closure.
@@ -81,6 +89,13 @@ export function useServerEvents(callbacks: UseServerEventsCallbacks): {
   useEffect(() => {
     callbacksRef.current = callbacks;
   }, [callbacks]);
+
+  // Survives the effect re-runs that visibility changes cause: set when we
+  // stop listening, consumed by the next stream that actually connects.
+  // Also set when we mount already-hidden — the caller's initial load ran at
+  // mount, so anything that changed before the tab was first shown is just
+  // as invisible to it as an event dropped mid-session.
+  const missedWhileHiddenRef = useRef(false);
 
   useEffect(() => {
     // jsdom (and some older environments) may not implement EventSource at
@@ -90,99 +105,61 @@ export function useServerEvents(callbacks: UseServerEventsCallbacks): {
       return;
     }
 
-    let source: EventSource | null = null;
-    // True once we've deliberately stopped listening (tab hidden), so the
-    // next open knows it has a gap to hand back to the caller via onResume.
-    // Also set when we mount already-hidden: the caller's initial load ran
-    // at mount, and anything that changed before the tab was first shown is
-    // just as invisible to it as an event dropped mid-session.
-    let missedWhileHidden = false;
+    if (suspended) {
+      missedWhileHiddenRef.current = true;
+      return;
+    }
 
-    const isHidden = () => document.visibilityState === "hidden";
+    const source = new EventSource(`${API_BASE_URL}/api/events`);
 
-    const openStream = () => {
-      if (source) return;
-
-      const es = new EventSource(`${API_BASE_URL}/api/events`);
-      source = es;
-
-      es.onopen = () => {
-        setConnected(true);
-        // Deliberately after the connection is established, not at open()
-        // time: the server only starts forwarding events once it has
-        // subscribed this stream to the hub, so a re-read issued before
-        // then leaves a window whose changes reach neither the refetch nor
-        // the stream — and once connected, the polling fallbacks stand down
-        // and nothing else would notice.
-        //
-        // If the stream never comes up (server down), onResume simply never
-        // fires — and it doesn't need to: `connected` stays false with the
-        // tab visible, so every polling fallback is running and serves the
-        // catch-up itself.
-        if (missedWhileHidden) {
-          missedWhileHidden = false;
-          callbacksRef.current.onResume?.();
-        }
-      };
-      // EventSource retries automatically after an error; we only need to
-      // reflect the disconnected state so callers' polling fallback resumes
-      // until onopen fires again.
-      es.onerror = () => setConnected(false);
-      es.onmessage = (e: MessageEvent<string>) => {
-        let parsed: ServerEvent;
-        try {
-          parsed = JSON.parse(e.data) as ServerEvent;
-        } catch {
-          return;
-        }
-        const { onTree, onFile, onComments } = callbacksRef.current;
-        switch (parsed.kind) {
-          case "tree":
-            onTree?.(parsed);
-            break;
-          case "file":
-            onFile?.(parsed);
-            break;
-          case "comments":
-            onComments?.(parsed);
-            break;
-        }
-      };
+    source.onopen = () => {
+      setConnected(true);
+      // Deliberately after the connection is established, not at construction
+      // time: the server only starts forwarding events once it has subscribed
+      // this stream to the hub, so a re-read issued before then leaves a
+      // window whose changes reach neither the refetch nor the stream — and
+      // once connected, the polling fallbacks stand down and nothing else
+      // would notice.
+      //
+      // If the stream never comes up (server down), onResume simply never
+      // fires — and it doesn't need to: `connected` stays false with the tab
+      // visible, so every polling fallback is running and serves the
+      // catch-up itself.
+      if (missedWhileHiddenRef.current) {
+        missedWhileHiddenRef.current = false;
+        callbacksRef.current.onResume?.();
+      }
     };
-
-    const closeStream = () => {
-      if (!source) return;
-      source.close();
-      source = null;
-      setConnected(false);
-    };
-
-    const handleVisibilityChange = () => {
-      if (isHidden()) {
-        closeStream();
-        missedWhileHidden = true;
-        setSuspended(true);
-      } else {
-        setSuspended(false);
-        openStream();
+    // EventSource retries automatically after an error; we only need to
+    // reflect the disconnected state so callers' polling fallback resumes
+    // until onopen fires again.
+    source.onerror = () => setConnected(false);
+    source.onmessage = (e: MessageEvent<string>) => {
+      let parsed: ServerEvent;
+      try {
+        parsed = JSON.parse(e.data) as ServerEvent;
+      } catch {
+        return;
+      }
+      const { onTree, onFile, onComments } = callbacksRef.current;
+      switch (parsed.kind) {
+        case "tree":
+          onTree?.(parsed);
+          break;
+        case "file":
+          onFile?.(parsed);
+          break;
+        case "comments":
+          onComments?.(parsed);
+          break;
       }
     };
 
-    if (isHidden()) {
-      // `suspended` is already true from the initial state above.
-      missedWhileHidden = true;
-    } else {
-      openStream();
-    }
-
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-
     return () => {
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-      closeStream();
-      setSuspended(false);
+      source.close();
+      setConnected(false);
     };
-  }, []);
+  }, [suspended]);
 
   return { connected, suspended };
 }
