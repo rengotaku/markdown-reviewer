@@ -51,14 +51,25 @@ func loadRoots() ([]rootEntry, error) {
 
 // rootsFromPlist extracts the REVIEW_ROOTS JSON string from the launchd plist.
 func rootsFromPlist() (string, error) {
+	raw, err := plistEnv("REVIEW_ROOTS")
+	if err != nil {
+		return "", fmt.Errorf("REVIEW_ROOTS is unset and %w (start the markdown-reviewer server, or export REVIEW_ROOTS)", err)
+	}
+	return raw, nil
+}
+
+// plistEnv reads one EnvironmentVariables entry out of the launchd plist, so
+// the CLI can recover the server's settings (REVIEW_ROOTS, PORT) without
+// running under the agent's environment.
+func plistEnv(key string) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
 	p := filepath.Join(home, launchdPlist)
-	out, err := exec.Command("plutil", "-extract", "EnvironmentVariables.REVIEW_ROOTS", "raw", "-o", "-", p).Output()
+	out, err := exec.Command("plutil", "-extract", "EnvironmentVariables."+key, "raw", "-o", "-", p).Output()
 	if err != nil {
-		return "", fmt.Errorf("REVIEW_ROOTS is unset and reading %s failed: %w (start the markdown-reviewer server, or export REVIEW_ROOTS)", p, err)
+		return "", fmt.Errorf("reading %s from %s failed: %w", key, p, err)
 	}
 	return strings.TrimSpace(string(out)), nil
 }

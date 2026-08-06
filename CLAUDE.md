@@ -42,9 +42,12 @@ mr review   <path> [--all] [--since ID] [--unanswered]   # open コメントを�
 mr reply    <path> <id> <text> [--author NAME]           # スレッド返信（既定 author=ai）
 mr resolve  <path> <id>                                  # resolved にする
 mr reopen   <path> <id>                                  # resolved を open に戻す
+mr open     <path> [--print]                             # Web UI で開く（--print: URL のみ出力）
 ```
 
-パスは絶対 / cwd 相対のどちらでもよい。サーバ未起動でも動作する。
+パスは絶対 / cwd 相対のどちらでもよい。サーバ未起動でも動作する（`mr open` の URL 出力も同様。ブラウザで開くにはサーバが必要）。
+
+人間に「この画面を見てほしい」と伝えるときは `mr open <path> --print` の URL を貼る（deeplink を手で組まない）。
 
 ### コメントを API で自作するときの注意（anchor 契約）
 

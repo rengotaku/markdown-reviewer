@@ -11,6 +11,7 @@
 //	mr reply    <path> <id> <text> [--author NAME]   add a threaded reply
 //	mr resolve  <path> <id>       mark a comment resolved
 //	mr reopen   <path> <id>       reopen a resolved comment
+//	mr open     <path> [--print]  open the file in the web UI
 //
 // <path> may be absolute or relative to the current directory; it must live
 // under one of the configured REVIEW_ROOTS.
@@ -51,6 +52,8 @@ func main() {
 		err = cmdSetStatus(args, reviewstore.StatusResolved)
 	case "reopen":
 		err = cmdSetStatus(args, reviewstore.StatusOpen)
+	case "open":
+		err = cmdOpen(args)
 	case "-h", "--help", "help":
 		usage()
 		return
@@ -75,6 +78,7 @@ Usage:
   mr reply    <path> <id> <text> [--author NAME]
   mr resolve  <path> <id>              mark a comment resolved
   mr reopen   <path> <id>              reopen a resolved comment
+  mr open     <path> [--print]         open the file in the web UI (--print: URL only)
 
 <path> is absolute or relative to cwd, and must be under a configured root.
 --since ID: only comments after ID (e.g. --since c-008).
