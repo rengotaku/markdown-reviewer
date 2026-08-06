@@ -66,13 +66,14 @@ describe("useDirChangeWatcher", () => {
     expect(useChangedPaths.getState().isChanged("mock-root", "a.md")).toBe(false);
   });
 
-  // #178 round 2 (codex review): a newly appeared directory entry is now
-  // marked the same as a file — this test previously asserted the opposite
-  // (an addition beyond the originally-specified cases; see EditorPage
-  // handoff report). Directories are collapsed by default, so their own
-  // `useDir` query never mounts to observe children individually — the only
-  // signal available while collapsed is the directory's own mtime moving.
-  it("marks a newly appeared directory entry", async () => {
+  // #178 round 3 (codex review): reverted back to round 1's original
+  // behavior. Round 2 had this mark directories directly to cover the
+  // collapsed-directory blind spot, but that couldn't be told apart from
+  // this app's own atomic-write save also touching the same directory's
+  // mtime (round 2 issue #2) — the collapsed-directory gap is now covered
+  // instead by the SSE `tree` event carrying the exact file path (see
+  // EditorPage's onTree handler), so directories don't need marking here.
+  it("does not mark a newly appeared directory entry", async () => {
     const { Wrapper, client } = makeWrapper();
     renderHook(() => useDirChangeWatcher(), { wrapper: Wrapper });
 
@@ -87,12 +88,14 @@ describe("useDirChangeWatcher", () => {
       });
     });
 
-    await waitFor(() =>
-      expect(useChangedPaths.getState().isChanged("mock-root", "newdir")).toBe(true)
-    );
+    // Give the subscription a tick to run — there is nothing to waitFor
+    // since a directory entry must never become marked.
+    await new Promise((r) => setTimeout(r, 30));
+    expect(useChangedPaths.getState().isChanged("mock-root", "newdir")).toBe(false);
+    expect(useChangedPaths.getState().hasChangedUnder("mock-root", "")).toBe(false);
   });
 
-  it("marks an existing file whose mtime advances", async () => {
+  it("marks an existing file whose mtime advances, but not a dir whose mtime advances", async () => {
     const { Wrapper, client } = makeWrapper();
     renderHook(() => useDirChangeWatcher(), { wrapper: Wrapper });
 
@@ -100,35 +103,6 @@ describe("useDirChangeWatcher", () => {
       client.setQueryData(dirQueryKey("mock-root", ""), {
         entries: [
           { name: "a.md", path: "a.md", type: "file", modified: "2026-05-20T00:00:00Z" },
-        ],
-      });
-    });
-    act(() => {
-      client.setQueryData(dirQueryKey("mock-root", ""), {
-        entries: [
-          { name: "a.md", path: "a.md", type: "file", modified: "2026-05-22T00:00:00Z" },
-        ],
-      });
-    });
-
-    await waitFor(() =>
-      expect(useChangedPaths.getState().isChanged("mock-root", "a.md")).toBe(true)
-    );
-  });
-
-  // #178 round 2 (codex review, must-fix): a collapsed directory's own
-  // `useDir` query never mounts, so an external edit to a file inside it
-  // (e.g. `docs/foo.md`) is only ever observable here as `docs`'s own mtime
-  // moving. The original design skipped directory entries entirely, which
-  // silently dropped this signal and the unread dot never appeared —
-  // reversed here to mark the directory itself instead.
-  it("marks a directory whose own mtime advances", async () => {
-    const { Wrapper, client } = makeWrapper();
-    renderHook(() => useDirChangeWatcher(), { wrapper: Wrapper });
-
-    act(() => {
-      client.setQueryData(dirQueryKey("mock-root", ""), {
-        entries: [
           { name: "sub", path: "sub", type: "dir", modified: "2026-05-20T00:00:00Z" },
         ],
       });
@@ -136,16 +110,19 @@ describe("useDirChangeWatcher", () => {
     act(() => {
       client.setQueryData(dirQueryKey("mock-root", ""), {
         entries: [
-          // The directory's own mtime moved because a file inside it (not
-          // observable while collapsed) changed.
+          { name: "a.md", path: "a.md", type: "file", modified: "2026-05-22T00:00:00Z" },
+          // The directory's own mtime moved (e.g. a child was added/removed)
+          // but that must not mark the directory entry itself (#178 round 3
+          // — see this hook's docstring for the collapsed-dir trade-off).
           { name: "sub", path: "sub", type: "dir", modified: "2026-05-22T00:00:00Z" },
         ],
       });
     });
 
     await waitFor(() =>
-      expect(useChangedPaths.getState().isChanged("mock-root", "sub")).toBe(true)
+      expect(useChangedPaths.getState().isChanged("mock-root", "a.md")).toBe(true)
     );
+    expect(useChangedPaths.getState().isChanged("mock-root", "sub")).toBe(false);
   });
 
   it("does not mark entries that disappeared from the listing", async () => {
@@ -171,6 +148,36 @@ describe("useDirChangeWatcher", () => {
     await new Promise((r) => setTimeout(r, 30));
     expect(useChangedPaths.getState().isChanged("mock-root", "a.md")).toBe(false);
     expect(useChangedPaths.getState().isChanged("mock-root", "b.md")).toBe(false);
+  });
+
+  // #178 round 3 (codex review, must-fix): a mark on a path that vanished
+  // from the listing (deleted/renamed away) could never be cleared by
+  // opening the file — it can't be opened anymore — so it would otherwise
+  // keep an ancestor directory's dot lit forever via hasChangedUnder.
+  it("clears an existing mark on a path that disappears from the listing", async () => {
+    const { Wrapper, client } = makeWrapper();
+    renderHook(() => useDirChangeWatcher(), { wrapper: Wrapper });
+
+    act(() => {
+      client.setQueryData(dirQueryKey("mock-root", ""), {
+        entries: [
+          { name: "a.md", path: "a.md", type: "file", modified: "2026-05-20T00:00:00Z" },
+        ],
+      });
+    });
+
+    // Something else (e.g. the SSE `tree` event) already marked it before
+    // this hook's own snapshot diff observes the deletion.
+    useChangedPaths.getState().mark("mock-root", "a.md");
+    expect(useChangedPaths.getState().isChanged("mock-root", "a.md")).toBe(true);
+
+    act(() => {
+      client.setQueryData(dirQueryKey("mock-root", ""), { entries: [] });
+    });
+
+    await waitFor(() =>
+      expect(useChangedPaths.getState().isChanged("mock-root", "a.md")).toBe(false)
+    );
   });
 
   it("consumes a matching self-write signature instead of marking it, and does not leave it behind", async () => {

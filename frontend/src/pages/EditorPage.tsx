@@ -178,10 +178,13 @@ export function EditorPage() {
   const confirm = useConfirm((s) => s.confirm);
   const showToast = useToast((s) => s.show);
   // Passive "unread change" tracking (#178) — replaces the old toast-based
-  // dir-change notifications with sidebar dots. clearChanged runs whenever a
-  // file becomes the active tab; registerSelfWrite tags this app's own saves
-  // so the tree watcher doesn't mark a file's own save as an external change.
+  // dir-change notifications with sidebar dots. markChanged is the primary
+  // path (SSE `tree` events, see onTree below — round 3); clearChanged runs
+  // whenever a file becomes the active tab; registerSelfWrite tags this
+  // app's own saves so the mark sources don't flag a self-save as external.
+  const markChanged = useChangedPaths((s) => s.mark);
   const clearChanged = useChangedPaths((s) => s.clear);
+  const isSelfWrite = useChangedPaths((s) => s.isSelfWrite);
   const registerSelfWrite = useChangedPaths((s) => s.registerSelfWrite);
   const editor = useEditorInstance((s) => s.editor);
   const centered = useEditorPrefs((s) => s.centered);
@@ -323,6 +326,16 @@ export function EditorPage() {
       // common case) stays a no-op here, same as before #114.
       const wasMissing = missingStatFilesRef.current.delete(keyOf(ev.root, ev.path));
       if (wasMissing) setReviewRefresh((n) => n + 1);
+      // #178 round 3: the primary "unread mark" source. Unlike the dir-diff
+      // fallback (useDirChangeWatcher), this carries the exact changed
+      // file's path regardless of the sidebar tree's expand/collapse state,
+      // so a collapsed-and-deeply-nested file's change is never missed.
+      // `ev.path` is empty for the server's ErrEventOverflow fallback (it
+      // couldn't enumerate exactly what changed under a root) — skip those,
+      // same as useDirChangeWatcher skips entries it can't attribute.
+      if (ev.path && !isSelfWrite(ev.root, ev.path, ev.mtime ?? "")) {
+        markChanged(ev.root, ev.path);
+      }
     },
     onFile: (ev) => {
       // A stat-404'd tab (#114) becoming valid again is signaled by its own

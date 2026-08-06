@@ -35,36 +35,38 @@ const MAX_SELF_WRITE_SIGNATURES = 500;
 
 interface ChangedPathsState {
   /**
-   * `pathKey(root, path)` set of files/dirs with an unseen change. A
-   * directory itself can be marked (its own mtime moved, meaning "something
-   * changed somewhere inside" — see useDirChangeWatcher) independently of
-   * any of its descendants being marked.
+   * `pathKey(root, path)` set of files with an unseen change. Directories are
+   * never marked directly (#178 round 3) — see useDirChangeWatcher/EditorPage
+   * onTree docstrings for why, and useChangedPaths.hasChangedUnder for how an
+   * ancestor directory's dot is derived instead.
    */
   changed: Set<string>;
-  /** `selfWriteSignature(root, path, mtime)` set awaiting their diff echo. */
+  /** `selfWriteSignature(root, path, mtime)` set of this app's own writes. */
   selfWrites: Set<string>;
   /** Mark `path` (under `root`) as having an unread change. */
   mark: (root: string, path: string) => void;
-  /** Clear `path`'s unread mark (e.g. the user just opened/saved/expanded it). */
+  /** Clear `path`'s unread mark (e.g. the user just opened/saved it, or it vanished from a listing). */
   clear: (root: string, path: string) => void;
   /** Whether `path` itself currently has an unread mark. */
   isChanged: (root: string, path: string) => boolean;
-  /** Whether any file/dir under `dirPath` (recursively) currently has an unread mark. */
+  /** Whether any file under `dirPath` (recursively) currently has an unread mark. */
   hasChangedUnder: (root: string, dirPath: string) => boolean;
   /**
    * Record that this app itself just wrote `path` with the resulting
-   * `mtime` — the next directory-listing diff that reports this exact
-   * root/path/mtime combination is an echo of our own save, not an external
-   * change (#178).
+   * `mtime` — a later diff (SSE `tree` event or dir-listing poll) that
+   * reports this exact root/path/mtime combination is an echo of our own
+   * save, not an external change (#178).
    */
   registerSelfWrite: (root: string, path: string, mtime: string) => void;
   /**
-   * If `path@mtime` (under `root`) matches a previously registered
-   * self-write, consumes it (so it can't match again) and returns true.
-   * Returns false — leaving state untouched — when there's no match, i.e.
-   * this is a genuine external change.
+   * Whether `path@mtime` (under `root`) matches a previously registered
+   * self-write. Non-destructive (#178 round 3): a single save can now be
+   * echoed back through *multiple* independent diff sources (the SSE `tree`
+   * event, and the dir-listing poll for every currently-open ancestor
+   * directory), so the signature must survive repeated matching — it is
+   * only ever dropped by the size-bounded bulk clear in registerSelfWrite.
    */
-  consumeSelfWrite: (root: string, path: string, mtime: string) => boolean;
+  isSelfWrite: (root: string, path: string, mtime: string) => boolean;
 }
 
 export const useChangedPaths = create<ChangedPathsState>((set, get) => ({
@@ -107,14 +109,6 @@ export const useChangedPaths = create<ChangedPathsState>((set, get) => ({
       return { selfWrites: next };
     }),
 
-  consumeSelfWrite: (root, path, mtime) => {
-    const sig = selfWriteSignature(root, path, mtime);
-    if (!get().selfWrites.has(sig)) return false;
-    set((state) => {
-      const next = new Set(state.selfWrites);
-      next.delete(sig);
-      return { selfWrites: next };
-    });
-    return true;
-  },
+  isSelfWrite: (root, path, mtime) =>
+    get().selfWrites.has(selfWriteSignature(root, path, mtime)),
 }));

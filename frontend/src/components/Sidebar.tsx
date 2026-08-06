@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import CircularProgress from "@mui/material/CircularProgress";
@@ -332,28 +332,16 @@ function TreeItem({
     userExpanded || isAncestorOfActive || isAncestorOfSelectedDir || isSelectedSelf;
   const indent = depth * INDENT_PX + 8;
 
-  // A directory shows the dot when either it is itself marked (its own
-  // mtime moved while collapsed — #178 round 2) or something changed
-  // underneath it recursively (a descendant is separately marked, typically
-  // once this dir has been expanded before and its children are tracked
-  // individually).
+  // A directory's dot is always derived from its descendants (#178 round 3 —
+  // directories are never marked directly; see useDirChangeWatcher /
+  // EditorPage's onTree docstrings). A file changing anywhere underneath —
+  // however deep, whether or not this directory has ever been expanded —
+  // lights up this ancestor via hasChangedUnder.
   const isChanged = useChangedPaths((s) =>
     entry.type === "dir"
-      ? s.isChanged(root, entry.path) || s.hasChangedUnder(root, entry.path)
+      ? s.hasChangedUnder(root, entry.path)
       : s.isChanged(root, entry.path)
   );
-  const clearChangedMark = useChangedPaths((s) => s.clear);
-  // Expanding a directory means its children's `useDir` query mounts and
-  // starts tracking them individually from here on, so the directory's own
-  // "something changed inside" summary mark is no longer needed — clear it
-  // the moment it becomes expanded (#178 round 2). This intentionally does
-  // NOT touch any already-marked descendant; those clear individually as
-  // each file is opened.
-  useEffect(() => {
-    if (entry.type === "dir" && expanded) {
-      clearChangedMark(root, entry.path);
-    }
-  }, [entry.type, entry.path, expanded, root, clearChangedMark]);
 
   if (entry.type === "dir") {
     return (

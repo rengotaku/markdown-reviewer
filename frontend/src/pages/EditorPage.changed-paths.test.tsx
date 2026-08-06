@@ -221,4 +221,174 @@ describe("EditorPage changed-paths integration (#178)", () => {
       useChangedPaths.getState().isChanged("mock-root", "docs/intro.md")
     ).toBe(true);
   });
+
+  // #178 round 3 (codex review, must-fix): the parent directory's own mtime
+  // also changes on disk when a file inside it is saved (atomic write via
+  // os.CreateTemp + os.Rename), but that must never light up the parent's
+  // dot — directories are no longer marked at all (see useDirChangeWatcher's
+  // docstring for why: no way to tell this apart from a genuine external
+  // change to something else inside the same directory).
+  it("does not show a dot on the parent directory after saving a file inside it, even though the directory's own mtime also changes on disk", async () => {
+    const user = userEvent.setup();
+    let docsModified = "2026-05-20T00:00:00Z";
+    server.use(
+      http.get(`${API_BASE}/api/dirs`, ({ request }) => {
+        const url = new URL(request.url);
+        const path = url.searchParams.get("path") ?? "";
+        if (path === "") {
+          return HttpResponse.json({
+            root: "mock-root",
+            entries: [
+              { name: "docs", path: "docs", type: "dir", modified: docsModified },
+            ],
+          });
+        }
+        if (path === "docs") {
+          return HttpResponse.json({
+            root: "mock-root",
+            entries: [
+              {
+                name: "intro.md",
+                path: "docs/intro.md",
+                type: "file",
+                modified: "2026-05-20T00:00:00Z",
+              },
+            ],
+          });
+        }
+        return HttpResponse.json({ root: "mock-root", entries: [] });
+      }),
+      http.get(`${API_BASE}/api/files/*`, () =>
+        HttpResponse.json({
+          path: "docs/intro.md",
+          root: "mock-root",
+          content: "# intro\n\nmock content",
+          modified: "2026-05-20T00:00:00Z",
+          created: "2026-05-19T00:00:00Z",
+          state: "draft",
+          sha: "sha-current",
+        })
+      ),
+      http.put(`${API_BASE}/api/files/*`, async ({ request }) => {
+        const body = (await request.json()) as { content: string };
+        return HttpResponse.json({
+          path: "docs/intro.md",
+          root: "mock-root",
+          content: body.content,
+          modified: "2026-05-22T00:00:00Z",
+          created: "2026-05-19T00:00:00Z",
+          state: "draft",
+          sha: "sha-new",
+        });
+      })
+    );
+
+    const client = renderPage();
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-dir-docs")).toBeInTheDocument()
+    );
+    await user.click(screen.getByTestId("sidebar-dir-docs"));
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-file-docs/intro.md")).toBeInTheDocument()
+    );
+    await user.click(screen.getByTestId("sidebar-file-docs/intro.md"));
+    await waitFor(() =>
+      expect(screen.getByTestId("editor-active-path")).toHaveTextContent(
+        "docs/intro.md"
+      )
+    );
+
+    useOpenFiles.getState().updateActiveMarkdown("mock-root", "edited");
+    await user.click(screen.getByTestId("editor-save"));
+    await waitFor(() => {
+      const active = useOpenFiles
+        .getState()
+        .files.find((f) => f.id === useOpenFiles.getState().activeIdByRoot["mock-root"])!;
+      expect(active.serverSha).toBe("sha-new");
+    });
+
+    // The atomic write also bumps the parent directory's own on-disk mtime.
+    docsModified = "2026-05-22T00:00:00Z";
+    await client.refetchQueries({ queryKey: ["dir"] });
+    await new Promise((r) => setTimeout(r, 30));
+
+    expect(screen.queryByTestId("sidebar-changed-dot-docs")).not.toBeInTheDocument();
+  });
+
+  // #178 round 3 (codex review, adopted): a mark on a path that's been
+  // deleted/renamed away can never be cleared by opening it, so without
+  // explicit cleanup it would keep an ancestor directory's dot lit forever.
+  it("clears the mark and hides the ancestor dot when a marked file disappears from the listing", async () => {
+    const user = userEvent.setup();
+    let hasIntro = true;
+    server.use(
+      http.get(`${API_BASE}/api/dirs`, ({ request }) => {
+        const url = new URL(request.url);
+        const path = url.searchParams.get("path") ?? "";
+        if (path === "docs") {
+          return HttpResponse.json({
+            root: "mock-root",
+            entries: hasIntro
+              ? [
+                  {
+                    name: "intro.md",
+                    path: "docs/intro.md",
+                    type: "file",
+                    modified: "2026-05-20T00:00:00Z",
+                  },
+                ]
+              : [],
+          });
+        }
+        if (path === "") {
+          return HttpResponse.json({
+            root: "mock-root",
+            entries: [
+              {
+                name: "docs",
+                path: "docs",
+                type: "dir",
+                modified: "2026-05-20T00:00:00Z",
+              },
+              {
+                name: "README.md",
+                path: "README.md",
+                type: "file",
+                modified: "2026-05-18T00:00:00Z",
+              },
+            ],
+          });
+        }
+        return HttpResponse.json({ root: "mock-root", entries: [] });
+      })
+    );
+
+    const client = renderPage();
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-dir-docs")).toBeInTheDocument()
+    );
+
+    // Expand docs so its listing is tracked (establishes the baseline that
+    // includes docs/intro.md, needed to later detect its removal).
+    await user.click(screen.getByTestId("sidebar-dir-docs"));
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-file-docs/intro.md")).toBeInTheDocument()
+    );
+
+    useChangedPaths.getState().mark("mock-root", "docs/intro.md");
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-changed-dot-docs")).toBeInTheDocument()
+    );
+
+    // The file is deleted/renamed away — the next dir-listing refetch omits it.
+    hasIntro = false;
+    await client.refetchQueries({ queryKey: ["dir", "mock-root", "docs"] });
+
+    await waitFor(() => {
+      expect(
+        useChangedPaths.getState().isChanged("mock-root", "docs/intro.md")
+      ).toBe(false);
+    });
+    expect(screen.queryByTestId("sidebar-changed-dot-docs")).not.toBeInTheDocument();
+  });
 });

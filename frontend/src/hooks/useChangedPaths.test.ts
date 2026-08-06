@@ -41,17 +41,22 @@ describe("useChangedPaths", () => {
     expect(hasChangedUnder("root-a", "docs")).toBe(false);
   });
 
-  it("registerSelfWrite + consumeSelfWrite: matching signature is consumed exactly once", () => {
-    const { registerSelfWrite, consumeSelfWrite } = useChangedPaths.getState();
+  // #178 round 3 (codex review, must-fix): renamed from consumeSelfWrite
+  // (delete-on-match) to isSelfWrite (non-destructive) — a single save is
+  // now echoed through multiple independent sources (SSE `tree` event + the
+  // dir-listing poll for every open ancestor directory), so the signature
+  // must survive repeated matching instead of being consumed by the first.
+  it("isSelfWrite: a matching signature keeps matching on repeated checks", () => {
+    const { registerSelfWrite, isSelfWrite } = useChangedPaths.getState();
     registerSelfWrite("root-a", "a.md", "2026-05-22T00:00:00Z");
-    expect(consumeSelfWrite("root-a", "a.md", "2026-05-22T00:00:00Z")).toBe(true);
-    // Consumed — a second check for the exact same signature must fail now.
-    expect(consumeSelfWrite("root-a", "a.md", "2026-05-22T00:00:00Z")).toBe(false);
+    expect(isSelfWrite("root-a", "a.md", "2026-05-22T00:00:00Z")).toBe(true);
+    // Not consumed — checking again must still match.
+    expect(isSelfWrite("root-a", "a.md", "2026-05-22T00:00:00Z")).toBe(true);
   });
 
-  it("consumeSelfWrite returns false for an mtime that was never registered", () => {
-    const { consumeSelfWrite } = useChangedPaths.getState();
-    expect(consumeSelfWrite("root-a", "a.md", "2026-05-22T00:00:00Z")).toBe(false);
+  it("isSelfWrite returns false for an mtime that was never registered", () => {
+    const { isSelfWrite } = useChangedPaths.getState();
+    expect(isSelfWrite("root-a", "a.md", "2026-05-22T00:00:00Z")).toBe(false);
   });
 
   // #178 round 2 (codex review, must-fix): `:`-joining let root `a:b` + path
