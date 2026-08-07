@@ -2,7 +2,7 @@
 name: release
 description: "markdown-reviewer の新バージョンをリリースする。バージョン決定 → タグ push → GoReleaser workflow 監視 → Release/homebrew-tap/brew の検証まで一貫実行する"
 when_to_use: "リリースして、release、新バージョンを出す、タグを切って、vX.Y.Z を出して、brew に反映して"
-argument-hint: "[バージョン (例: v0.2.0) | 省略時は変更内容から semver 判定]"
+argument-hint: "[バージョン (例: v0.2.0)]"
 allowed-tools: Bash Read Grep
 ---
 
@@ -14,22 +14,32 @@ allowed-tools: Bash Read Grep
 2. GitHub Releases にアーカイブ 4 個 + `checksums.txt` を公開
 3. `rengotaku/homebrew-tap` の `Casks/markdown-reviewer.rb` を自動更新
 
-このスキルは「タグを打つ前の確認」「バージョン決定」「push 後の検証」「失敗時のリカバリ」を定義する。
+このスキルは `make release` の使い方・バージョン決定・失敗時のリカバリを定義する。工程そのものは `scripts/release.zsh` が持つ。
 
-## 1. 前提確認（すべて満たすまでタグを打たない）
+## 1. 実行
 
 ```bash
-git fetch origin
-git status --porcelain              # 空であること（main worktree で実行）
-git rev-parse main origin/main     # 一致すること（ローカル main が最新）
-gh run list --branch main --workflow=ci.yml --limit 1 --json conclusion --jq '.[0].conclusion'
-                                    # "success" であること（main の CI が緑）
+cd ~/Workspace/markdown-reviewer/main       # main worktree から実行する
+make release-preflight VERSION=vX.Y.Z       # 安全確認だけ（何も公開しない）
+make release VERSION=vX.Y.Z                 # 本番リリース
 ```
 
-- main worktree（`~/Workspace/markdown-reviewer/main`）で作業する。feature worktree からタグを打たない
-- CI が pending なら完了を待つ。failure なら**リリース中止**して原因を報告する
+🔴 **`make release` は確認プロンプトを持たない。** 検査を通った時点でタグを push し、GitHub Release と homebrew-tap への反映まで進む。「検査だけ見たい」ときは必ず `make release-preflight` を使う（`make release` を捨てバージョンで試して v99.0.0 を実際に公開してしまい、tap の revert が必要になった事故がある）。
+
+`make release` が以下を一括で行う（実体は `scripts/release.zsh`）。手順をここに二重管理せず、スクリプトを正典とする。
+
+1. **前提確認（fail-closed）**: main worktree であること / working tree が clean / ローカル main が origin/main と一致 / main の最新 CI が success / タグが未使用。どれか1つでも満たさなければタグを打たずに中断する
+2. **タグ作成 → push**（push に失敗したらローカルタグを消してリトライ可能な状態に戻す）
+3. **release workflow の完了待ち**（タグ名で run を特定するので、無関係な run を掴まない）
+4. **公開物の検証**: Release アセット5個（tar.gz ×4 + `checksums.txt`）/ homebrew-tap の Cask が当該バージョンを指す
+5. **ローカル反映**: 対象 tap だけ fast-forward → `brew upgrade --cask` → インストール版が一致することを確認
+6. **`launchctl kickstart`** → `/api/config` が応答するまでポーリング（固定 `sleep` で起動途中を叩かない）
+
+5・6 は brew / launchctl が無い環境、cask 未インストール環境では理由を出してスキップする。
 
 ## 2. バージョン決定（semver）
+
+`VERSION` は必須。自動判定はしない。
 
 ```bash
 LAST=$(git describe --tags --abbrev=0 origin/main)
@@ -42,57 +52,25 @@ git log --oneline "$LAST"..origin/main   # 前回リリース以降の変更一�
 | 機能追加（`feat:`）、後方互換の挙動追加 | minor |
 | バグ修正・ドキュメント・依存更新のみ（`fix:` / `docs:` / `chore:`） | patch |
 
+- 🔴 **現行バージョンを記憶や外部メモから引かない。必ず `git describe --tags --abbrev=0 origin/main` で実測する**
 - ユーザーがバージョンを指定した場合はそれを使う
 - major bump に相当する変更を検出した場合は、タグを打つ前にユーザーに確認する
 - v0.x 系では破壊的変更を minor に割り当ててもよい（semver の 0.x 慣例）。迷ったら候補と根拠を提示して確認する
 
-## 3. タグ push
+## 3. 途中で失敗したとき
+
+タグ push と workflow は成功したが、その後（検証 / brew / 再起動）で落ちた場合は**タグを切り直さない**。後半だけやり直す:
 
 ```bash
-git tag vX.Y.Z && git push origin vX.Y.Z
+make release-verify VERSION=vX.Y.Z
 ```
 
-## 4. workflow 監視
+workflow 自体が失敗した場合は下記のリカバリに従う。
+
+## 4. workflow 失敗時のリカバリ
 
 ```bash
 RID=$(gh run list --workflow=release.yml --limit 1 --json databaseId --jq '.[0].databaseId')
-gh run watch "$RID" --exit-status
-```
-
-`gh run watch` が使えない環境ではポーリングで代替する:
-
-```bash
-for i in $(seq 1 40); do
-  S=$(gh run view "$RID" --json status,conclusion --jq '.status + "/" + .conclusion')
-  [ "${S%%/*}" = "completed" ] && break
-  sleep 15
-done
-echo "$S"   # completed/success であること
-```
-
-## 5. 検証（完了報告の前に必ず全部実施）
-
-```bash
-# (1) Release アセット: tar.gz ×4 + checksums.txt の計 5 個
-gh release view vX.Y.Z --json assets --jq '.assets[].name'
-
-# (2) tap の Cask がこのバージョンを指している
-gh api repos/rengotaku/homebrew-tap/contents/Casks/markdown-reviewer.rb \
-  --jq '.content' | base64 -d | grep 'version "'
-
-# (3) brew で実際に入る（インストール済み環境なら upgrade）
-brew update >/dev/null && brew upgrade markdown-reviewer 2>&1 | tail -2 \
-  || brew install rengotaku/tap/markdown-reviewer
-markdown-review-server --help 2>/dev/null; mr --help | head -2
-```
-
-(3) の後、`PORT=18093 DATABASE_DSN=':memory:' REVIEW_ROOT=/tmp markdown-review-server` を起動し `curl -sf http://localhost:18093/api/help` が 200 を返すことまで見ると確実（確認後 kill する）。
-
-完了報告には「バージョン / Release URL / tap の Cask version / brew 検証結果」を含める。
-
-## 6. 失敗時のリカバリ
-
-```bash
 gh run view "$RID" --log-failed | tail -50   # まず原因を読む
 ```
 
