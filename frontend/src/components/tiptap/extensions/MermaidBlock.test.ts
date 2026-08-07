@@ -74,6 +74,29 @@ describe("MermaidBlock markdown parsing", () => {
     expect(quote?.content?.[0]?.type).toBe("mermaidBlock");
   });
 
+  it("keeps HTML-significant characters in the source intact", () => {
+    const code = 'graph TD\n    A["<b> & \\"quoted\\""] --> B';
+    editor = load("```mermaid\n" + code + "\n```\n");
+
+    expect(editor.getJSON().content?.[0]?.attrs?.code).toBe(code);
+    expect(markdownOf(editor).trim()).toBe("```mermaid\n" + code + "\n```");
+  });
+
+  it("treats a fence whose info string has extra words as mermaid", () => {
+    editor = load("```mermaid showLineNumbers\n" + DIAGRAM + "\n```\n");
+
+    expect(editor.getJSON().content?.[0]?.type).toBe("mermaidBlock");
+  });
+
+  it("parses correctly when the same editor loads several documents", () => {
+    editor = load(FENCE + "\n");
+    editor.commands.setContent("```mermaid\ngraph LR\n  X-->Y\n```\n", { emitUpdate: false });
+    editor.commands.setContent(FENCE + "\n", { emitUpdate: false });
+
+    expect(editor.getJSON().content?.[0]?.attrs?.code).toBe(DIAGRAM);
+    expect(markdownOf(editor).trim()).toBe(FENCE);
+  });
+
   it("restores the source from the data-code HTML attribute", () => {
     editor = makeEditor();
     editor.commands.setContent(
@@ -134,6 +157,14 @@ describe("MermaidBlock markdown serialization", () => {
     editor.destroy();
     editor = load(out);
     expect(editor.getJSON().content?.[0]?.attrs?.code).toBe(code);
+  });
+
+  it("keeps a blank line the author left at the end of the source", () => {
+    const md = "```mermaid\n" + DIAGRAM + "\n\n```";
+    editor = load(md + "\n");
+
+    expect(editor.getJSON().content?.[0]?.attrs?.code).toBe(DIAGRAM + "\n");
+    expect(markdownOf(editor).trim()).toBe(md);
   });
 
   it("emits an empty fence for an empty diagram instead of raw HTML", () => {

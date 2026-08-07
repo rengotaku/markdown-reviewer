@@ -27,13 +27,67 @@ interface MarkdownWriter {
  * mermaid fence (`<pre><code class="language-mermaid">…</code></pre>`), or null
  * when the `<pre>` is an ordinary code block that must stay a `codeBlock`.
  *
- * markdown-it always terminates fence content with a newline; it is dropped so
- * the stored source matches what the author typed (and what we serialize back).
+ * markdown-it always terminates fence content with exactly one newline; that
+ * one is dropped so the stored source matches what the author typed. Only one —
+ * stripping every trailing newline would silently delete blank lines the author
+ * put at the end of the diagram source.
  */
 export function mermaidCodeFromPre(pre: HTMLElement): string | null {
   const code = pre.querySelector(`code.language-${MERMAID_LANGUAGE}`);
   if (!code) return null;
-  return (code.textContent ?? "").replace(/\n+$/, "");
+  return (code.textContent ?? "").replace(/\n$/, "");
+}
+
+/** Fence token shape and the markdown-it surface the parse hook below needs. */
+interface FenceToken {
+  info: string;
+  content: string;
+}
+type FenceRule = (
+  tokens: FenceToken[],
+  idx: number,
+  options: unknown,
+  env: unknown,
+  self: unknown
+) => string;
+interface MarkdownItLike {
+  renderer: { rules: Record<string, FenceRule | undefined> };
+  utils: { escapeHtml: (input: string) => string };
+  [PATCH_FLAG]?: boolean;
+}
+
+/** Marks an already-patched markdown-it instance (parse.setup runs per parse). */
+const PATCH_FLAG = "__mermaidFencePatched";
+
+/** The language of a fence is the first word of its info string. */
+function fenceLanguage(info: string): string {
+  return info.trim().split(/\s+/)[0] ?? "";
+}
+
+/**
+ * patchFenceRenderer makes markdown-it emit mermaid fences directly as the
+ * node's HTML shape, carrying the source in `data-code`.
+ *
+ * Going through `<pre><code class="language-mermaid">` would work too, but
+ * tiptap-markdown wraps the default fence renderer in a "strip the last
+ * newline" helper, which eats a blank line the author left at the end of the
+ * diagram source — the file would then lose that line on the next save. Reading
+ * `token.content` here keeps the source byte-exact apart from markdown-it's own
+ * single terminating newline.
+ */
+function patchFenceRenderer(md: MarkdownItLike): void {
+  if (md[PATCH_FLAG]) return;
+  md[PATCH_FLAG] = true;
+
+  const previous = md.renderer.rules.fence;
+  md.renderer.rules.fence = (tokens, idx, options, env, self) => {
+    const token = tokens[idx];
+    if (fenceLanguage(token.info) === MERMAID_LANGUAGE) {
+      const code = token.content.replace(/\n$/, "");
+      return `<div data-type="mermaid-block" data-code="${md.utils.escapeHtml(code)}"></div>`;
+    }
+    return previous ? previous(tokens, idx, options, env, self) : "";
+  };
 }
 
 /**
@@ -68,9 +122,11 @@ export const MermaidBlock = Node.create({
     return [
       { tag: 'div[data-type="mermaid-block"]' },
       {
-        // Claim mermaid fences before StarterKit's CodeBlock (whose `pre` rule
-        // sits at the default priority 50). getAttrs returns false for every
-        // other `<pre>`, so ordinary code blocks fall through to codeBlock.
+        // Mermaid fences arriving as rendered HTML (pasted from a browser, or
+        // any producer that isn't our own markdown-it hook). Claimed before
+        // StarterKit's CodeBlock, whose `pre` rule sits at the default priority
+        // 50; getAttrs returns false for every other `<pre>`, so ordinary code
+        // blocks still fall through to codeBlock.
         tag: "pre",
         priority: 60,
         getAttrs: (element) => {
@@ -93,26 +149,29 @@ export const MermaidBlock = Node.create({
    * Markdown bridge (issue #189). Without it tiptap-markdown falls back to its
    * generic HTML-node handling and writes `<div data-type="mermaid-block" …>`
    * into the saved file — invalid Markdown that also loses the source on
-   * reload. Parsing needs no markdown-it setup: the fence is already rendered
-   * as `<pre><code class="language-mermaid">`, which the parse rule above
-   * turns into this node.
+   * reload. On the way in, `parse.setup` teaches markdown-it to render mermaid
+   * fences as this node's HTML shape (see patchFenceRenderer).
    */
   addStorage() {
     return {
       markdown: {
         serialize(state: MarkdownWriter, node: PmNode) {
-          const code = String(node.attrs.code ?? "").replace(/\n+$/, "");
+          const code = String(node.attrs.code ?? "");
           const fence = fenceFor(code);
           state.write(`${fence}${MERMAID_LANGUAGE}\n`);
           // escape=false keeps the source literal; `text` still re-applies the
           // active block delimiter per line (blockquote "> ", list indent, …).
-          if (code) state.text(code, false);
-          state.ensureNewLine();
+          // The appended newline terminates the last source line — appending it
+          // unconditionally (rather than ensureNewLine) is what keeps a trailing
+          // blank line in the source from collapsing on the way out.
+          if (code) state.text(`${code}\n`, false);
           state.write(fence);
           state.closeBlock(node);
         },
         parse: {
-          // handled by the `pre` parse rule above
+          setup(this: unknown, markdownit: MarkdownItLike) {
+            patchFenceRenderer(markdownit);
+          },
         },
       },
     };
