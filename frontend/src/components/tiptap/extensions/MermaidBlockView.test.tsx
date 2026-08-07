@@ -147,6 +147,29 @@ describe("MermaidBlockView chart / source toggle", () => {
     expect(screen.getByLabelText("show mermaid source")).toBeInTheDocument();
   });
 
+  it("ignores a superseded render that resolves late", async () => {
+    // mermaid renders are async, so a slow render of the old source can resolve
+    // after a newer one — the stale guard must keep it from overwriting the DOM.
+    const pending: Array<(value: { svg: string }) => void> = [];
+    renderMock.mockImplementation(
+      () => new Promise<{ svg: string }>((resolve) => pending.push(resolve))
+    );
+
+    editor = await mount();
+    await waitFor(() => expect(pending).toHaveLength(1));
+
+    editor.chain().setNodeSelection(0).updateAttributes("mermaidBlock", { code: "graph LR\n  X-->Y" }).run();
+    await waitFor(() => expect(pending).toHaveLength(2));
+
+    pending[1]({ svg: '<svg id="second"></svg>' });
+    await waitFor(() => expect(pmRoot().querySelector("svg#second")).not.toBeNull());
+
+    pending[0]({ svg: '<svg id="first"></svg>' });
+    await waitFor(() => expect(renderMock).toHaveBeenCalledTimes(2));
+    expect(pmRoot().querySelector("svg#first")).toBeNull();
+    expect(pmRoot().querySelector("svg#second")).not.toBeNull();
+  });
+
   it("labels an empty diagram instead of rendering it", async () => {
     editor = await mount("");
 

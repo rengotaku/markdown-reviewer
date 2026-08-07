@@ -57,17 +57,16 @@ export function MermaidBlockView({ node, updateAttributes }: NodeViewProps) {
   const [mode, setMode] = useState<ViewMode>("diagram");
   const [draft, setDraft] = useState(node.attrs.code as string);
   const containerRef = useRef<HTMLDivElement>(null);
-  /**
-   * Bumped on every render request. Async mermaid renders can finish out of
-   * order (fast edits, or the very first call that also loads the library), so
-   * each one checks it still owns the latest token before touching the DOM.
-   */
-  const renderTokenRef = useRef(0);
 
-  const renderDiagram = useCallback(async () => {
+  /**
+   * Renders the current source into the container. Async mermaid renders can
+   * finish out of order (fast edits, or the first call that also loads the
+   * library) or after teardown, so the caller passes an `isStale` probe that
+   * every await point re-checks before touching the DOM.
+   */
+  const renderDiagram = useCallback(async (isStale: () => boolean) => {
     const el = containerRef.current;
     if (!el || mode === "source") return;
-    const token = ++renderTokenRef.current;
 
     const code = node.attrs.code as string;
     if (!code.trim()) {
@@ -79,21 +78,23 @@ export function MermaidBlockView({ node, updateAttributes }: NodeViewProps) {
     try {
       const mermaid = await loadMermaid();
       const { svg } = await mermaid.render(id, code);
-      if (token !== renderTokenRef.current) return;
+      if (isStale()) return;
       el.innerHTML = svg;
     } catch (err) {
-      if (token !== renderTokenRef.current) return;
+      if (isStale()) return;
       const detail = err instanceof Error ? err.message : String(err);
       showMessage(el, "pre", detail, "color: #d32f2f; font-size: 0.85em; white-space: pre-wrap;");
     }
   }, [node.attrs.code, mode]);
 
   useEffect(() => {
-    renderDiagram();
-    // Abandon any in-flight render when the effect is torn down (unmount or a
-    // fresh source), so a late resolve can't write into a detached container.
+    // Each effect run owns its own flag; tearing the run down (unmount, or a
+    // fresh source) marks its in-flight render stale so a late resolve can't
+    // write into a container that has moved on.
+    let stale = false;
+    renderDiagram(() => stale);
     return () => {
-      renderTokenRef.current++;
+      stale = true;
     };
   }, [renderDiagram]);
 
