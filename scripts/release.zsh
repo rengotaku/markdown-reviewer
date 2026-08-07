@@ -66,6 +66,22 @@ require() {
   done
 }
 
+# version_gt A B — true when bare version A is strictly greater than B.
+# Compared field by field rather than with `sort -V` so this doesn't depend on
+# which sort implementation is on PATH. Both arguments are already known to
+# match X.Y.Z (validated above).
+version_gt() {
+  local -a a b
+  a=(${(s:.:)1})
+  b=(${(s:.:)2})
+  local i
+  for i in 1 2 3; do
+    (( a[i] > b[i] )) && return 0
+    (( a[i] < b[i] )) && return 1
+  done
+  return 1
+}
+
 # ---------------------------------------------------------------- preflight
 
 preflight() {
@@ -100,6 +116,20 @@ preflight() {
     1) : ;;
     *) die "cannot check tag $VERSION (git rev-parse rc=$rc)" ;;
   esac
+
+  # "The tag is unused" is not the same as "the version is sane". A typo or a
+  # half-remembered version number (v0.1.1 while shipping 0.9.x) passes the
+  # uniqueness check, and since this publishes without a prompt it would roll
+  # the tap *backwards* for everyone. Require a real increase.
+  local latest
+  latest=$(git describe --tags --abbrev=0 origin/main) || latest=""
+  if [[ -z "$latest" ]]; then
+    note "no existing tag on origin/main — skipping the monotonicity check"
+  elif version_gt "${VERSION#v}" "${latest#v}"; then
+    note "version: $latest -> $VERSION"
+  else
+    die "VERSION ($VERSION) is not newer than the latest tag on origin/main ($latest)"
+  fi
 
   # Match the run to this exact commit. Taking "the newest run on main" would
   # accept the *previous* commit's green run whenever the push that produced
