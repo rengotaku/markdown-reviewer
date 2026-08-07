@@ -75,6 +75,61 @@ function renderPage() {
   );
 }
 
+/**
+ * Installs both stat endpoints against one shared call log.
+ *
+ * The all-tabs sweep now goes through POST /api/stat/batch (#174) while the
+ * per-active-file effect still uses GET /api/stat/*path, so a test asking
+ * "was this path checked?" has to watch both. Paths reported by `failing`
+ * come back as a 404 / a per-item not_found respectively — the two shapes the
+ * same "this tab's file is gone" signal takes on each endpoint.
+ */
+function installStatHandlers(
+  statPaths: string[],
+  opts: {
+    failing?: () => string[];
+    beforeBatchRespond?: (paths: string[]) => Promise<void> | void;
+  } = {}
+) {
+  const isFailing = (path: string) => (opts.failing?.() ?? []).includes(path);
+  const okBody = (path: string) => ({
+    path,
+    root: "mock-root",
+    modified: "2026-05-20T00:00:00Z",
+    created: "2026-05-19T00:00:00Z",
+    state: "draft",
+    hasOpenComments: false,
+  });
+
+  server.use(
+    http.get(`${API_BASE}/api/stat/*`, ({ request }) => {
+      const path = new URL(request.url).pathname.replace(/^\/api\/stat\//, "");
+      statPaths.push(path);
+      if (isFailing(path)) {
+        return HttpResponse.json({ error: "not found" }, { status: 404 });
+      }
+      return HttpResponse.json(okBody(path));
+    }),
+    http.post(`${API_BASE}/api/stat/batch`, async ({ request }) => {
+      const body = (await request.json()) as {
+        files: { root: string; path: string }[];
+      };
+      const paths = body.files.map((f) => f.path);
+      // Logged before any stall so a test can observe the in-flight request,
+      // matching how the GET handler behaved.
+      statPaths.push(...paths);
+      await opts.beforeBatchRespond?.(paths);
+      return HttpResponse.json({
+        results: body.files.map((f) =>
+          isFailing(f.path)
+            ? { root: f.root, path: f.path, hasOpenComments: false, error: "not_found" }
+            : { root: f.root, path: f.path, state: "draft", hasOpenComments: false }
+        ),
+      });
+    })
+  );
+}
+
 describe("EditorPage SSE-driven review sweep (#114)", () => {
   beforeEach(() => {
     localStorage.clear();
@@ -91,21 +146,7 @@ describe("EditorPage SSE-driven review sweep (#114)", () => {
 
   it("does not sweep statFile for a comments event on a file with no open tab", async () => {
     const statPaths: string[] = [];
-    server.use(
-      http.get(`${API_BASE}/api/stat/*`, ({ request }) => {
-        const url = new URL(request.url);
-        const path = url.pathname.replace(/^\/api\/stat\//, "");
-        statPaths.push(path);
-        return HttpResponse.json({
-          path,
-          root: "mock-root",
-          modified: "2026-05-20T00:00:00Z",
-          created: "2026-05-19T00:00:00Z",
-          state: "draft",
-          hasOpenComments: false,
-        });
-      })
-    );
+    installStatHandlers(statPaths);
 
     useOpenFiles.setState({
       files: [makeOpenFile({ id: "a", path: "README.md" })],
@@ -133,21 +174,7 @@ describe("EditorPage SSE-driven review sweep (#114)", () => {
 
   it("sweeps statFile for all open tabs when a comments event names an open tab", async () => {
     const statPaths: string[] = [];
-    server.use(
-      http.get(`${API_BASE}/api/stat/*`, ({ request }) => {
-        const url = new URL(request.url);
-        const path = url.pathname.replace(/^\/api\/stat\//, "");
-        statPaths.push(path);
-        return HttpResponse.json({
-          path,
-          root: "mock-root",
-          modified: "2026-05-20T00:00:00Z",
-          created: "2026-05-19T00:00:00Z",
-          state: "draft",
-          hasOpenComments: false,
-        });
-      })
-    );
+    installStatHandlers(statPaths);
 
     useOpenFiles.setState({
       files: [
@@ -186,21 +213,7 @@ describe("EditorPage SSE-driven review sweep (#114)", () => {
     // otherwise every unrelated file edit would re-trigger a full tab sweep,
     // which is exactly the request storm #114 removed.
     const statPaths: string[] = [];
-    server.use(
-      http.get(`${API_BASE}/api/stat/*`, ({ request }) => {
-        const url = new URL(request.url);
-        const path = url.pathname.replace(/^\/api\/stat\//, "");
-        statPaths.push(path);
-        return HttpResponse.json({
-          path,
-          root: "mock-root",
-          modified: "2026-05-20T00:00:00Z",
-          created: "2026-05-19T00:00:00Z",
-          state: "draft",
-          hasOpenComments: false,
-        });
-      })
-    );
+    installStatHandlers(statPaths);
 
     useOpenFiles.setState({
       files: [
@@ -235,24 +248,9 @@ describe("EditorPage SSE-driven review sweep (#114)", () => {
   it("stops calling statFile for a tab once it 404s, and resumes once activated", async () => {
     let introShouldFail = true;
     const statPaths: string[] = [];
-    server.use(
-      http.get(`${API_BASE}/api/stat/*`, ({ request }) => {
-        const url = new URL(request.url);
-        const path = url.pathname.replace(/^\/api\/stat\//, "");
-        statPaths.push(path);
-        if (path === "docs/intro.md" && introShouldFail) {
-          return HttpResponse.json({ error: "not found" }, { status: 404 });
-        }
-        return HttpResponse.json({
-          path,
-          root: "mock-root",
-          modified: "2026-05-20T00:00:00Z",
-          created: "2026-05-19T00:00:00Z",
-          state: "draft",
-          hasOpenComments: false,
-        });
-      })
-    );
+    installStatHandlers(statPaths, {
+      failing: () => (introShouldFail ? ["docs/intro.md"] : []),
+    });
 
     useOpenFiles.setState({
       files: [
@@ -300,24 +298,9 @@ describe("EditorPage SSE-driven review sweep (#114)", () => {
   it("resumes checking a stat-404'd tab once a matching file SSE event arrives", async () => {
     let introShouldFail = true;
     const statPaths: string[] = [];
-    server.use(
-      http.get(`${API_BASE}/api/stat/*`, ({ request }) => {
-        const url = new URL(request.url);
-        const path = url.pathname.replace(/^\/api\/stat\//, "");
-        statPaths.push(path);
-        if (path === "docs/intro.md" && introShouldFail) {
-          return HttpResponse.json({ error: "not found" }, { status: 404 });
-        }
-        return HttpResponse.json({
-          path,
-          root: "mock-root",
-          modified: "2026-05-20T00:00:00Z",
-          created: "2026-05-19T00:00:00Z",
-          state: "draft",
-          hasOpenComments: false,
-        });
-      })
-    );
+    installStatHandlers(statPaths, {
+      failing: () => (introShouldFail ? ["docs/intro.md"] : []),
+    });
 
     useOpenFiles.setState({
       files: [
@@ -364,24 +347,9 @@ describe("EditorPage SSE-driven review sweep (#114)", () => {
   it("clears a closed tab from the missing set so a future re-open gets a fresh check (HIGH-1)", async () => {
     let introShouldFail = true;
     const statPaths: string[] = [];
-    server.use(
-      http.get(`${API_BASE}/api/stat/*`, ({ request }) => {
-        const url = new URL(request.url);
-        const path = url.pathname.replace(/^\/api\/stat\//, "");
-        statPaths.push(path);
-        if (path === "docs/intro.md" && introShouldFail) {
-          return HttpResponse.json({ error: "not found" }, { status: 404 });
-        }
-        return HttpResponse.json({
-          path,
-          root: "mock-root",
-          modified: "2026-05-20T00:00:00Z",
-          created: "2026-05-19T00:00:00Z",
-          state: "draft",
-          hasOpenComments: false,
-        });
-      })
-    );
+    installStatHandlers(statPaths, {
+      failing: () => (introShouldFail ? ["docs/intro.md"] : []),
+    });
 
     useOpenFiles.setState({
       files: [
@@ -455,7 +423,10 @@ describe("EditorPage SSE-driven review sweep (#114)", () => {
     // fires once as soon as both tabs are open — that single call is what
     // gets stalled here; no extra SSE event is emitted before activation, so
     // there is exactly one in-flight docs/intro.md request to reason about.
-    let introCallCount = 0;
+    let introBatchCount = 0;
+    // The stalled sweep must resolve not_found; the activation effect's own
+    // GET must not, so the flag is cleared before releasing the gate.
+    let introSweepShouldFail = true;
     // Wrapped in an object (not a bare `let`) so TS doesn't narrow the
     // reassigned-inside-a-closure variable back to its initial type.
     const release: { current: () => void } = { current: () => {} };
@@ -464,30 +435,16 @@ describe("EditorPage SSE-driven review sweep (#114)", () => {
     });
     const statPaths: string[] = [];
 
-    server.use(
-      http.get(`${API_BASE}/api/stat/*`, async ({ request }) => {
-        const url = new URL(request.url);
-        const path = url.pathname.replace(/^\/api\/stat\//, "");
-        statPaths.push(path);
-        if (path === "docs/intro.md") {
-          introCallCount += 1;
-          if (introCallCount === 1) {
-            // The mount-time sweep's request — stall it so the activation
-            // effect's request (below) resolves first.
-            await firstIntroCallGate;
-            return HttpResponse.json({ error: "not found" }, { status: 404 });
-          }
-        }
-        return HttpResponse.json({
-          path,
-          root: "mock-root",
-          modified: "2026-05-20T00:00:00Z",
-          created: "2026-05-19T00:00:00Z",
-          state: "draft",
-          hasOpenComments: false,
-        });
-      })
-    );
+    // The sweep is the batched call now (#174), so that is what gets stalled;
+    // the activation effect's own GET must still resolve immediately.
+    installStatHandlers(statPaths, {
+      failing: () => (introSweepShouldFail ? ["docs/intro.md"] : []),
+      beforeBatchRespond: async (paths) => {
+        if (!paths.includes("docs/intro.md")) return;
+        introBatchCount += 1;
+        if (introBatchCount === 1) await firstIntroCallGate;
+      },
+    });
 
     useOpenFiles.setState({
       files: [
@@ -501,22 +458,26 @@ describe("EditorPage SSE-driven review sweep (#114)", () => {
     await waitFor(() =>
       expect(screen.getByTestId("editor-active-path")).toHaveTextContent("README.md")
     );
-    // The mount-time sweep has already stalled on its docs/intro.md call.
-    await waitFor(() => expect(introCallCount).toBe(1));
+    // The mount-time sweep has already stalled on its docs/intro.md entry.
+    await waitFor(() => expect(introBatchCount).toBe(1));
 
     const instance = MockEventSource.instances[0];
 
-    // Activate docs/intro.md while the sweep's request for it is still in
-    // flight — this fires the per-active-file effect's own statFile call
-    // (the 2nd call), which resolves immediately as success.
+    // Activate docs/intro.md while the sweep's batch is still in flight —
+    // this fires the per-active-file effect's own statFile GET, which
+    // resolves immediately as success.
+    introSweepShouldFail = false;
     useOpenFiles.getState().setActive("mock-root", "b");
     await waitFor(() =>
       expect(screen.getByTestId("editor-active-path")).toHaveTextContent("docs/intro.md")
     );
-    await waitFor(() => expect(introCallCount).toBe(2));
+    await waitFor(() =>
+      expect(statPaths.filter((p) => p === "docs/intro.md").length).toBeGreaterThan(1)
+    );
 
-    // Now release the stalled mount-sweep request — it resolves 404 *after*
-    // the activation effect already established the tab is fine.
+    // Now release the stalled sweep — the guard must stop its late
+    // not_found from undoing the "this tab is fine" state the activation
+    // effect already established.
     release.current();
     // Give the sweep's rejected promise a chance to settle and (if the
     // race guard were absent) re-add docs/intro.md to the missing set.

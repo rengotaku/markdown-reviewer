@@ -75,6 +75,7 @@ func (h *Handler) Routes(staticHandler http.Handler) http.Handler {
 		api.GET("/files/*path", h.ReadFile)
 		api.PUT("/files/*path", h.WriteFile)
 		api.GET("/stat/*path", h.StatFile)
+		api.POST("/stat/batch", h.StatFileBatch)
 		api.GET("/comments/*path", h.ListComments)
 		api.POST("/comments/*path", h.CreateComment)
 		api.PATCH("/comments/*path", h.UpdateComment)
