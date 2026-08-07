@@ -9,11 +9,18 @@
 # routinely raced the server's startup.
 #
 # Usage:
-#   scripts/release.zsh release  vX.Y.Z    # preflight + tag + everything below
-#   scripts/release.zsh verify   vX.Y.Z    # publish checks + brew + kickstart only
+#   scripts/release.zsh release   vX.Y.Z   # preflight + tag + everything below
+#   scripts/release.zsh preflight vX.Y.Z   # the safety checks only — publishes nothing
+#   scripts/release.zsh verify    vX.Y.Z   # publish checks + brew + kickstart only
 #
-# `verify` runs against an already-published version, which is what makes this
-# script testable without cutting a throwaway release.
+# `release` publishes for real the moment its checks pass — there is no prompt,
+# because the point is to stop babysitting it. Use `preflight` to see whether a
+# release *would* go out. (Written after running `release` with a throwaway
+# version to "just watch the checks", which published v99.0.0 to the tap for
+# real and had to be reverted.)
+#
+# `preflight` and `verify` both run against real state without publishing, which
+# is what makes this script testable without cutting a throwaway release.
 
 set -e
 set -u
@@ -24,20 +31,28 @@ VERSION="${2:-}"
 REPO="rengotaku/markdown-reviewer"
 TAP_REPO="rengotaku/homebrew-tap"
 CASK_PATH="Casks/markdown-reviewer.rb"
-CASK_NAME="markdown-reviewer"
-LAUNCHD_LABEL="com.user.markdown-reviewer"
+CASK_NAME="${CASK_NAME:-markdown-reviewer}"
+# Matches internal/launchd's DefaultLabel. Override for a non-default install.
+LAUNCHD_LABEL="${LAUNCHD_LABEL:-com.user.markdown-reviewer}"
 # Matches internal/launchd's DefaultPort. Override for a non-default install.
 HEALTH_PORT="${HEALTH_PORT:-15174}"
-# GoReleaser publishes 4 archives plus checksums.txt.
-EXPECTED_ASSETS=5
 WORKFLOW="release.yml"
+# Newest run id seen before the tag push; set by push_tag, read by
+# watch_workflow to reject a stale run left over from a re-pushed tag.
+LAST_RUN_ID=0
+# Set by restart_service when it actually restarted something, so the health
+# check knows whether anything is expected to come up.
+SERVICE_RESTARTED=0
 
 die() { print -u2 -- "release: $*"; exit 1; }
 step() { print -- "\n==> $*"; }
 note() { print -- "    $*"; }
 
-[[ -n "$MODE" ]] || die "mode required (release|verify)"
-[[ "$MODE" == "release" || "$MODE" == "verify" ]] || die "unknown mode '$MODE' (release|verify)"
+[[ -n "$MODE" ]] || die "mode required (release|preflight|verify)"
+case "$MODE" in
+  release|preflight|verify) : ;;
+  *) die "unknown mode '$MODE' (release|preflight|verify)" ;;
+esac
 [[ -n "$VERSION" ]] || die "VERSION required, e.g. VERSION=v1.2.3"
 [[ "$VERSION" =~ '^v[0-9]+\.[0-9]+\.[0-9]+$' ]] \
   || die "VERSION must look like vX.Y.Z (got '$VERSION')"
@@ -86,14 +101,20 @@ preflight() {
     *) die "cannot check tag $VERSION (git rev-parse rc=$rc)" ;;
   esac
 
+  # Match the run to this exact commit. Taking "the newest run on main" would
+  # accept the *previous* commit's green run whenever the push that produced
+  # HEAD hasn't registered its run yet — i.e. it would wave through the one
+  # case the check exists to catch.
   local ci
-  ci=$(gh run list --branch main --workflow=ci.yml --limit 1 \
-        --json conclusion --jq '.[0].conclusion') \
+  ci=$(gh run list --branch main --workflow=ci.yml --limit 20 \
+        --json headSha,status,conclusion \
+        --jq "[.[] | select(.headSha == \"$remote_sha\")][0] | if . == null then \"\" else .status + \"/\" + (.conclusion // \"\") end") \
     || die "cannot read main's CI status"
   case "$ci" in
-    success) note "main CI: success" ;;
-    "")      die "no CI run found for main; refusing to release blind" ;;
-    *)       die "main CI is '$ci' (needs success). Wait for it, or fix main first." ;;
+    completed/success) note "main CI: success for $remote_sha" ;;
+    "")                die "no CI run found for main@$remote_sha; refusing to release blind. Wait for CI to start." ;;
+    completed/*)       die "main CI for $remote_sha is '${ci#completed/}' (needs success). Fix main first." ;;
+    *)                 die "main CI for $remote_sha is still ${ci%%/*}. Wait for it to finish." ;;
   esac
 
   note "main is clean, in sync, and green — releasing $VERSION"
@@ -103,6 +124,13 @@ preflight() {
 
 push_tag() {
   step "Tagging $VERSION"
+  # Remember the newest existing run so watch_workflow can require a *newer*
+  # one. Without this, re-pushing a deleted tag after a failed release (the
+  # documented recovery) would immediately latch onto that tag's old failed
+  # run and abort before the new one is even queued.
+  LAST_RUN_ID=$(gh run list --workflow="$WORKFLOW" --limit 1 \
+                 --json databaseId --jq '.[0].databaseId // 0') \
+    || die "cannot list workflow runs"
   git tag "$VERSION" || die "git tag failed"
   # Roll the local tag back if the push fails, so a retry isn't blocked by a
   # tag that only exists on this machine.
@@ -116,19 +144,20 @@ push_tag() {
 watch_workflow() {
   step "Waiting for the release workflow"
 
-  # The run appears a beat after the tag push; poll for it rather than assuming
-  # the newest run is ours.
+  # The run appears a beat after the tag push, so poll for it — and require an
+  # id newer than the one recorded before pushing, so a stale run for a
+  # re-pushed tag can't be mistaken for ours.
   local run_id="" i
   for i in {1..20}; do
-    run_id=$(gh run list --workflow="$WORKFLOW" --limit 10 \
+    run_id=$(gh run list --workflow="$WORKFLOW" --limit 20 \
               --json databaseId,headBranch \
-              --jq "[.[] | select(.headBranch == \"$VERSION\")][0].databaseId") \
+              --jq "[.[] | select(.headBranch == \"$VERSION\") | select(.databaseId > $LAST_RUN_ID)][0].databaseId") \
       || die "cannot list workflow runs"
     [[ -n "$run_id" && "$run_id" != "null" ]] && break
     sleep 3
   done
   [[ -n "$run_id" && "$run_id" != "null" ]] \
-    || die "no $WORKFLOW run found for $VERSION after 60s"
+    || die "no new $WORKFLOW run found for $VERSION after 60s (last seen run before the push: $LAST_RUN_ID)"
 
   note "run $run_id — $(gh run view "$run_id" --json url --jq .url)"
   gh run watch "$run_id" --exit-status \
@@ -142,13 +171,35 @@ verify_release() {
   step "Verifying the published release"
   require gh base64 grep
 
-  local assets count
+  # GoReleaser publishes one archive per target plus checksums.txt.
+  local -a EXPECTED_ASSETS
+  local plain="${VERSION#v}" os arch
+  for os in darwin linux; do
+    for arch in amd64 arm64; do
+      EXPECTED_ASSETS+=("markdown-reviewer_${plain}_${os}_${arch}.tar.gz")
+    done
+  done
+  EXPECTED_ASSETS+=("checksums.txt")
+
+  local assets
   assets=$(gh release view "$VERSION" --repo "$REPO" --json assets --jq '.assets[].name') \
     || die "release $VERSION not found"
-  count=$(print -- "$assets" | grep -c . || true)
-  [[ "$count" -eq "$EXPECTED_ASSETS" ]] \
-    || die "expected $EXPECTED_ASSETS assets, found $count:\n$assets"
-  note "assets: $count"
+
+  # Check names, not just the count: a goreleaser config change that drops
+  # darwin/arm64 while adding some other file still totals five, and a
+  # count-only check would call that release verified.
+  local want missing="" rc
+  for want in $EXPECTED_ASSETS; do
+    rc=0
+    print -r -- "$assets" | grep -qxF -- "$want" || rc=$?
+    case $rc in
+      0) : ;;
+      1) missing="$missing\n  - $want" ;;
+      *) die "cannot inspect the asset list (grep rc=$rc)" ;;
+    esac
+  done
+  [[ -z "$missing" ]] || die "release $VERSION is missing expected assets:$missing\ngot:\n$assets"
+  note "assets: all ${#EXPECTED_ASSETS} expected files present"
 
   local cask
   cask=$(gh api "repos/$TAP_REPO/contents/$CASK_PATH" --jq '.content' | base64 -d) \
@@ -209,6 +260,7 @@ restart_service() {
     return 0
   fi
   launchctl kickstart -k "$target" || die "launchctl kickstart failed"
+  SERVICE_RESTARTED=1
   note "kickstarted $LAUNCHD_LABEL"
 }
 
@@ -217,8 +269,16 @@ restart_service() {
 # or wastes time being conservative.
 wait_until_healthy() {
   step "Waiting for the service to answer"
-  if ! command -v launchctl >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1; then
-    note "no launchctl/curl — skipping health check"
+  # Gate on "did we restart something", not on "does launchctl exist": on a mac
+  # without the cask installed (or with the agent unloaded) both launchctl and
+  # curl are present, so probing anyway would spend 60s failing on a service
+  # nobody started.
+  if (( ! SERVICE_RESTARTED )); then
+    note "no service was restarted — skipping health check"
+    return 0
+  fi
+  if ! command -v curl >/dev/null 2>&1; then
+    note "curl not found — skipping health check"
     return 0
   fi
   local url="http://localhost:$HEALTH_PORT/api/config" i
@@ -233,6 +293,13 @@ wait_until_healthy() {
 }
 
 # --------------------------------------------------------------------- main
+
+if [[ "$MODE" == "preflight" ]]; then
+  preflight
+  step "Preflight passed — nothing published"
+  print -- "    run 'make release VERSION=$VERSION' to publish for real"
+  exit 0
+fi
 
 if [[ "$MODE" == "release" ]]; then
   preflight

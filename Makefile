@@ -2,7 +2,7 @@
 	lint lint-frontend lint-fix format format-check \
 	test test-frontend test-frontend-coverage test-cov test-cov-check test-watch coverage \
 	migrate migrate-diff migrate-apply migrate-hash \
-	check ci clean help release release-verify
+	check ci clean help release release-preflight release-verify
 
 .DEFAULT_GOAL := help
 
@@ -158,6 +158,11 @@ clean:
 release:
 	@[ -n "$(VERSION)" ] || { echo "make release VERSION=vX.Y.Z"; exit 1; }
 	./scripts/release.zsh release $(VERSION)
+
+## release-preflight: Run only the release safety checks for VERSION (publishes nothing)
+release-preflight:
+	@[ -n "$(VERSION)" ] || { echo "make release-preflight VERSION=vX.Y.Z"; exit 1; }
+	./scripts/release.zsh preflight $(VERSION)
 
 ## release-verify: Re-run the post-publish half of a release (verify -> brew -> restart) for VERSION
 release-verify:

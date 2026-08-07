@@ -20,8 +20,11 @@ allowed-tools: Bash Read Grep
 
 ```bash
 cd ~/Workspace/markdown-reviewer/main       # main worktree から実行する
-make release VERSION=vX.Y.Z
+make release-preflight VERSION=vX.Y.Z       # 安全確認だけ（何も公開しない）
+make release VERSION=vX.Y.Z                 # 本番リリース
 ```
+
+🔴 **`make release` は確認プロンプトを持たない。** 検査を通った時点でタグを push し、GitHub Release と homebrew-tap への反映まで進む。「検査だけ見たい」ときは必ず `make release-preflight` を使う（`make release` を捨てバージョンで試して v99.0.0 を実際に公開してしまい、tap の revert が必要になった事故がある）。
 
 `make release` が以下を一括で行う（実体は `scripts/release.zsh`）。手順をここに二重管理せず、スクリプトを正典とする。
 
