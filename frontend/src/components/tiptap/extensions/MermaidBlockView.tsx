@@ -3,53 +3,124 @@ import { NodeViewWrapper } from "@tiptap/react";
 import type { NodeViewProps } from "@tiptap/react";
 import Box from "@mui/material/Box";
 import IconButton from "@mui/material/IconButton";
-import EditIcon from "@mui/icons-material/Edit";
-import CheckIcon from "@mui/icons-material/Check";
-import mermaid from "mermaid";
+import Tooltip from "@mui/material/Tooltip";
+import CodeIcon from "@mui/icons-material/Code";
+import AccountTreeIcon from "@mui/icons-material/AccountTree";
 
-mermaid.initialize({ startOnLoad: false, theme: "default" });
+type MermaidApi = typeof import("mermaid").default;
+
+/** Which face of the block is showing: the rendered diagram or its source. */
+type ViewMode = "diagram" | "source";
+
+/** Bounds for the auto-sized source textarea (in text rows). */
+const MIN_SOURCE_ROWS = 4;
+const MAX_SOURCE_ROWS = 40;
+
+let mermaidPromise: Promise<MermaidApi> | null = null;
+
+/**
+ * loadMermaid imports mermaid on first use and initializes it once. mermaid
+ * (plus its diagram bundles) is ~1MB, so keeping it out of the entry chunk
+ * matters for files that contain no diagram at all (issue #189).
+ */
+function loadMermaid(): Promise<MermaidApi> {
+  if (!mermaidPromise) {
+    mermaidPromise = import("mermaid").then(({ default: mermaid }) => {
+      mermaid.initialize({
+        startOnLoad: false,
+        theme: "default",
+        // We surface parse errors ourselves; without this mermaid also injects
+        // its own error diagram into the page on a failed render.
+        suppressErrorRendering: true,
+      });
+      return mermaid;
+    });
+  }
+  return mermaidPromise;
+}
+
+/** Replaces the container's content with a single styled text node. */
+function showMessage(el: HTMLElement, tag: "p" | "pre", text: string, css: string) {
+  const node = document.createElement(tag);
+  node.setAttribute("style", css);
+  node.textContent = text;
+  el.replaceChildren(node);
+}
 
 export function MermaidBlockView({ node, updateAttributes }: NodeViewProps) {
-  const [isEditing, setIsEditing] = useState(false);
-  const [editCode, setEditCode] = useState(node.attrs.code as string);
+  /**
+   * The block shows either the rendered chart or its mermaid source, toggled
+   * from the button in the corner. The source face doubles as the editor —
+   * edits are committed on blur, on Mod-Enter, and when switching back to the
+   * chart, so toggling never silently drops what was typed.
+   */
+  const [mode, setMode] = useState<ViewMode>("diagram");
+  const [draft, setDraft] = useState(node.attrs.code as string);
   const containerRef = useRef<HTMLDivElement>(null);
+  /**
+   * Bumped on every render request. Async mermaid renders can finish out of
+   * order (fast edits, or the very first call that also loads the library), so
+   * each one checks it still owns the latest token before touching the DOM.
+   */
+  const renderTokenRef = useRef(0);
 
   const renderDiagram = useCallback(async () => {
     const el = containerRef.current;
-    if (!el || isEditing) return;
+    if (!el || mode === "source") return;
+    const token = ++renderTokenRef.current;
 
     const code = node.attrs.code as string;
     if (!code.trim()) {
-      el.innerHTML =
-        '<p style="color: #999; font-style: italic;">Empty mermaid block</p>';
+      showMessage(el, "p", "Empty mermaid block", "color: #999; font-style: italic;");
       return;
     }
 
     const id = `mermaid-${Math.random().toString(36).slice(2, 9)}`;
     try {
+      const mermaid = await loadMermaid();
       const { svg } = await mermaid.render(id, code);
+      if (token !== renderTokenRef.current) return;
       el.innerHTML = svg;
-    } catch {
-      el.innerHTML =
-        '<pre style="color: #d32f2f; font-size: 0.85em;">Invalid mermaid syntax</pre>';
+    } catch (err) {
+      if (token !== renderTokenRef.current) return;
+      const detail = err instanceof Error ? err.message : String(err);
+      showMessage(el, "pre", detail, "color: #d32f2f; font-size: 0.85em; white-space: pre-wrap;");
     }
-  }, [node.attrs.code, isEditing]);
+  }, [node.attrs.code, mode]);
 
   useEffect(() => {
     renderDiagram();
+    // Abandon any in-flight render when the effect is torn down (unmount or a
+    // fresh source), so a late resolve can't write into a detached container.
+    return () => {
+      renderTokenRef.current++;
+    };
   }, [renderDiagram]);
 
-  const handleSave = () => {
-    updateAttributes({ code: editCode });
-    setIsEditing(false);
+  /** Writes the draft back into the node, unless it is unchanged. */
+  const commitDraft = useCallback(() => {
+    if (draft !== node.attrs.code) updateAttributes({ code: draft });
+  }, [draft, node.attrs.code, updateAttributes]);
+
+  const showSource = () => {
+    setDraft(node.attrs.code as string);
+    setMode("source");
+  };
+
+  const showDiagram = () => {
+    commitDraft();
+    setMode("diagram");
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
-      handleSave();
+      showDiagram();
     }
   };
+
+  const isSource = mode === "source";
+  const sourceRows = Math.min(Math.max(draft.split("\n").length, MIN_SOURCE_ROWS), MAX_SOURCE_ROWS);
 
   return (
     <NodeViewWrapper>
@@ -60,7 +131,7 @@ export function MermaidBlockView({ node, updateAttributes }: NodeViewProps) {
           my: 1,
           overflow: "hidden",
           position: "relative",
-          "&:hover .mermaid-actions": { opacity: 1 },
+          "&:hover .mermaid-actions, &:focus-within .mermaid-actions": { opacity: 1 },
         }}
         contentEditable={false}
       >
@@ -70,49 +141,47 @@ export function MermaidBlockView({ node, updateAttributes }: NodeViewProps) {
             position: "absolute",
             top: 4,
             right: 4,
-            opacity: 0,
+            // Keep the way back to the chart visible while the source shows;
+            // the chart face reveals the button on hover instead.
+            opacity: isSource ? 1 : 0,
             transition: "opacity 0.2s",
             zIndex: 1,
           }}
         >
-          {isEditing ? (
+          <Tooltip title={isSource ? "チャートを表示" : "mermaid ソースを表示"}>
             <IconButton
               size="small"
-              onClick={handleSave}
-              aria-label="Save mermaid"
+              onClick={isSource ? showDiagram : showSource}
+              aria-label={isSource ? "show mermaid chart" : "show mermaid source"}
               sx={{ bgcolor: "background.paper" }}
             >
-              <CheckIcon fontSize="small" />
+              {isSource ? (
+                <AccountTreeIcon fontSize="small" />
+              ) : (
+                <CodeIcon fontSize="small" />
+              )}
             </IconButton>
-          ) : (
-            <IconButton
-              size="small"
-              onClick={() => {
-                setEditCode(node.attrs.code as string);
-                setIsEditing(true);
-              }}
-              aria-label="Edit mermaid"
-              sx={{ bgcolor: "background.paper" }}
-            >
-              <EditIcon fontSize="small" />
-            </IconButton>
-          )}
+          </Tooltip>
         </Box>
 
-        {isEditing ? (
+        {isSource ? (
           <Box
             component="textarea"
-            value={editCode}
-            onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) =>
-              setEditCode(e.target.value)
-            }
+            value={draft}
+            onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setDraft(e.target.value)}
             onKeyDown={handleKeyDown}
-            onBlur={handleSave}
+            onBlur={commitDraft}
+            aria-label="mermaid source"
+            spellCheck={false}
             autoFocus
+            // Sized to the source so the whole diagram definition is visible
+            // when toggled; still resizable for very long definitions.
+            rows={sourceRows}
             sx={{
               width: "100%",
-              minHeight: 120,
               p: 2,
+              // Room for the toggle button so it never covers the first line.
+              pr: 6,
               fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
               fontSize: "0.875rem",
               border: "none",
