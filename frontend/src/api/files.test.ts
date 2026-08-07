@@ -6,6 +6,8 @@ import {
   listRevisions,
   getRevision,
   statFile,
+  statBatch,
+  STAT_BATCH_LIMIT,
   writeFile,
 } from "./files";
 
@@ -124,5 +126,110 @@ describe("review API client", () => {
 
     await writeFile("docs/intro.md", "# x", "mock-root");
     expect(capturedIfMatch).toBeNull();
+  });
+});
+
+// #174: the review-badge sweep used to fire one statFile per open tab in
+// parallel, saturating the browser's 6-connections-per-origin budget.
+describe("statBatch", () => {
+  it("returns one result per requested file, keyed by root and path", async () => {
+    const results = await statBatch([
+      { root: "mock-root", path: "docs/intro.md" },
+      { root: "other", path: "docs/open.md" },
+    ]);
+
+    expect(results).toHaveLength(2);
+    expect(results[0]).toMatchObject({
+      root: "mock-root",
+      path: "docs/intro.md",
+      hasOpenComments: false,
+    });
+    expect(results[1]).toMatchObject({
+      root: "other",
+      path: "docs/open.md",
+      hasOpenComments: true,
+    });
+  });
+
+  it("surfaces per-item not_found instead of throwing", async () => {
+    const results = await statBatch([
+      { root: "mock-root", path: "docs/missing.md" },
+      { root: "mock-root", path: "docs/intro.md" },
+    ]);
+
+    expect(results[0].error).toBe("not_found");
+    expect(results[1].error).toBeUndefined();
+  });
+
+  it("sends a single request for a batch within the limit", async () => {
+    let calls = 0;
+    server.use(
+      http.post(`${API_BASE}/api/stat/batch`, async ({ request }) => {
+        calls += 1;
+        const body = (await request.json()) as { files: { path: string }[] };
+        return HttpResponse.json({
+          results: body.files.map((f) => ({
+            root: "mock-root",
+            path: f.path,
+            state: "draft",
+            hasOpenComments: false,
+          })),
+        });
+      })
+    );
+
+    const files = Array.from({ length: STAT_BATCH_LIMIT }, (_, i) => ({
+      root: "mock-root",
+      path: `f${i}.md`,
+    }));
+    const results = await statBatch(files);
+
+    expect(calls).toBe(1);
+    expect(results).toHaveLength(STAT_BATCH_LIMIT);
+  });
+
+  // The server rejects oversized batches, so the client splits rather than
+  // letting a large tab set fail the whole sweep.
+  it("splits batches over the limit and concatenates in request order", async () => {
+    const chunkSizes: number[] = [];
+    server.use(
+      http.post(`${API_BASE}/api/stat/batch`, async ({ request }) => {
+        const body = (await request.json()) as { files: { path: string }[] };
+        chunkSizes.push(body.files.length);
+        return HttpResponse.json({
+          results: body.files.map((f) => ({
+            root: "mock-root",
+            path: f.path,
+            state: "draft",
+            hasOpenComments: false,
+          })),
+        });
+      })
+    );
+
+    const total = STAT_BATCH_LIMIT + 3;
+    const files = Array.from({ length: total }, (_, i) => ({
+      root: "mock-root",
+      path: `f${i}.md`,
+    }));
+    const results = await statBatch(files);
+
+    expect(chunkSizes).toEqual([STAT_BATCH_LIMIT, 3]);
+    expect(results).toHaveLength(total);
+    expect(results[0].path).toBe("f0.md");
+    expect(results[total - 1].path).toBe(`f${total - 1}.md`);
+  });
+
+  it("returns an empty array without calling the server for no files", async () => {
+    let calls = 0;
+    server.use(
+      http.post(`${API_BASE}/api/stat/batch`, () => {
+        calls += 1;
+        return HttpResponse.json({ results: [] });
+      })
+    );
+
+    expect(await statBatch([])).toEqual([]);
+    expect(calls).toBe(0);
   });
 });

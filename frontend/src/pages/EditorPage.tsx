@@ -53,6 +53,7 @@ import { useActiveRoot } from "@/hooks/useActiveRoot";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   statFile,
+  statBatch,
   ingestFile,
   listRevisions,
   getRevision,
@@ -597,38 +598,39 @@ export function EditorPage() {
     let cancelled = false;
     void (async () => {
       try {
-        await Promise.all(
-          snapshot.map(async (f) => {
-            const key = keyOf(f.root, f.path);
-            try {
-              const stat = await statFile(f.path, f.root);
-              if (!cancelled) {
-                markReviewFile(key, stat.hasOpenComments ?? false);
-              }
-            } catch (err) {
-              // A 404 means this tab's path no longer exists server-side —
-              // remember it so future sweeps skip it (#114). Any other
-              // error (network blip, 5xx) is transient, so it's ignored
-              // without marking the tab missing.
-              //
-              // Guard against the activation race: if the user activated
-              // this exact tab while this request was in flight, the
-              // per-active-file stat effect owns its missing/present state
-              // from here on — recording a late 404 here would immediately
-              // re-exclude a tab that effect just decided to (re)check.
-              if (
-                err instanceof HTTPError &&
-                err.response.status === 404 &&
-                key !== currentActiveKey()
-              ) {
-                missingStatFilesRef.current.add(key);
-                if (!cancelled) markReviewFile(key, false);
-              }
-            }
-          })
+        // One request for the whole sweep (#174). Issuing a statFile per tab
+        // in parallel put up to 191 requests on the wire at once, and with
+        // only 6 connections per origin the active file's own body fetch
+        // queued behind them until it timed out.
+        const results = await statBatch(
+          snapshot.map((f) => ({ root: f.root, path: f.path }))
         );
+        if (cancelled) return;
+        for (const r of results) {
+          const key = keyOf(r.root, r.path);
+          if (!r.error) {
+            markReviewFile(key, r.hasOpenComments ?? false);
+            continue;
+          }
+          // not_found means this tab's path no longer exists server-side —
+          // remember it so future sweeps skip it (#114). Any other per-item
+          // error is transient (or a malformed entry we shouldn't act on),
+          // so it's ignored without marking the tab missing.
+          //
+          // Guard against the activation race: if the user activated this
+          // exact tab while the batch was in flight, the per-active-file
+          // stat effect owns its missing/present state from here on —
+          // recording a late not_found would immediately re-exclude a tab
+          // that effect just decided to (re)check.
+          if (r.error === "not_found" && key !== currentActiveKey()) {
+            missingStatFilesRef.current.add(key);
+            markReviewFile(key, false);
+          }
+        }
       } catch {
-        // ignore top-level errors
+        // A failed batch is transient (network blip, 5xx) and says nothing
+        // about any individual file — leave every badge as-is, same as the
+        // old per-file path did for non-404 errors.
       }
     })();
     return () => {

@@ -170,6 +170,63 @@ export async function statFile(
     .json<FileStatResponse>();
 }
 
+/** Max files the server accepts in one statBatch call (MaxStatBatchSize). */
+export const STAT_BATCH_LIMIT = 500;
+
+export interface StatBatchTarget {
+  root: string;
+  path: string;
+}
+
+/**
+ * One result of statBatch. `root`/`path` echo the request so callers can match
+ * by key instead of by position. `error` is set per item — a missing file
+ * doesn't fail the batch — and is `"not_found"` for the stale-tab case the
+ * review-badge sweep cares about.
+ *
+ * Deliberately lighter than FileStatResponse: no sha, no timestamps. See
+ * POST /api/stat/batch in the API doc for why.
+ */
+export interface StatBatchResult {
+  root: string;
+  path: string;
+  state?: ReviewState;
+  hasOpenComments: boolean;
+  error?: "not_found" | "bad_request" | "internal";
+}
+
+export interface StatBatchResponse {
+  results: StatBatchResult[];
+}
+
+/**
+ * statBatch reports review state for many files in one request.
+ *
+ * Replaces issuing one statFile per open tab in parallel, which saturates the
+ * browser's 6-connections-per-origin budget and starves everything else on
+ * the page (issue #174). Requests over STAT_BATCH_LIMIT files are split, and
+ * the results are concatenated in request order.
+ */
+export async function statBatch(
+  files: StatBatchTarget[]
+): Promise<StatBatchResult[]> {
+  const chunks: StatBatchTarget[][] = [];
+  for (let i = 0; i < files.length; i += STAT_BATCH_LIMIT) {
+    chunks.push(files.slice(i, i + STAT_BATCH_LIMIT));
+  }
+  const results: StatBatchResult[] = [];
+  // Sequential: splitting exists to stay under the server's per-request cap,
+  // and firing the chunks at once would recreate the very parallelism this
+  // endpoint removes.
+  for (const chunk of chunks) {
+    const res = await apiClient
+      .post("api/stat/batch", { json: { files: chunk } })
+      .json<StatBatchResponse>();
+    results.push(...(res.results ?? []));
+  }
+  return results;
+}
+
 /**
  * ingestFile puts a draft file under managed review (creates its entry under
  * ~/.config/reviewer). Idempotent — re-ingesting returns state="review".

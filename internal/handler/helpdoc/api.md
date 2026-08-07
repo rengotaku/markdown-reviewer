@@ -177,6 +177,38 @@ hint を除去した上で `~/.config/reviewer/<root>/<path>/history.jsonl` へ�
 mtime は秒精度のため、同一秒内の 2 回の保存を区別できない — `sha` はそれでも変化するため、
 同一秒内の外部更新（同時編集競合）を検知する手段として使う。
 
+## POST /api/stat/batch
+
+複数ファイルの `state` と `hasOpenComments` を 1 リクエストでまとめて返す。
+タブごとに `GET /api/stat/*path` を並列発行するとブラウザの同時接続上限（1オリジン 6 本）を
+使い切り、他のリクエストが詰まるため用意されている。
+
+リクエスト:
+
+```json
+{ "files": [ { "root": "works", "path": "a.md" }, { "root": "rooms", "path": "b.md" } ] }
+```
+
+`root` は省略・空文字で既定ルートを指す（`?root=` と同じ規則）。1 リクエストあたり最大 500 件。
+超過すると 400。
+
+レスポンス:
+
+```json
+{ "results": [
+  { "root": "works", "path": "a.md", "state": "review", "hasOpenComments": true },
+  { "root": "rooms", "path": "b.md", "hasOpenComments": false, "error": "not_found" }
+] }
+```
+
+`root` / `path` はリクエストの値をそのまま返すので、順序に依存せず突合できる。
+個々の失敗は HTTP ステータスではなく要素の `error` で返す（`not_found` | `bad_request` |
+`internal`）。1 件の失敗で他の結果を落とさないため。
+
+**`sha` と mtime / ctime は含まない。** これらを返すには全ファイルの内容を読む必要があり、
+数百件のバッチでは本末転倒になるため。単一ファイルで `sha` が要る場合は
+`GET /api/stat/*path` を使う。
+
 ## GET /api/events
 
 `text/event-stream`。ファイル変更を `data: <json>\n\n` で push する（一定間隔ごとに

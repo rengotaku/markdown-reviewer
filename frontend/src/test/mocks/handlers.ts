@@ -192,6 +192,24 @@ export const handlers = [
     });
   }),
 
+  // Batched counterpart of /api/stat (#174). Echoes each requested target so
+  // callers can match by (root, path); a path named "missing" comes back as a
+  // per-item not_found so tests can exercise the stale-tab branch.
+  http.post(`${API_BASE}/api/stat/batch`, async ({ request }) => {
+    const body = (await request.json()) as {
+      files?: { root?: string; path: string }[];
+    };
+    return HttpResponse.json({
+      results: (body.files ?? []).map((f) => ({
+        root: f.root ?? "mock-root",
+        path: f.path,
+        ...(f.path.includes("missing")
+          ? { hasOpenComments: false, error: "not_found" }
+          : { state: "draft", hasOpenComments: f.path.includes("open") }),
+      })),
+    });
+  }),
+
   http.post(`${API_BASE}/api/ingest/*`, ({ request }) => {
     const url = new URL(request.url);
     const path = url.pathname.replace(/^\/api\/ingest\//, "");
