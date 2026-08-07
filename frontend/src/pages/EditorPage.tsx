@@ -314,7 +314,7 @@ export function EditorPage() {
   // connected — see the `paused` arg passed to useFileWatcher below).
   const [fileEventTrigger, setFileEventTrigger] = useState(0);
   const setSseConnected = useServerConnection((s) => s.setConnected);
-  const { connected: sseConnected } = useServerEvents({
+  const { connected: sseConnected, suspended: sseSuspended } = useServerEvents({
     onTree: (ev) => {
       void queryClient.invalidateQueries({ queryKey: ["dir"] });
       void queryClient.invalidateQueries({ queryKey: ["files"] });
@@ -375,6 +375,33 @@ export function EditorPage() {
       // events (which are emitted for the canonical path) or reactivating
       // the tab lift the exclusion.
       if (isPathOpen(ev.root, ev.path)) setReviewRefresh((n) => n + 1);
+    },
+    // The stream is dropped while the tab is hidden (#183), so `tree` events
+    // fired in that window never arrived. Re-read the listings the same way
+    // onTree does — without a path to attribute them to, the only safe
+    // assumption is that anything under any root may have moved.
+    //
+    // A `comments` event dropped in that window is invisible to every other
+    // path: the two COMMENTS_POLL_MS intervals below only tick while the tab
+    // is visible, so nothing re-reads the sidecar on its own. Without these
+    // bumps the active file's comment list and the tabs' review badges stay
+    // stale until the next event or a file switch.
+    //
+    // The active tab's *body* is covered separately by the reconcile on
+    // sseConnected false->true below (#173).
+    onResume: () => {
+      void queryClient.invalidateQueries({ queryKey: ["dir"] });
+      void queryClient.invalidateQueries({ queryKey: ["files"] });
+      // A tab stat-404'd before we went hidden (#114) is normally un-excluded
+      // by the `file`/`tree` event for its path — exactly the events that got
+      // dropped. The sweep below skips excluded paths, so without clearing
+      // the set first, a file re-created while hidden would stay unchecked
+      // until it changed again or its tab was reactivated. We have no path to
+      // attribute the resume to, so clear the whole set and let the sweep
+      // re-derive it.
+      missingStatFilesRef.current.clear();
+      setCommentsRefresh((n) => n + 1);
+      setReviewRefresh((n) => n + 1);
     },
   });
   useEffect(() => {
@@ -880,7 +907,18 @@ export function EditorPage() {
 
   // Fallback poll is disabled while SSE is connected; the onFile callback
   // above bumps fileEventTrigger to drive the same reconcile logic instead.
-  useFileWatcher(undefined, { paused: sseConnected, trigger: fileEventTrigger });
+  //
+  // Also paused while the stream is suspended (#183): unlike the two
+  // COMMENTS_POLL_MS intervals above, this one doesn't check visibility
+  // itself, so treating a hidden tab's deliberate hang-up as a plain
+  // disconnect would start a 5s /api/stat poll in every background tab —
+  // trading the one SSE connection this PR frees for a steady drip of
+  // requests. The reconcile it would have run is covered on return by the
+  // sseConnected false->true bump below.
+  useFileWatcher(undefined, {
+    paused: sseConnected || sseSuspended,
+    trigger: fileEventTrigger,
+  });
 
   const handleRefreshTree = () => {
     // The sidebar has two data sources — the lazy tree ("dir") and the flat
