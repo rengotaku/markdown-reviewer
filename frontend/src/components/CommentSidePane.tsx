@@ -465,13 +465,13 @@ export function CommentSidePane({
         {!reviewActive ? (
           <Box sx={{ p: 2 }}>
             <Typography variant="body2" color="text.secondary">
-              このファイルはまだレビュー対象ではありません。テキストを選択して「コメント」（または「全体」）を押すと、自動で取り込んでレビューを開始します。
+              このファイルはまだレビュー対象ではありません。テキストを選択してこの上のコメント追加ボタン（吹き出しのアイコン／ファイル全体なら地球のアイコン）を押すと、自動で取り込んでレビューを開始します。
             </Typography>
           </Box>
         ) : comments.length === 0 ? (
           <Box sx={{ p: 2 }}>
             <Typography variant="body2" color="text.secondary">
-              コメントはまだありません。テキストを選択して「コメント」を押すと追加できます。
+              コメントはまだありません。テキストを選択してこの上のコメント追加ボタン（吹き出しのアイコン）を押すと追加できます。
             </Typography>
           </Box>
         ) : visible.length === 0 ? (
