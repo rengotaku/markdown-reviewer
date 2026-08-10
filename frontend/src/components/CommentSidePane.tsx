@@ -361,6 +361,12 @@ export function CommentSidePane({
         )}
       </Box>
 
+      {/* Filter + add actions share one row (#196). They used to occupy two
+          BAR_HEIGHT rows, which cost 37px of comment list for controls that fit
+          side by side once the add buttons drop their labels. The three counts
+          stay visible at once — "how many are still open" is the number this
+          pane exists to show, so the filter is never collapsed into a select.
+          Measured: pane inner width 295px = filter ~225px + two icon buttons. */}
       <Box
         sx={{
           px: 1.5,
@@ -372,87 +378,85 @@ export function CommentSidePane({
           boxSizing: "border-box",
           display: "flex",
           alignItems: "center",
+          gap: 0.75,
           borderBottom: "1px solid",
           borderColor: "divider",
         }}
+        data-testid="comment-add-toolbar"
       >
         <ToggleButtonGroup
           value={filter}
           exclusive
           size="small"
-          fullWidth
           onChange={(_, v) => {
             if (v !== null) setFilter(v as StatusFilter);
           }}
           aria-label="コメントの表示フィルタ"
           data-testid="comment-status-filter"
+          sx={{
+            flex: 1,
+            minWidth: 0,
+            // Let the three buttons share the space evenly and shrink together
+            // rather than pushing the icon buttons off the row when the counts
+            // grow to two or three digits.
+            // The counts are unbounded, so the label must degrade instead of
+            // spilling into the neighbouring button. Parentheses are dropped
+            // (they cost ~10px and carry no meaning here), and anything that
+            // still doesn't fit is ellipsised rather than overlapping.
+            // Measured at 12px: content box 67px, "すべて 100" ≈ 57px.
+            "& .MuiToggleButton-root": {
+              flex: 1,
+              minWidth: 0,
+              textTransform: "none",
+              whiteSpace: "nowrap",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              display: "block",
+              textAlign: "center",
+              py: 0.5,
+              px: 0.5,
+              fontSize: "0.75rem",
+              lineHeight: 1.2,
+            },
+          }}
         >
-          <ToggleButton
-            value="all"
-            sx={{ textTransform: "none", py: 0.25 }}
-            data-testid="comment-filter-all"
-          >
-            すべて ({comments.length})
+          <ToggleButton value="all" data-testid="comment-filter-all">
+            すべて {comments.length}
           </ToggleButton>
-          <ToggleButton
-            value="open"
-            sx={{ textTransform: "none", py: 0.25 }}
-            data-testid="comment-filter-open"
-          >
-            未解決 ({openCount})
+          <ToggleButton value="open" data-testid="comment-filter-open">
+            未解決 {openCount}
           </ToggleButton>
-          <ToggleButton
-            value="resolved"
-            sx={{ textTransform: "none", py: 0.25 }}
-            data-testid="comment-filter-resolved"
-          >
-            解決済 ({resolvedCount})
+          <ToggleButton value="resolved" data-testid="comment-filter-resolved">
+            解決済 {resolvedCount}
           </ToggleButton>
         </ToggleButtonGroup>
-      </Box>
-
-      <Box
-        sx={{
-          px: 1.5,
-          // Fixed height matching the other pane bars (BAR_HEIGHT = 37px,
-          // border-box) so this row sits at the same visual height as the
-          // sidebar filter / editor tab bar (#94). Single row, no wrap.
-          height: BAR_HEIGHT,
-          flexShrink: 0,
-          boxSizing: "border-box",
-          borderBottom: "1px solid",
-          borderColor: "divider",
-          display: "flex",
-          alignItems: "center",
-          gap: 0.75,
-        }}
-        data-testid="comment-add-toolbar"
-      >
         <Tooltip title="選択範囲にコメントを追加（未取り込みなら自動で取り込む）">
           <span>
-            <Button
-              variant="outlined"
+            <IconButton
               size="small"
-              startIcon={<AddCommentIcon />}
+              color="primary"
               disabled={!canAddComment}
               onClick={onAddComment}
+              aria-label="選択範囲にコメントを追加"
               data-testid="editor-add-comment"
+              sx={{ flexShrink: 0 }}
             >
-              コメント
-            </Button>
+              <AddCommentIcon fontSize="small" />
+            </IconButton>
           </span>
         </Tooltip>
         <Tooltip title="ファイル全体に向けたコメントを追加（選択不要・未取り込みなら自動で取り込む）">
           <span>
-            <Button
-              variant="outlined"
+            <IconButton
               size="small"
-              startIcon={<PublicIcon />}
+              color="primary"
               onClick={onAddGlobal}
+              aria-label="ファイル全体にコメントを追加"
               data-testid="editor-add-global-comment"
+              sx={{ flexShrink: 0 }}
             >
-              全体
-            </Button>
+              <PublicIcon fontSize="small" />
+            </IconButton>
           </span>
         </Tooltip>
       </Box>
@@ -461,13 +465,13 @@ export function CommentSidePane({
         {!reviewActive ? (
           <Box sx={{ p: 2 }}>
             <Typography variant="body2" color="text.secondary">
-              このファイルはまだレビュー対象ではありません。テキストを選択して「コメント」（または「全体」）を押すと、自動で取り込んでレビューを開始します。
+              このファイルはまだレビュー対象ではありません。テキストを選択してこの上のコメント追加ボタン（吹き出しのアイコン／ファイル全体なら地球のアイコン）を押すと、自動で取り込んでレビューを開始します。
             </Typography>
           </Box>
         ) : comments.length === 0 ? (
           <Box sx={{ p: 2 }}>
             <Typography variant="body2" color="text.secondary">
-              コメントはまだありません。テキストを選択して「コメント」を押すと追加できます。
+              コメントはまだありません。テキストを選択してこの上のコメント追加ボタン（吹き出しのアイコン）を押すと追加できます。
             </Typography>
           </Box>
         ) : visible.length === 0 ? (
