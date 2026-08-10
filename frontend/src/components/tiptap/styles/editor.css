@@ -73,8 +73,13 @@
 
 .ProseMirror pre {
   background-color: #f5f5f5;
-  padding: 16px;
+  padding: 12px 16px;
   border-radius: 4px;
+  /* Consecutive fences used to sit flush against each other and read as one
+     giant block; a border plus vertical rhythm makes each one its own object
+     (#198). */
+  border: 1px solid #e3e3e6;
+  margin: 12px 0;
   /* Keep the pre itself unclipped so the diff-gutter ::before bar (placed at
      a negative left offset) stays visible; horizontal scrolling for long
      lines moves to the inner <code> instead (#127). */
@@ -86,6 +91,82 @@
   padding: 0;
   display: block;
   overflow-x: auto;
+  /* Code reads best with a little more air between lines than prose; the
+     default 1.6 inherited from the editor body makes dense blocks feel like a
+     wall of text (#198). */
+  line-height: 1.55;
+  tab-size: 2;
+}
+
+/* Syntax highlighting (#198). highlight.js class names, coloured here instead
+   of importing one of its themes so the palette stays in this stylesheet with
+   the rest of the editor and doesn't pull a second copy of the token list.
+   Values are the GitHub-light family, which is what the surrounding UI reads
+   as. Contrast against #f5f5f5 is >= 4.5:1 for every token below. */
+.ProseMirror pre code .hljs-comment,
+.ProseMirror pre code .hljs-quote {
+  color: #57606a;
+  font-style: italic;
+}
+
+.ProseMirror pre code .hljs-keyword,
+.ProseMirror pre code .hljs-selector-tag,
+.ProseMirror pre code .hljs-literal,
+.ProseMirror pre code .hljs-type {
+  color: #cf222e;
+}
+
+.ProseMirror pre code .hljs-string,
+.ProseMirror pre code .hljs-regexp,
+.ProseMirror pre code .hljs-meta .hljs-string {
+  color: #0a3069;
+}
+
+.ProseMirror pre code .hljs-number,
+.ProseMirror pre code .hljs-symbol,
+.ProseMirror pre code .hljs-bullet {
+  color: #0550ae;
+}
+
+.ProseMirror pre code .hljs-title,
+.ProseMirror pre code .hljs-title.function_,
+.ProseMirror pre code .hljs-section {
+  color: #6639ba;
+}
+
+.ProseMirror pre code .hljs-attr,
+.ProseMirror pre code .hljs-attribute,
+.ProseMirror pre code .hljs-variable,
+.ProseMirror pre code .hljs-template-variable,
+.ProseMirror pre code .hljs-selector-attr,
+.ProseMirror pre code .hljs-selector-class,
+.ProseMirror pre code .hljs-selector-id {
+  color: #0550ae;
+}
+
+.ProseMirror pre code .hljs-built_in,
+.ProseMirror pre code .hljs-name,
+.ProseMirror pre code .hljs-meta,
+.ProseMirror pre code .hljs-doctag {
+  color: #953800;
+}
+
+.ProseMirror pre code .hljs-addition {
+  color: #0a5c2c;
+  background-color: #e6ffec;
+}
+
+.ProseMirror pre code .hljs-deletion {
+  color: #a01f2b;
+  background-color: #ffebe9;
+}
+
+.ProseMirror pre code .hljs-emphasis {
+  font-style: italic;
+}
+
+.ProseMirror pre code .hljs-strong {
+  font-weight: 600;
 }
 
 .ProseMirror blockquote {
