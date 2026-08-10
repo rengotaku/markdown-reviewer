@@ -399,25 +399,35 @@ export function CommentSidePane({
             // Let the three buttons share the space evenly and shrink together
             // rather than pushing the icon buttons off the row when the counts
             // grow to two or three digits.
+            // The counts are unbounded, so the label must degrade instead of
+            // spilling into the neighbouring button. Parentheses are dropped
+            // (they cost ~10px and carry no meaning here), and anything that
+            // still doesn't fit is ellipsised rather than overlapping.
+            // Measured at 12px: content box 67px, "すべて 100" ≈ 57px.
             "& .MuiToggleButton-root": {
               flex: 1,
               minWidth: 0,
               textTransform: "none",
               whiteSpace: "nowrap",
-              py: 0.25,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              display: "block",
+              textAlign: "center",
+              py: 0.5,
               px: 0.5,
               fontSize: "0.75rem",
+              lineHeight: 1.2,
             },
           }}
         >
           <ToggleButton value="all" data-testid="comment-filter-all">
-            すべて ({comments.length})
+            すべて {comments.length}
           </ToggleButton>
           <ToggleButton value="open" data-testid="comment-filter-open">
-            未解決 ({openCount})
+            未解決 {openCount}
           </ToggleButton>
           <ToggleButton value="resolved" data-testid="comment-filter-resolved">
-            解決済 ({resolvedCount})
+            解決済 {resolvedCount}
           </ToggleButton>
         </ToggleButtonGroup>
         <Tooltip title="選択範囲にコメントを追加（未取り込みなら自動で取り込む）">
