@@ -2,6 +2,7 @@ import { useEffect, useRef, useMemo } from "react";
 import Box from "@mui/material/Box";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
+import { CodeBlockLowlight } from "@tiptap/extension-code-block-lowlight";
 import Placeholder from "@tiptap/extension-placeholder";
 import Link from "@tiptap/extension-link";
 import { Table } from "@tiptap/extension-table";
@@ -18,12 +19,18 @@ import { useEditorPrefs } from "@/hooks/useEditorPrefs";
 import { splitPreamble, parseFrontmatter } from "@/utils/frontmatter";
 import { FrontmatterTable } from "./FrontmatterTable";
 import { TableMenu } from "./toolbar/TableMenu";
+import { BlockCopyButton } from "./toolbar/BlockCopyButton";
 import { SlashCommand } from "./extensions/SlashCommand";
 import { MermaidBlock } from "./extensions/MermaidBlock";
+import { createCodeLowlight } from "./extensions/codeHighlight";
 import { MarkdownPaste } from "./extensions/MarkdownPaste";
 import { CommentHighlight } from "./extensions/CommentHighlight";
 import { DiffGutter } from "./extensions/DiffGutter";
 import "./styles/editor.css";
+
+// Built once per module: registering the grammars is pure setup and the
+// instance is stateless across editors.
+const codeLowlight = createCodeLowlight();
 
 function getEditorMarkdown(editor: { storage: unknown }): string {
   const storage = editor.storage as {
@@ -80,7 +87,12 @@ export function TiptapEditor() {
 
   const editor = useEditor({
     extensions: [
-      StarterKit.configure({ link: false }),
+      // codeBlock comes from CodeBlockLowlight instead of StarterKit (#198):
+      // same node name and markdown round-trip, plus per-token spans that the
+      // stylesheet colours. Registering it twice would throw on duplicate node
+      // names, hence the StarterKit opt-out.
+      StarterKit.configure({ link: false, codeBlock: false }),
+      CodeBlockLowlight.configure({ lowlight: codeLowlight }),
       Placeholder.configure({
         placeholder: "Start writing, or type / for commands...",
       }),
@@ -175,6 +187,9 @@ export function TiptapEditor() {
       }}
     >
       {editor && <TableMenu editor={editor} />}
+      {editor && (
+        <BlockCopyButton editor={editor} containerRef={containerRef} />
+      )}
       <FrontmatterTable entries={frontmatter} />
       <EditorContent editor={editor} />
     </Box>
