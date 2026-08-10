@@ -101,6 +101,21 @@ describe("BlockCopyButton (#198)", () => {
     expect(writeText.mock.calls[0][0]).toContain("| alpha | 入口 |");
   });
 
+  it("ignores a table that isn't part of the document (frontmatter panel)", async () => {
+    // The frontmatter panel renders a real <table> in the same scrolling
+    // container; offering to copy it would produce a button that can only fail.
+    const panel = document.createElement("table");
+    panel.innerHTML = "<tbody><tr><td id='fm'>title</td></tr></tbody>";
+    container!.insertBefore(panel, container!.firstChild);
+
+    renderButton();
+    fireEvent.mouseOver(panel.querySelector("#fm") as HTMLElement);
+
+    await waitFor(() =>
+      expect(screen.queryByTestId("block-copy-button")).not.toBeInTheDocument()
+    );
+  });
+
   it("disappears when the pointer moves to plain prose", async () => {
     renderButton();
     const pre = editor!.view.dom.querySelector("pre") as HTMLElement;

@@ -50,7 +50,15 @@ export function BlockCopyButton({ editor, containerRef }: BlockCopyButtonProps) 
       // Hovering the button itself must not count as leaving the block.
       if (target.closest("[data-block-copy-button]")) return;
       const next = findCopyableBlock(target);
-      setBlock((prev) => (prev?.el === next?.el ? prev : next));
+      // The frontmatter panel renders its own <table> inside this same
+      // scrolling container, but it isn't part of the document — offering to
+      // copy it would produce a button whose click can only fail, since
+      // posAtDOM has no node for it.
+      const inDocument = next !== null && editor.view.dom.contains(next.el);
+      setBlock((prev) => {
+        const resolved = inDocument ? next : null;
+        return prev?.el === resolved?.el ? prev : resolved;
+      });
     };
     const handleMouseLeave = () => setBlock(null);
 
@@ -60,7 +68,7 @@ export function BlockCopyButton({ editor, containerRef }: BlockCopyButtonProps) 
       container.removeEventListener("mouseover", handleMouseOver);
       container.removeEventListener("mouseleave", handleMouseLeave);
     };
-  }, [containerRef]);
+  }, [containerRef, editor]);
 
   // Drop the button when its block leaves the document (edit, file switch).
   useEffect(() => {
