@@ -987,6 +987,69 @@ describe("EditorPage", () => {
     );
   });
 
+  it("always renders the diff toggle, disabled until the file has a comparable revision (#194)", async () => {
+    const user = userEvent.setup();
+    const { http, HttpResponse } = await import("msw");
+    const { server } = await import("@/test/mocks/server");
+
+    renderPage();
+
+    // No file open: still rendered, just not usable.
+    const toggle = screen.getByTestId("editor-diff-toggle");
+    expect(toggle).toBeDisabled();
+
+    // A draft file (not under review) keeps it disabled.
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
+    );
+    await user.click(screen.getByTestId("sidebar-file-README.md"));
+    await waitFor(() =>
+      expect(screen.getByTestId("tiptap-editor")).toBeInTheDocument()
+    );
+    expect(screen.getByTestId("editor-diff-toggle")).toBeDisabled();
+
+    // Under review with a revision to compare against → enabled.
+    server.use(
+      http.get("http://localhost:8080/api/stat/*", () =>
+        HttpResponse.json({
+          path: "docs/intro.md",
+          root: "mock-root",
+          modified: "2026-05-20T00:00:00Z",
+          created: "2026-05-19T00:00:00Z",
+          state: "review",
+          hasOpenComments: false,
+        })
+      ),
+      http.get("http://localhost:8080/api/revisions/*", ({ request }) => {
+        const url = new URL(request.url);
+        const id = url.searchParams.get("id");
+        if (id) {
+          return HttpResponse.json({
+            id,
+            ts: "2026-05-19T00:00:00Z",
+            author: "ai",
+            content: "# docs/intro.md\n\nprevious content",
+          });
+        }
+        return HttpResponse.json({
+          path: "docs/intro.md",
+          root: "mock-root",
+          revisions: [{ id: "r-001", ts: "2026-05-19T00:00:00Z", author: "ai" }],
+        });
+      })
+    );
+
+    await user.click(screen.getByTestId("sidebar-dir-docs"));
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-file-docs/intro.md")).toBeInTheDocument()
+    );
+    await user.click(screen.getByTestId("sidebar-file-docs/intro.md"));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("editor-diff-toggle")).toBeEnabled()
+    );
+  });
+
   it("switches active file via tab click and closes a tab via the close button", async () => {
     const user = userEvent.setup();
     renderPage();
