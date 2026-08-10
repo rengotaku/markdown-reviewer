@@ -116,6 +116,11 @@ export function BlockCopyButton({ editor, containerRef }: BlockCopyButtonProps) 
     const observer = new ResizeObserver(updatePlacement);
     observer.observe(block.el);
     observer.observe(container);
+    // Also the document itself: something *above* the hovered block can grow
+    // without touching the block or the (fixed-height) container — a mermaid
+    // chart finishing its async render, an image loading — which pushes the
+    // block down with no transaction to notice it.
+    observer.observe(editor.view.dom);
     window.addEventListener("resize", updatePlacement);
     editor.on("transaction", updatePlacement);
     return () => {

@@ -73,8 +73,10 @@ function tableNodeAt(editor: Editor, el: HTMLElement): PMNode | null {
 /** Text to put on the clipboard for a block, or null when it can't be derived. */
 export function copyTextOf(editor: Editor, block: CopyableBlock): string | null {
   if (block.kind === "code") {
-    const text = codeTextOf(block.el);
-    return text.length > 0 ? text : null;
+    // An empty fence copies as an empty string rather than reporting failure:
+    // the button is shown for it, and "nothing to copy" is a correct outcome,
+    // not an error.
+    return codeTextOf(block.el);
   }
   return tableMarkdownOf(editor, block.el);
 }

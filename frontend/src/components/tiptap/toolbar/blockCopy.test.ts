@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { codeTextOf, findCopyableBlock } from "./blockCopy";
+import { codeTextOf, copyTextOf, findCopyableBlock } from "./blockCopy";
 
 function html(markup: string): HTMLElement {
   const host = document.createElement("div");
@@ -52,5 +52,13 @@ describe("codeTextOf", () => {
   it("falls back to the pre's own text when there is no inner code element", () => {
     const host = html("<pre>bare</pre>");
     expect(codeTextOf(host.querySelector("pre") as HTMLElement)).toBe("bare");
+  });
+
+  it("treats an empty code block as an empty copy, not a failure", () => {
+    const host = html("<pre><code></code></pre>");
+    const block = findCopyableBlock(host.querySelector("pre"));
+    // copyTextOf returning null is what surfaces the "コピーできませんでした"
+    // toast; an empty fence has nothing to copy but nothing went wrong.
+    expect(copyTextOf({} as never, block!)).toBe("");
   });
 });
