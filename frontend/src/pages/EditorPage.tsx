@@ -901,6 +901,20 @@ export function EditorPage() {
       ? computeDisplayVersion(revisions, newestRevisionContent, currentEditorText)
       : undefined;
 
+  // Why the diff toggle can't be used right now, or null when it can (#194).
+  // The button is always rendered, so this doubles as its tooltip text.
+  const diffDisabledReason = !activeFile
+    ? "ファイルを開くと前回保存との差分を表示できます"
+    : reviewState !== "review"
+      ? "このファイルはまだレビュー対象ではありません"
+      : revisions.length === 0
+        ? "比較できる過去リビジョンがまだありません"
+        : null;
+  // While the diff view is open the button must stay clickable — it's the way
+  // back out — even if the reason above has since become non-null (e.g. the
+  // file was closed underneath it).
+  const canToggleDiff = diffMode || diffDisabledReason === null;
+
   // Migrate any persisted legacy single-root files onto the default root
   // the first time we learn which root that is. Idempotent — subsequent
   // renders with the same root are no-ops.
@@ -1720,21 +1734,30 @@ export function EditorPage() {
           {/* No explicit "取り込む" action: a file is ingested transparently the
               first time the user comments on it (see handleIngest / ingestThenOpen).
               Ingesting is internal bookkeeping the user shouldn't have to think about. */}
-          {activeFile && reviewState === "review" && (
-            <Tooltip title={diffMode ? "差分表示を閉じる" : "前回保存との差分を表示"}>
-              <span>
-                <IconButton
-                  size="small"
-                  disabled={revisions.length === 0}
-                  onClick={handleToggleDiff}
-                  data-testid="editor-diff-toggle"
-                  {...(diffMode ? { color: "primary" as const } : {})}
-                >
-                  <CompareArrowsIcon fontSize="small" />
-                </IconButton>
-              </span>
-            </Tooltip>
-          )}
+          {/* Always rendered (#194): the button used to disappear whenever the
+              file wasn't under review, which moved every icon to its right and
+              hid the feature's existence. Now it stays put and unavailability is
+              expressed with disabled + a tooltip saying why. */}
+          <Tooltip
+            title={
+              diffMode
+                ? "差分表示を閉じる"
+                : (diffDisabledReason ?? "前回保存との差分を表示")
+            }
+          >
+            <span>
+              <IconButton
+                size="small"
+                disabled={!canToggleDiff}
+                onClick={handleToggleDiff}
+                aria-label="toggle diff"
+                data-testid="editor-diff-toggle"
+                {...(diffMode ? { color: "primary" as const } : {})}
+              >
+                <CompareArrowsIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
           <Tooltip title={centered ? "全幅表示に切替" : "中央寄せに切替"}>
             <IconButton
               size="small"
