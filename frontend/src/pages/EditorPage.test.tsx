@@ -958,6 +958,35 @@ describe("EditorPage", () => {
     }
   });
 
+  it("shows the full file name on tab hover, and the tab still selects (#192)", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
+    );
+    await user.click(screen.getByTestId("sidebar-file-README.md"));
+    await user.click(screen.getByTestId("sidebar-dir-docs"));
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-file-docs/intro.md")).toBeInTheDocument()
+    );
+    await user.click(screen.getByTestId("sidebar-file-docs/intro.md"));
+    await waitFor(() => expect(useOpenFiles.getState().files).toHaveLength(2));
+
+    await user.hover(screen.getByTestId("editor-tab-label-README.md"));
+    const tooltip = await screen.findByRole("tooltip", {}, { timeout: 3000 });
+    expect(tooltip).toHaveTextContent("README.md");
+
+    // The tooltip wraps the label, not the Tab, so Tabs still reads `value`
+    // off the Tab and clicking it switches the active file.
+    await user.click(screen.getByTestId("editor-tab-README.md"));
+    await waitFor(() =>
+      expect(screen.getByTestId("editor-active-path")).toHaveTextContent(
+        "README.md"
+      )
+    );
+  });
+
   it("switches active file via tab click and closes a tab via the close button", async () => {
     const user = userEvent.setup();
     renderPage();

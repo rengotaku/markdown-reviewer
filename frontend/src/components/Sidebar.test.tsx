@@ -421,3 +421,70 @@ describe("Sidebar changed-paths dots (#178)", () => {
     ).not.toBeInTheDocument();
   });
 });
+
+describe("Sidebar name tooltip (#192)", () => {
+  beforeEach(() => {
+    useUIStore.setState({ sidebarViewMode: "tree" });
+  });
+
+  it("shows the full name on hover for a file row in the tree", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<Sidebar onSelect={() => {}} />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
+    );
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+
+    await user.hover(screen.getByTestId("sidebar-file-README.md"));
+
+    const tooltip = await screen.findByRole("tooltip", {}, { timeout: 3000 });
+    expect(tooltip).toHaveTextContent("README.md");
+  });
+
+  it("shows the full name on hover for a directory row in the tree", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<Sidebar onSelect={() => {}} />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-dir-docs")).toBeInTheDocument()
+    );
+
+    await user.hover(screen.getByTestId("sidebar-dir-docs"));
+
+    const tooltip = await screen.findByRole("tooltip", {}, { timeout: 3000 });
+    expect(tooltip).toHaveTextContent("docs");
+  });
+
+  it("shows the file name on hover in the recent view", async () => {
+    const user = userEvent.setup();
+    useUIStore.setState({ sidebarViewMode: "recent" });
+    renderWithProviders(<Sidebar onSelect={() => {}} />);
+
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("sidebar-recent-file-docs/api/spec.md")
+      ).toBeInTheDocument()
+    );
+
+    await user.hover(
+      screen.getByTestId("sidebar-recent-file-docs/api/spec.md")
+    );
+
+    const tooltip = await screen.findByRole("tooltip", {}, { timeout: 3000 });
+    expect(tooltip).toHaveTextContent("spec.md");
+  });
+
+  it("keeps the row's own accessible name (tooltip is a description)", async () => {
+    useUIStore.setState({ sidebarViewMode: "recent" });
+    renderWithProviders(<Sidebar onSelect={() => {}} />);
+
+    const row = await screen.findByTestId(
+      "sidebar-recent-file-docs/api/spec.md"
+    );
+    // Without describeChild, MUI would set aria-label={name} here and the row
+    // would stop announcing its directory path and timestamp.
+    expect(row).not.toHaveAttribute("aria-label");
+    expect(row).toHaveTextContent("docs/api");
+  });
+});
