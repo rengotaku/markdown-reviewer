@@ -24,6 +24,21 @@ Object.defineProperty(globalThis, "localStorage", {
   writable: true,
 });
 
+// jsdom has no ResizeObserver. Components that reposition overlays on layout
+// changes (BlockCopyButton) only need it to exist; jsdom never lays anything
+// out, so a no-op observer is the honest stand-in.
+if (!("ResizeObserver" in globalThis)) {
+  class NoopResizeObserver implements ResizeObserver {
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void {}
+  }
+  Object.defineProperty(globalThis, "ResizeObserver", {
+    value: NoopResizeObserver,
+    writable: true,
+  });
+}
+
 beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
 afterEach(() => server.resetHandlers());
 afterAll(() => server.close());

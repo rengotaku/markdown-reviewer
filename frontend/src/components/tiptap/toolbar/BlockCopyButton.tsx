@@ -82,7 +82,7 @@ export function BlockCopyButton({ editor, containerRef }: BlockCopyButtonProps) 
     };
   }, [editor, block]);
 
-  useEffect(() => {
+  const updatePlacement = useCallback(() => {
     const container = containerRef.current;
     if (!block || !container) {
       setPlacement(null);
@@ -103,6 +103,27 @@ export function BlockCopyButton({ editor, containerRef }: BlockCopyButtonProps) 
         right - containerRect.left + container.scrollLeft - BUTTON_SIZE - INSET,
     });
   }, [block, containerRef]);
+
+  // The block can move or resize while the pointer stays on it — window
+  // resize, the centered/full-width toggle, typing into a table cell. Without
+  // this the button would sit at wherever the block was when it was first
+  // hovered.
+  useEffect(() => {
+    updatePlacement();
+    const container = containerRef.current;
+    if (!block || !container) return;
+
+    const observer = new ResizeObserver(updatePlacement);
+    observer.observe(block.el);
+    observer.observe(container);
+    window.addEventListener("resize", updatePlacement);
+    editor.on("transaction", updatePlacement);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", updatePlacement);
+      editor.off("transaction", updatePlacement);
+    };
+  }, [block, containerRef, editor, updatePlacement]);
 
   const handleCopy = useCallback(async () => {
     if (!block) return;
