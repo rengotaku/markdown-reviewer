@@ -21,6 +21,7 @@ import FolderOpen from "@mui/icons-material/FolderOpen";
 import InsertDriveFile from "@mui/icons-material/InsertDriveFile";
 import ScheduleIcon from "@mui/icons-material/Schedule";
 import { useSearchParams } from "react-router-dom";
+import { NameTooltip } from "@/components/NameTooltip";
 import { useDir } from "@/hooks/useDir";
 import { useFiles } from "@/hooks/useFiles";
 import { useActiveRoot } from "@/hooks/useActiveRoot";
@@ -346,30 +347,32 @@ function TreeItem({
   if (entry.type === "dir") {
     return (
       <>
-        <ListItemButton
-          onClick={() => setUserExpanded((v) => !v)}
-          onContextMenu={(e) => onContextMenu(e, entry)}
-          selected={isSelectedSelf}
-          sx={{ pl: `${indent}px` }}
-          data-testid={`sidebar-dir-${entry.path}`}
-        >
-          <ListItemIcon sx={{ minWidth: 24 }}>
-            {expanded ? (
-              <ExpandMore fontSize="small" />
-            ) : (
-              <ChevronRight fontSize="small" />
-            )}
-          </ListItemIcon>
-          <ListItemIcon sx={{ minWidth: 24 }}>
-            <FolderOpen fontSize="small" />
-          </ListItemIcon>
-          <ListItemText
-            primary={entry.name}
-            slotProps={{ primary: { variant: "body2", noWrap: true } }}
-            sx={{ minWidth: 0 }}
-          />
-          {isChanged && <ChangedDot path={entry.path} />}
-        </ListItemButton>
+        <NameTooltip name={entry.name}>
+          <ListItemButton
+            onClick={() => setUserExpanded((v) => !v)}
+            onContextMenu={(e) => onContextMenu(e, entry)}
+            selected={isSelectedSelf}
+            sx={{ pl: `${indent}px` }}
+            data-testid={`sidebar-dir-${entry.path}`}
+          >
+            <ListItemIcon sx={{ minWidth: 24 }}>
+              {expanded ? (
+                <ExpandMore fontSize="small" />
+              ) : (
+                <ChevronRight fontSize="small" />
+              )}
+            </ListItemIcon>
+            <ListItemIcon sx={{ minWidth: 24 }}>
+              <FolderOpen fontSize="small" />
+            </ListItemIcon>
+            <ListItemText
+              primary={entry.name}
+              slotProps={{ primary: { variant: "body2", noWrap: true } }}
+              sx={{ minWidth: 0 }}
+            />
+            {isChanged && <ChangedDot path={entry.path} />}
+          </ListItemButton>
+        </NameTooltip>
         {expanded && (
           <DirChildren
             path={entry.path}
@@ -387,23 +390,25 @@ function TreeItem({
 
   const selected = entry.path === activePath;
   return (
-    <ListItemButton
-      onClick={() => onSelect(entry.path)}
-      onContextMenu={(e) => onContextMenu(e, entry)}
-      selected={selected}
-      sx={{ pl: `${indent + 24}px` }}
-      data-testid={`sidebar-file-${entry.path}`}
-    >
-      <ListItemIcon sx={{ minWidth: 24 }}>
-        <InsertDriveFile fontSize="small" />
-      </ListItemIcon>
-      <ListItemText
-        primary={entry.name}
-        slotProps={{ primary: { variant: "body2", noWrap: true } }}
-        sx={{ minWidth: 0 }}
-      />
-      {isChanged && <ChangedDot path={entry.path} />}
-    </ListItemButton>
+    <NameTooltip name={entry.name}>
+      <ListItemButton
+        onClick={() => onSelect(entry.path)}
+        onContextMenu={(e) => onContextMenu(e, entry)}
+        selected={selected}
+        sx={{ pl: `${indent + 24}px` }}
+        data-testid={`sidebar-file-${entry.path}`}
+      >
+        <ListItemIcon sx={{ minWidth: 24 }}>
+          <InsertDriveFile fontSize="small" />
+        </ListItemIcon>
+        <ListItemText
+          primary={entry.name}
+          slotProps={{ primary: { variant: "body2", noWrap: true } }}
+          sx={{ minWidth: 0 }}
+        />
+        {isChanged && <ChangedDot path={entry.path} />}
+      </ListItemButton>
+    </NameTooltip>
   );
 }
 
@@ -582,49 +587,55 @@ function RecentRow({ file, root, activePath, onSelect, onContextMenu }: RecentRo
   const isChanged = useChangedPaths((s) => s.isChanged(root, file.path));
 
   return (
-    <ListItemButton
-      onClick={() => onSelect(file.path)}
-      onContextMenu={(e) =>
-        onContextMenu(e, {
-          name,
-          path: file.path,
-          type: "file",
-          modified: file.modified,
-        })
-      }
-      selected={file.path === activePath}
-      sx={{ px: 1.5, py: 0.5 }}
-      data-testid={`sidebar-recent-file-${file.path}`}
-    >
-      <Box sx={{ minWidth: 0, width: "100%" }}>
-        <Box
-          sx={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "baseline",
-            gap: 1,
-          }}
-        >
-          <Typography
-            variant="caption"
-            color="text.secondary"
-            noWrap
-            sx={{ minWidth: 0 }}
-            data-testid={`sidebar-recent-dir-${file.path}`}
+    <NameTooltip name={name}>
+      <ListItemButton
+        onClick={() => onSelect(file.path)}
+        onContextMenu={(e) =>
+          onContextMenu(e, {
+            name,
+            path: file.path,
+            type: "file",
+            modified: file.modified,
+          })
+        }
+        selected={file.path === activePath}
+        sx={{ px: 1.5, py: 0.5 }}
+        data-testid={`sidebar-recent-file-${file.path}`}
+      >
+        <Box sx={{ minWidth: 0, width: "100%" }}>
+          <Box
+            sx={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "baseline",
+              gap: 1,
+            }}
           >
-            {dirLabel(file.path)}
-          </Typography>
-          <Typography variant="caption" color="text.secondary" sx={{ flexShrink: 0 }}>
-            {formatLocalTimestamp(file.modified)}
-          </Typography>
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              noWrap
+              sx={{ minWidth: 0 }}
+              data-testid={`sidebar-recent-dir-${file.path}`}
+            >
+              {dirLabel(file.path)}
+            </Typography>
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              sx={{ flexShrink: 0 }}
+            >
+              {formatLocalTimestamp(file.modified)}
+            </Typography>
+          </Box>
+          <Box sx={{ display: "flex", alignItems: "center", minWidth: 0 }}>
+            <Typography variant="body2" noWrap sx={{ minWidth: 0 }}>
+              {name}
+            </Typography>
+            {isChanged && <ChangedDot path={file.path} />}
+          </Box>
         </Box>
-        <Box sx={{ display: "flex", alignItems: "center", minWidth: 0 }}>
-          <Typography variant="body2" noWrap sx={{ minWidth: 0 }}>
-            {name}
-          </Typography>
-          {isChanged && <ChangedDot path={file.path} />}
-        </Box>
-      </Box>
-    </ListItemButton>
+      </ListItemButton>
+    </NameTooltip>
   );
 }

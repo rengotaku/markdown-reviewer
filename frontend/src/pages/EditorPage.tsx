@@ -35,6 +35,7 @@ import {
   AddCommentDialog,
   CommentSidePane,
   DiffView,
+  NameTooltip,
 } from "@/components";
 import { useOpenFiles, reattachLegacyFilesToRoot } from "@/hooks/useOpenFiles";
 import { useReadFile, useWriteFile } from "@/hooks/useFileContent";
@@ -1925,20 +1926,27 @@ export function EditorPage() {
                       minWidth: 0,
                     }}
                   >
-                    <Box
-                      component="span"
-                      sx={{
-                        flex: 1,
-                        minWidth: 0,
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                        textAlign: "left",
-                      }}
-                    >
-                      {f.name}
-                      {f.isDirty ? " •" : ""}
-                    </Box>
+                    {/* Tooltip wraps the label span, not the Tab itself: Tabs
+                        reads `value` off its direct children, so wrapping the
+                        Tab would make it fall back to the index and break
+                        selection (#192). */}
+                    <NameTooltip name={f.name} placement="bottom">
+                      <Box
+                        component="span"
+                        data-testid={`editor-tab-label-${f.path}`}
+                        sx={{
+                          flex: 1,
+                          minWidth: 0,
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                          textAlign: "left",
+                        }}
+                      >
+                        {f.name}
+                        {f.isDirty ? " •" : ""}
+                      </Box>
+                    </NameTooltip>
                     <CloseIcon
                       fontSize="inherit"
                       role="button"
