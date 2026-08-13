@@ -660,7 +660,7 @@ describe("useFileWatcher", () => {
     await waitFor(
       () => {
         const f = useOpenFiles.getState().files.find((x) => x.id === id)!;
-        expect(f.serverSha).toBe("sha-second");
+        expect(f.ignoredSha).toBe("sha-second");
         expect(f.serverModified).toBe("2026-05-22T00:00:00Z");
       },
       { timeout: 2000 }
@@ -668,6 +668,128 @@ describe("useFileWatcher", () => {
     const f = useOpenFiles.getState().files.find((x) => x.id === id)!;
     expect(f.markdown).toBe("my edits");
     expect(f.isDirty).toBe(true);
+  });
+
+  // --- keeping your edits must not move the save baseline (#202) ------------
+
+  it("keeps serverSha as the save baseline when the user keeps their edits", async () => {
+    const id = seedActiveFile({
+      name: "h.md",
+      path: "h.md",
+      markdown: "my edits",
+      serverModified: "2026-05-20T00:00:00Z",
+      serverSha: "sha-base",
+      isDirty: true,
+    });
+
+    server.use(
+      http.get(`${API_BASE}/api/stat/h.md`, () =>
+        HttpResponse.json({
+          path: "h.md",
+          modified: "2026-05-21T00:00:00Z",
+          sha: "sha-external",
+        })
+      )
+    );
+
+    renderHook(() => useFileWatcher(POLL_MS), { wrapper });
+
+    await waitFor(() => expect(useConfirm.getState().pending).not.toBeNull(), {
+      timeout: 2000,
+    });
+    act(() => useConfirm.getState().resolve(false));
+
+    await waitFor(
+      () => {
+        const f = useOpenFiles.getState().files.find((x) => x.id === id)!;
+        expect(f.ignoredSha).toBe("sha-external");
+      },
+      { timeout: 2000 }
+    );
+    const f = useOpenFiles.getState().files.find((x) => x.id === id)!;
+    // The buffer is still built on sha-base — the next save must send that as
+    // If-Match so the server answers 412 and the user gets an explicit
+    // overwrite prompt instead of silently clobbering the external change.
+    expect(f.serverSha).toBe("sha-base");
+    expect(f.markdown).toBe("my edits");
+  });
+
+  it("does not re-prompt for an external change the user already dismissed", async () => {
+    seedActiveFile({
+      name: "i.md",
+      path: "i.md",
+      markdown: "my edits",
+      serverModified: "2026-05-20T00:00:00Z",
+      serverSha: "sha-base",
+      isDirty: true,
+    });
+
+    server.use(
+      http.get(`${API_BASE}/api/stat/i.md`, () =>
+        HttpResponse.json({
+          path: "i.md",
+          modified: "2026-05-21T00:00:00Z",
+          sha: "sha-external",
+        })
+      )
+    );
+
+    renderHook(() => useFileWatcher(POLL_MS), { wrapper });
+
+    await waitFor(() => expect(useConfirm.getState().pending).not.toBeNull(), {
+      timeout: 2000,
+    });
+    act(() => useConfirm.getState().resolve(false));
+
+    await waitFor(
+      () => {
+        const f = useOpenFiles.getState().files.find((x) => x.path === "i.md")!;
+        expect(f.ignoredSha).toBe("sha-external");
+      },
+      { timeout: 2000 }
+    );
+
+    // Several more poll ticks over the same unchanged on-disk content.
+    await new Promise((r) => setTimeout(r, POLL_MS * 10));
+    expect(useConfirm.getState().pending).toBeNull();
+  });
+
+  it("prompts again when the external side moves on after a dismissal", async () => {
+    seedActiveFile({
+      name: "j.md",
+      path: "j.md",
+      markdown: "my edits",
+      serverModified: "2026-05-20T00:00:00Z",
+      serverSha: "sha-base",
+      isDirty: true,
+    });
+
+    let sha = "sha-external-1";
+    server.use(
+      http.get(`${API_BASE}/api/stat/j.md`, () =>
+        HttpResponse.json({ path: "j.md", modified: "2026-05-21T00:00:00Z", sha })
+      )
+    );
+
+    renderHook(() => useFileWatcher(POLL_MS), { wrapper });
+
+    await waitFor(() => expect(useConfirm.getState().pending).not.toBeNull(), {
+      timeout: 2000,
+    });
+    act(() => useConfirm.getState().resolve(false));
+
+    await waitFor(
+      () => {
+        const f = useOpenFiles.getState().files.find((x) => x.path === "j.md")!;
+        expect(f.ignoredSha).toBe("sha-external-1");
+      },
+      { timeout: 2000 }
+    );
+
+    sha = "sha-external-2";
+    await waitFor(() => expect(useConfirm.getState().pending).not.toBeNull(), {
+      timeout: 2000,
+    });
   });
 
   it("does not act on the dialog answer once the hook has unmounted", async () => {

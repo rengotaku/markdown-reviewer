@@ -20,8 +20,10 @@ export const FILE_WATCHER_INTERVAL_MS = 5000;
  *     a low-noise toast so the user knows something changed under them.
  *   - dirty: show a confirm dialog letting the user pick between accepting
  *     the external version (their edits are discarded) and keeping their
- *     own edits (the external mtime/sha is acknowledged so the dialog
- *     doesn't re-open on every subsequent tick).
+ *     own edits (the external sha is recorded as *ignored* so the dialog
+ *     doesn't re-open on every subsequent tick — but the save baseline is
+ *     left alone, so the next save still hits the If-Match check and asks
+ *     before overwriting, see #202).
  *
  * Change detection is sha-first when both sides know a sha (#119): the
  * content hash tells a real external edit (even one that lands in the same
@@ -134,6 +136,12 @@ export function useFileWatcher(
           }
           return;
         }
+        // The user already looked at this exact external content and chose to
+        // keep their edits (#202). Their save baseline is still `serverSha`,
+        // so this differs from it every tick — without this check the dialog
+        // would re-open forever. A further external write produces a new sha
+        // and prompts again.
+        if (stat.sha === live.ignoredSha) return;
       } else {
         // No sha to compare on one (or both) sides — a server predating
         // #119, or a tab rehydrated from an older persisted session. Fall
@@ -235,14 +243,17 @@ export function useFileWatcher(
         }
         // Checked outside the try so the failure path is covered too.
         if (unmountedRef.current) return;
+        // Not acknowledgeExternalChange: keeping your edits must not move the
+        // save baseline, or the next save passes If-Match and overwrites the
+        // external change with no warning (#202).
         useOpenFiles
           .getState()
-          .acknowledgeExternalChange(live.id, seen.modified, seen.sha);
+          .ignoreExternalChange(live.id, seen.modified, seen.sha);
         // The user explicitly decided to ignore this external change (#178
         // round 2) — it's been seen and dismissed, not left unread.
         clearChanged(live.root, live.path);
         showToast(
-          `「${live.name}」の編集を保持しました（外部変更は無視）`,
+          `「${live.name}」の編集を保持しました（保存時に外部変更の上書き確認が出ます）`,
           "warning"
         );
       }
