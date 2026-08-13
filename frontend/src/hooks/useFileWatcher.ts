@@ -62,6 +62,23 @@ export function useFileWatcher(
   // second dialog on top while the first one is still awaiting user input.
   const pendingPathRef = useRef<string | null>(null);
 
+  // Whether the hook itself is gone (#201). Distinct from the per-effect-run
+  // `cancelled` flag below, which flips on every dependency change —
+  // including `trigger` (a second `file` event for the same path) and
+  // `paused` (a visibilitychange, or the SSE channel dropping/reconnecting),
+  // both of which happen routinely while the confirm dialog is on screen.
+  // Anything awaited *across the dialog* must key off unmount, not off
+  // `cancelled`, or the user's answer is silently discarded and — because
+  // the re-run's immediate tick is blocked by pendingPathRef above — the
+  // dialog never comes back either.
+  const unmountedRef = useRef(false);
+  useEffect(() => {
+    unmountedRef.current = false;
+    return () => {
+      unmountedRef.current = true;
+    };
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -175,12 +192,13 @@ export function useFileWatcher(
         cancelLabel: "自分の編集を保持",
       });
       pendingPathRef.current = null;
-      if (cancelled) return;
+      // Deliberately not `cancelled` — see unmountedRef above (#201).
+      if (unmountedRef.current) return;
 
       if (accept) {
         try {
           const fresh = await readFile(live.path, live.root);
-          if (cancelled) return;
+          if (unmountedRef.current) return;
           useOpenFiles
             .getState()
             .applyExternalReload(
@@ -201,9 +219,25 @@ export function useFileWatcher(
           );
         }
       } else {
+        // Acknowledge what is on disk *now*, not the pre-dialog stat. The
+        // dialog can stay up across further external writes, and the trigger
+        // each of those fires is swallowed by the pendingPathRef guard above
+        // — so acking the stale sha would leave the newest external change
+        // undetected until some later event (the interval is off whenever
+        // SSE is connected). A re-stat failure falls back to the pre-dialog
+        // values: acking something slightly stale only makes the next tick
+        // re-prompt, which is the safe direction.
+        let seen = stat;
+        try {
+          seen = await statFile(live.path, live.root);
+        } catch {
+          // keep `stat`
+        }
+        // Checked outside the try so the failure path is covered too.
+        if (unmountedRef.current) return;
         useOpenFiles
           .getState()
-          .acknowledgeExternalChange(live.id, stat.modified, stat.sha);
+          .acknowledgeExternalChange(live.id, seen.modified, seen.sha);
         // The user explicitly decided to ignore this external change (#178
         // round 2) — it's been seen and dismissed, not left unread.
         clearChanged(live.root, live.path);

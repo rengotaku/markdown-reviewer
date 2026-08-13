@@ -517,4 +517,192 @@ describe("useFileWatcher", () => {
     expect(f.markdown).toBe("old content");
     expect(f.isDirty).toBe(false);
   });
+
+  // --- the dialog answer survives an effect re-run (#201) -------------------
+  //
+  // The confirm dialog is awaited inside the effect, so the effect's cleanup
+  // used to invalidate the pending answer. Both `trigger` and `paused` are in
+  // the dependency array and change routinely while the dialog is on screen
+  // (a second `file` event for the same path, a visibilitychange, an SSE
+  // reconnect), which silently dropped whatever the user picked.
+
+  it("applies the accepted external content even when trigger changes while the dialog is open", async () => {
+    const id = seedActiveFile({
+      name: "d.md",
+      path: "d.md",
+      markdown: "my edits",
+      serverModified: "2026-05-20T00:00:00Z",
+      isDirty: true,
+    });
+
+    server.use(
+      http.get(`${API_BASE}/api/stat/d.md`, () =>
+        HttpResponse.json({ path: "d.md", modified: "2026-05-21T00:00:00Z" })
+      ),
+      http.get(`${API_BASE}/api/files/d.md`, () =>
+        HttpResponse.json({
+          path: "d.md",
+          content: "external content",
+          modified: "2026-05-21T00:00:00Z",
+        })
+      )
+    );
+
+    const { rerender } = renderHook(
+      ({ trigger }: { trigger: number }) =>
+        useFileWatcher(POLL_MS, { paused: true, trigger }),
+      { wrapper, initialProps: { trigger: 1 } }
+    );
+
+    await waitFor(() => expect(useConfirm.getState().pending).not.toBeNull(), {
+      timeout: 2000,
+    });
+
+    // A second `file` event for the same path lands while the user is still
+    // looking at the dialog.
+    rerender({ trigger: 2 });
+
+    act(() => useConfirm.getState().resolve(true));
+
+    await waitFor(
+      () => {
+        const f = useOpenFiles.getState().files.find((x) => x.id === id)!;
+        expect(f.markdown).toBe("external content");
+        expect(f.isDirty).toBe(false);
+      },
+      { timeout: 2000 }
+    );
+  });
+
+  it("keeps the user's edits even when paused flips while the dialog is open", async () => {
+    const id = seedActiveFile({
+      name: "e.md",
+      path: "e.md",
+      markdown: "my edits",
+      serverModified: "2026-05-20T00:00:00Z",
+      isDirty: true,
+    });
+
+    server.use(
+      http.get(`${API_BASE}/api/stat/e.md`, () =>
+        HttpResponse.json({ path: "e.md", modified: "2026-05-21T00:00:00Z" })
+      )
+    );
+
+    const { rerender } = renderHook(
+      ({ paused }: { paused: boolean }) => useFileWatcher(POLL_MS, { paused }),
+      { wrapper, initialProps: { paused: false } }
+    );
+
+    await waitFor(() => expect(useConfirm.getState().pending).not.toBeNull(), {
+      timeout: 2000,
+    });
+
+    // The tab is hidden (or the SSE channel (re)connects) while the dialog is
+    // still up, flipping `paused`.
+    rerender({ paused: true });
+
+    act(() => useConfirm.getState().resolve(false));
+
+    await waitFor(
+      () => {
+        const f = useOpenFiles.getState().files.find((x) => x.id === id)!;
+        expect(f.serverModified).toBe("2026-05-21T00:00:00Z");
+      },
+      { timeout: 2000 }
+    );
+    const f = useOpenFiles.getState().files.find((x) => x.id === id)!;
+    expect(f.markdown).toBe("my edits");
+    expect(f.isDirty).toBe(true);
+  });
+
+  it("acknowledges the newest on-disk state when declining, not the pre-dialog one", async () => {
+    const id = seedActiveFile({
+      name: "g.md",
+      path: "g.md",
+      markdown: "my edits",
+      serverModified: "2026-05-20T00:00:00Z",
+      serverSha: "sha-base",
+      isDirty: true,
+    });
+
+    // The first stat opens the dialog; every stat after it reports a *second*
+    // external write that landed while the dialog was up. Its own trigger is
+    // swallowed by the pendingPathRef guard, so the decline branch is the
+    // only place that can still notice it.
+    let statCalls = 0;
+    server.use(
+      http.get(`${API_BASE}/api/stat/g.md`, () => {
+        statCalls += 1;
+        return statCalls === 1
+          ? HttpResponse.json({
+              path: "g.md",
+              modified: "2026-05-21T00:00:00Z",
+              sha: "sha-first",
+            })
+          : HttpResponse.json({
+              path: "g.md",
+              modified: "2026-05-22T00:00:00Z",
+              sha: "sha-second",
+            });
+      })
+    );
+
+    renderHook(() => useFileWatcher(POLL_MS, { paused: true, trigger: 1 }), {
+      wrapper,
+    });
+
+    await waitFor(() => expect(useConfirm.getState().pending).not.toBeNull(), {
+      timeout: 2000,
+    });
+    act(() => useConfirm.getState().resolve(false));
+
+    await waitFor(
+      () => {
+        const f = useOpenFiles.getState().files.find((x) => x.id === id)!;
+        expect(f.serverSha).toBe("sha-second");
+        expect(f.serverModified).toBe("2026-05-22T00:00:00Z");
+      },
+      { timeout: 2000 }
+    );
+    const f = useOpenFiles.getState().files.find((x) => x.id === id)!;
+    expect(f.markdown).toBe("my edits");
+    expect(f.isDirty).toBe(true);
+  });
+
+  it("does not act on the dialog answer once the hook has unmounted", async () => {
+    const id = seedActiveFile({
+      name: "f.md",
+      path: "f.md",
+      markdown: "my edits",
+      serverModified: "2026-05-20T00:00:00Z",
+      isDirty: true,
+    });
+
+    server.use(
+      http.get(`${API_BASE}/api/stat/f.md`, () =>
+        HttpResponse.json({ path: "f.md", modified: "2026-05-21T00:00:00Z" })
+      ),
+      http.get(`${API_BASE}/api/files/f.md`, () =>
+        HttpResponse.json({
+          path: "f.md",
+          content: "external content",
+          modified: "2026-05-21T00:00:00Z",
+        })
+      )
+    );
+
+    const { unmount } = renderHook(() => useFileWatcher(POLL_MS), { wrapper });
+
+    await waitFor(() => expect(useConfirm.getState().pending).not.toBeNull(), {
+      timeout: 2000,
+    });
+
+    unmount();
+    act(() => useConfirm.getState().resolve(true));
+
+    await new Promise((r) => setTimeout(r, POLL_MS * 10));
+    const f = useOpenFiles.getState().files.find((x) => x.id === id)!;
+    expect(f.markdown).toBe("my edits");
+  });
 });
