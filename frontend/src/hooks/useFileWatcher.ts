@@ -229,12 +229,12 @@ export function useFileWatcher(
         // re-prompt, which is the safe direction.
         let seen = stat;
         try {
-          const latest = await statFile(live.path, live.root);
-          if (unmountedRef.current) return;
-          seen = latest;
+          seen = await statFile(live.path, live.root);
         } catch {
           // keep `stat`
         }
+        // Checked outside the try so the failure path is covered too.
+        if (unmountedRef.current) return;
         useOpenFiles
           .getState()
           .acknowledgeExternalChange(live.id, seen.modified, seen.sha);
