@@ -62,6 +62,23 @@ export function useFileWatcher(
   // second dialog on top while the first one is still awaiting user input.
   const pendingPathRef = useRef<string | null>(null);
 
+  // Whether the hook itself is gone (#201). Distinct from the per-effect-run
+  // `cancelled` flag below, which flips on every dependency change —
+  // including `trigger` (a second `file` event for the same path) and
+  // `paused` (a visibilitychange, or the SSE channel dropping/reconnecting),
+  // both of which happen routinely while the confirm dialog is on screen.
+  // Anything awaited *across the dialog* must key off unmount, not off
+  // `cancelled`, or the user's answer is silently discarded and — because
+  // the re-run's immediate tick is blocked by pendingPathRef above — the
+  // dialog never comes back either.
+  const unmountedRef = useRef(false);
+  useEffect(() => {
+    unmountedRef.current = false;
+    return () => {
+      unmountedRef.current = true;
+    };
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -175,12 +192,13 @@ export function useFileWatcher(
         cancelLabel: "自分の編集を保持",
       });
       pendingPathRef.current = null;
-      if (cancelled) return;
+      // Deliberately not `cancelled` — see unmountedRef above (#201).
+      if (unmountedRef.current) return;
 
       if (accept) {
         try {
           const fresh = await readFile(live.path, live.root);
-          if (cancelled) return;
+          if (unmountedRef.current) return;
           useOpenFiles
             .getState()
             .applyExternalReload(
