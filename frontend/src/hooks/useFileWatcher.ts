@@ -141,7 +141,17 @@ export function useFileWatcher(
         // so this differs from it every tick — without this check the dialog
         // would re-open forever. A further external write produces a new sha
         // and prompts again.
-        if (stat.sha === live.ignoredSha) return;
+        if (stat.sha === live.ignoredSha) {
+          // Still follow the mtime: the header shows it, and a later response
+          // without a sha would otherwise fall back to an mtime comparison
+          // that re-prompts for content already dismissed.
+          if (stat.modified && stat.modified !== live.serverModified) {
+            useOpenFiles
+              .getState()
+              .ignoreExternalChange(live.id, stat.modified, stat.sha);
+          }
+          return;
+        }
       } else {
         // No sha to compare on one (or both) sides — a server predating
         // #119, or a tab rehydrated from an older persisted session. Fall

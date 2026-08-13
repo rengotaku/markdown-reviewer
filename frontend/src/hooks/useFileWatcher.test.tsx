@@ -754,6 +754,53 @@ describe("useFileWatcher", () => {
     expect(useConfirm.getState().pending).toBeNull();
   });
 
+  it("follows the mtime of a dismissed change that is later touched", async () => {
+    const id = seedActiveFile({
+      name: "k.md",
+      path: "k.md",
+      markdown: "my edits",
+      serverModified: "2026-05-20T00:00:00Z",
+      serverSha: "sha-base",
+      isDirty: true,
+    });
+
+    let modified = "2026-05-21T00:00:00Z";
+    server.use(
+      http.get(`${API_BASE}/api/stat/k.md`, () =>
+        HttpResponse.json({ path: "k.md", modified, sha: "sha-external" })
+      )
+    );
+
+    renderHook(() => useFileWatcher(POLL_MS), { wrapper });
+
+    await waitFor(() => expect(useConfirm.getState().pending).not.toBeNull(), {
+      timeout: 2000,
+    });
+    act(() => useConfirm.getState().resolve(false));
+
+    await waitFor(
+      () => {
+        const f = useOpenFiles.getState().files.find((x) => x.id === id)!;
+        expect(f.ignoredSha).toBe("sha-external");
+      },
+      { timeout: 2000 }
+    );
+
+    // Same bytes, new mtime (a touch, or a rewrite with identical content).
+    modified = "2026-05-25T00:00:00Z";
+
+    await waitFor(
+      () => {
+        const f = useOpenFiles.getState().files.find((x) => x.id === id)!;
+        expect(f.serverModified).toBe("2026-05-25T00:00:00Z");
+      },
+      { timeout: 2000 }
+    );
+    expect(useConfirm.getState().pending).toBeNull();
+    const f = useOpenFiles.getState().files.find((x) => x.id === id)!;
+    expect(f.serverSha).toBe("sha-base");
+  });
+
   it("prompts again when the external side moves on after a dismissal", async () => {
     seedActiveFile({
       name: "j.md",
