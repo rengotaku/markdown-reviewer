@@ -29,10 +29,10 @@ func CommentLocation(content string, cm Comment) string {
 	}
 	parts := make([]string, 0, len(anchors))
 	for _, a := range anchors {
-		if lr, ok := ResolveAnchorForDisplay(content, a); ok {
+		if resolved, lr, ok := ResolveAnchorForDisplay(content, a); ok {
 			heading := ""
-			if n := len(a.HeadingPath); n > 0 {
-				heading = a.HeadingPath[n-1] + " "
+			if n := len(resolved.HeadingPath); n > 0 {
+				heading = resolved.HeadingPath[n-1] + " "
 			}
 			parts = append(parts, fmt.Sprintf("%s(L%d)", heading, lr[0]))
 		} else {

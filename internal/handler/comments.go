@@ -73,16 +73,22 @@ func buildCommentJSON(content string, c reviewstore.Comment) CommentJSON {
 		// Global comment: no anchors, no line context.
 		return out
 	}
+	// Anchors are handed back in their resolved form: when a stored
+	// heading_path went stale, ResolveAnchorForDisplay returns a repaired copy,
+	// and the client needs that copy — its own resolution is strict, so the
+	// stored one would leave the highlight and the "対象" jump dead (#205).
+	repairedAnchors := make([]reviewstore.Anchor, len(anchors))
 	var headingPath []string
 	var lineRange [2]int
 	resolved := false
-	for _, a := range anchors {
-		lr, ok := reviewstore.ResolveAnchorForDisplay(content, a)
+	for i, a := range anchors {
+		ra, lr, ok := reviewstore.ResolveAnchorForDisplay(content, a)
+		repairedAnchors[i] = ra
 		if !ok {
 			continue
 		}
 		if !resolved {
-			headingPath = a.HeadingPath
+			headingPath = ra.HeadingPath
 			lineRange = lr
 			resolved = true
 			continue
@@ -93,6 +99,17 @@ func buildCommentJSON(content string, c reviewstore.Comment) CommentJSON {
 		if lr[1] > lineRange[1] {
 			lineRange[1] = lr[1]
 		}
+	}
+	// AnchorsOf flattens Anchor ++ Anchors, so split the repaired slice back
+	// into the same two fields the request came in with.
+	if c.Anchor != nil {
+		out.Anchor = &repairedAnchors[0]
+		out.Anchors = repairedAnchors[1:]
+	} else {
+		out.Anchors = repairedAnchors
+	}
+	if len(out.Anchors) == 0 {
+		out.Anchors = nil
 	}
 	if !resolved {
 		out.Orphan = true

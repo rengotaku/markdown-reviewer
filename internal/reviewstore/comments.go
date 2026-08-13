@@ -345,7 +345,12 @@ func ResolveAnchor(content string, a Anchor) (lineRange [2]int, ok bool) {
 // ResolveAnchorForDisplay resolves like ResolveAnchor but falls back to the
 // snippet alone when the heading gate rejects every line and the snippet still
 // occurs exactly once: that line is then the only thing the anchor can mean, so
-// showing it beats reporting an orphan.
+// showing it beats reporting an orphan. The returned anchor is the stored one
+// when strict resolution succeeded and a repaired copy (heading_path recomputed
+// at the matched line) when the fallback fired, so callers can hand the client
+// an anchor the frontend's own strict resolution agrees with — otherwise the
+// comment would report a line number while its highlight and "対象" jump stayed
+// dead.
 //
 // A stored heading_path goes stale when an ancestor heading is renamed, and
 // anchors that ReanchorReview rewrote before #205 carry a path recorded from a
@@ -354,28 +359,39 @@ func ResolveAnchor(content string, a Anchor) (lineRange [2]int, ok bool) {
 //
 // Only the read paths use this. ReanchorReview deliberately keeps the strict
 // ResolveAnchor so a stale heading_path still counts as "needs repair" and gets
-// rewritten on the next external edit instead of being papered over forever.
-func ResolveAnchorForDisplay(content string, a Anchor) (lineRange [2]int, ok bool) {
+// rewritten to disk on the next edit instead of being papered over forever.
+func ResolveAnchorForDisplay(content string, a Anchor) (anchor Anchor, lineRange [2]int, ok bool) {
 	if lr, found := ResolveAnchor(content, a); found {
-		return lr, true
+		return a, lr, true
 	}
 	if a.Snippet == "" || a.Occurrence != 0 {
-		return [2]int{}, false
+		return a, [2]int{}, false
 	}
+	lines := strings.Split(content, "\n")
 	match := -1
-	for i, line := range strings.Split(content, "\n") {
+	for i, line := range lines {
 		if !strings.Contains(stripInlineMarkup(line), a.Snippet) {
 			continue
 		}
 		if match >= 0 {
-			return [2]int{}, false // ambiguous — leave it orphaned
+			return a, [2]int{}, false // ambiguous — leave it orphaned
 		}
 		match = i
 	}
 	if match < 0 {
-		return [2]int{}, false
+		return a, [2]int{}, false
 	}
-	return [2]int{match + 1, match + 1}, true
+	repaired := Anchor{
+		Snippet:     a.Snippet,
+		HeadingPath: append([]string(nil), headingStacks(content)[match]...),
+		Occurrence:  0,
+	}
+	// The repaired anchor must resolve strictly to the same line; if it does
+	// not, hand back the stored one rather than a plausible-looking wrong path.
+	if lr, found := ResolveAnchor(content, repaired); found && lr[0] == match+1 {
+		return repaired, lr, true
+	}
+	return a, [2]int{match + 1, match + 1}, true
 }
 
 // headingStacks returns, for each 0-indexed line, the heading stack in effect
@@ -448,8 +464,12 @@ func (f *fenceState) step(line string) bool {
 
 	if f.char != 0 {
 		// Inside a fence: only a run of the same character, at least as long
-		// as the opener and with nothing but whitespace after it, closes it.
-		if m != nil && m[1][0] == f.char && len(m[1]) >= f.n && strings.TrimSpace(m[2]) == "" {
+		// as the opener, indented no more than 3 columns past the opener's
+		// container and with nothing but whitespace after it, closes it. A
+		// delimiter indented further is code content — closing on it would end
+		// the block early and hand the lines below back to the heading parser.
+		if m != nil && m[1][0] == f.char && len(m[1]) >= f.n &&
+			strings.TrimSpace(m[2]) == "" && leadingIndent(line) <= f.contentIndent+3 {
 			f.char, f.n = 0, 0
 		}
 		return true

@@ -353,6 +353,14 @@ func TestHeadingStacks_Fences(t *testing.T) {
 			want:    map[int][]string{4: {"# A"}, 8: {"# A", "## B"}},
 		},
 		{
+			// A delimiter indented 4+ columns past the opener is code content,
+			// not a closer. Closing there would end the block early and hand
+			// the lines below back to the heading parser.
+			name:    "over-indented delimiter does not close the fence",
+			content: "# A\n\n```\n    ```\n# not a heading\n```\n\n## B\n",
+			want:    map[int][]string{5: {"# A"}, 8: {"# A", "## B"}},
+		},
+		{
 			// Once the list ends, the allowance goes back to the root's 3.
 			name:    "allowance resets after the list ends",
 			content: "# A\n\n- 手順\n\n本文\n\n    ```\n\n## B\n",
@@ -393,21 +401,35 @@ func TestResolveAnchorForDisplay(t *testing.T) {
 	if _, ok := ResolveAnchor(content, stale); ok {
 		t.Fatal("strict resolution must still reject a stale heading_path, so reanchoring repairs it")
 	}
-	lr, ok := ResolveAnchorForDisplay(content, stale)
+	repaired, lr, ok := ResolveAnchorForDisplay(content, stale)
 	if !ok || lr[0] != 9 {
 		t.Fatalf("want line 9, got %v ok=%v", lr, ok)
+	}
+	// The repaired anchor is what the client gets, so it must resolve strictly
+	// — otherwise the frontend highlight and jump stay dead.
+	want := []string{"# 本当の見出し", "## 節"}
+	if len(repaired.HeadingPath) != len(want) {
+		t.Fatalf("repaired heading_path = %v, want %v", repaired.HeadingPath, want)
+	}
+	for i := range want {
+		if repaired.HeadingPath[i] != want[i] {
+			t.Fatalf("repaired heading_path = %v, want %v", repaired.HeadingPath, want)
+		}
+	}
+	if lr2, ok2 := ResolveAnchor(content, repaired); !ok2 || lr2[0] != 9 {
+		t.Fatalf("repaired anchor must resolve strictly to line 9, got %v ok=%v", lr2, ok2)
 	}
 
 	// Ambiguous snippets stay orphaned — there is no single line to point at.
 	ambiguous := "# A\n\n重複\n\n## B\n\n重複\n"
-	if _, ok := ResolveAnchorForDisplay(ambiguous, Anchor{
+	if _, _, ok := ResolveAnchorForDisplay(ambiguous, Anchor{
 		HeadingPath: []string{"## 消えた見出し"}, Snippet: "重複", Occurrence: 0,
 	}); ok {
 		t.Fatal("expected orphan for an ambiguous snippet")
 	}
 
 	// A snippet that is really gone stays orphaned.
-	if _, ok := ResolveAnchorForDisplay(content, Anchor{Snippet: "存在しない文字列"}); ok {
+	if _, _, ok := ResolveAnchorForDisplay(content, Anchor{Snippet: "存在しない文字列"}); ok {
 		t.Fatal("expected orphan for a missing snippet")
 	}
 }
