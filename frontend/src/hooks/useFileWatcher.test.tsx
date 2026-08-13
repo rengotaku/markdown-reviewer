@@ -660,7 +660,7 @@ describe("useFileWatcher", () => {
     await waitFor(
       () => {
         const f = useOpenFiles.getState().files.find((x) => x.id === id)!;
-        expect(f.ignoredSha).toBe("sha-second");
+        expect(f.ignoredExternal?.sha).toBe("sha-second");
         expect(f.serverModified).toBe("2026-05-22T00:00:00Z");
       },
       { timeout: 2000 }
@@ -702,7 +702,7 @@ describe("useFileWatcher", () => {
     await waitFor(
       () => {
         const f = useOpenFiles.getState().files.find((x) => x.id === id)!;
-        expect(f.ignoredSha).toBe("sha-external");
+        expect(f.ignoredExternal?.sha).toBe("sha-external");
       },
       { timeout: 2000 }
     );
@@ -744,7 +744,7 @@ describe("useFileWatcher", () => {
     await waitFor(
       () => {
         const f = useOpenFiles.getState().files.find((x) => x.path === "i.md")!;
-        expect(f.ignoredSha).toBe("sha-external");
+        expect(f.ignoredExternal?.sha).toBe("sha-external");
       },
       { timeout: 2000 }
     );
@@ -781,7 +781,7 @@ describe("useFileWatcher", () => {
     await waitFor(
       () => {
         const f = useOpenFiles.getState().files.find((x) => x.id === id)!;
-        expect(f.ignoredSha).toBe("sha-external");
+        expect(f.ignoredExternal?.sha).toBe("sha-external");
       },
       { timeout: 2000 }
     );
@@ -799,6 +799,90 @@ describe("useFileWatcher", () => {
     expect(useConfirm.getState().pending).toBeNull();
     const f = useOpenFiles.getState().files.find((x) => x.id === id)!;
     expect(f.serverSha).toBe("sha-base");
+  });
+
+  it("does not promote the ignored sha into the baseline on a tab that has none", async () => {
+    const id = seedActiveFile({
+      name: "l.md",
+      path: "l.md",
+      markdown: "my edits",
+      serverModified: "2026-05-20T00:00:00Z",
+      // No serverSha — rehydrated from a session that predates the field,
+      // while the server *does* report one. Backfilling from this stat would
+      // adopt the ignored external content as our save baseline.
+      isDirty: true,
+    });
+
+    server.use(
+      http.get(`${API_BASE}/api/stat/l.md`, () =>
+        HttpResponse.json({
+          path: "l.md",
+          modified: "2026-05-21T00:00:00Z",
+          sha: "sha-external",
+        })
+      )
+    );
+
+    renderHook(() => useFileWatcher(POLL_MS), { wrapper });
+
+    await waitFor(() => expect(useConfirm.getState().pending).not.toBeNull(), {
+      timeout: 2000,
+    });
+    act(() => useConfirm.getState().resolve(false));
+
+    await waitFor(
+      () => {
+        const f = useOpenFiles.getState().files.find((x) => x.id === id)!;
+        expect(f.ignoredExternal?.sha).toBe("sha-external");
+      },
+      { timeout: 2000 }
+    );
+
+    // Several more ticks, which previously took the mtime-fallback backfill.
+    await new Promise((r) => setTimeout(r, POLL_MS * 10));
+    const f = useOpenFiles.getState().files.find((x) => x.id === id)!;
+    expect(f.serverSha).toBeUndefined();
+    expect(f.ignoredExternal?.sha).toBe("sha-external");
+    expect(useConfirm.getState().pending).toBeNull();
+  });
+
+  it("records the dismissal against a server that reports no sha at all", async () => {
+    const id = seedActiveFile({
+      name: "m.md",
+      path: "m.md",
+      markdown: "my edits",
+      serverModified: "2026-05-20T00:00:00Z",
+      isDirty: true,
+    });
+
+    server.use(
+      http.get(`${API_BASE}/api/stat/m.md`, () =>
+        HttpResponse.json({ path: "m.md", modified: "2026-05-21T00:00:00Z" })
+      )
+    );
+
+    renderHook(() => useFileWatcher(POLL_MS), { wrapper });
+
+    await waitFor(() => expect(useConfirm.getState().pending).not.toBeNull(), {
+      timeout: 2000,
+    });
+    act(() => useConfirm.getState().resolve(false));
+
+    await waitFor(
+      () => {
+        const f = useOpenFiles.getState().files.find((x) => x.id === id)!;
+        // No sha to record, but the tab must still remember that there is an
+        // un-reconciled external change — that is what makes the save prompt.
+        expect(f.ignoredExternal).toBeDefined();
+        expect(f.ignoredExternal?.sha).toBeUndefined();
+        expect(f.ignoredExternal?.modified).toBe("2026-05-21T00:00:00Z");
+      },
+      { timeout: 2000 }
+    );
+
+    // And the dialog stays closed on subsequent ticks over the same mtime.
+    await new Promise((r) => setTimeout(r, POLL_MS * 10));
+    expect(useConfirm.getState().pending).toBeNull();
   });
 
   it("prompts again when the external side moves on after a dismissal", async () => {
@@ -828,7 +912,7 @@ describe("useFileWatcher", () => {
     await waitFor(
       () => {
         const f = useOpenFiles.getState().files.find((x) => x.path === "j.md")!;
-        expect(f.ignoredSha).toBe("sha-external-1");
+        expect(f.ignoredExternal?.sha).toBe("sha-external-1");
       },
       { timeout: 2000 }
     );

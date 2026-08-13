@@ -32,17 +32,24 @@ export interface OpenFile {
    */
   serverSha?: string;
   /**
-   * sha256 hex of an external change the user explicitly chose to ignore
-   * (they kept their unsaved edits over it). Deliberately separate from
-   * `serverSha` (#202): the buffer is still built on `serverSha`, so that is
-   * what the next save must send as If-Match — folding the ignored sha into
-   * the baseline would make the save pass the precondition and overwrite the
-   * external change with no warning. This field only silences the watcher's
-   * dialog for that exact content; a further external change gets a new sha
-   * and prompts again. Cleared whenever the baseline legitimately moves
-   * (save, external reload, or the file returning to the baseline content).
+   * An external change the user explicitly chose to ignore (they kept their
+   * unsaved edits over it). Deliberately separate from `serverSha` (#202):
+   * the buffer is still built on `serverSha`, so that is what the next save
+   * must send as If-Match — folding the ignored sha into the baseline would
+   * make the save pass the precondition and overwrite the external change
+   * with no warning.
+   *
+   * Its presence, not its contents, is what marks "there is an un-reconciled
+   * external change on this tab": `sha` is absent against a server that
+   * doesn't report one, and the save guard has to fire there too (that is
+   * exactly the case with no If-Match to fall back on). `sha` / `modified`
+   * only decide whether a later poll is looking at the *same* dismissed
+   * content or at something new worth prompting about again.
+   *
+   * Cleared whenever the baseline legitimately moves: a save, an external
+   * reload, or the file coming back to the baseline content.
    */
-  ignoredSha?: string;
+  ignoredExternal?: { sha?: string; modified: string };
   /**
    * RFC3339 mtime of the file on disk as of the last read/write. Used by the
    * external-change watcher to decide whether a poll-found newer mtime
@@ -386,7 +393,7 @@ export const useOpenFiles = create<OpenFilesState>()(
                     serverModified: modified ?? file.serverModified,
                     serverCreated: created ?? file.serverCreated,
                     serverSha: sha ?? file.serverSha,
-                    ignoredSha: undefined,
+                    ignoredExternal: undefined,
                   }
                 : file
             ),
@@ -426,7 +433,7 @@ export const useOpenFiles = create<OpenFilesState>()(
                     serverModified: modified,
                     serverCreated: created ?? file.serverCreated,
                     serverSha: sha ?? file.serverSha,
-                    ignoredSha: undefined,
+                    ignoredExternal: undefined,
                   }
                 : file
             ),
@@ -443,7 +450,7 @@ export const useOpenFiles = create<OpenFilesState>()(
                     ...file,
                     serverModified: modified,
                     serverSha: sha ?? file.serverSha,
-                    ignoredSha: undefined,
+                    ignoredExternal: undefined,
                   }
                 : file
             ),
@@ -459,8 +466,8 @@ export const useOpenFiles = create<OpenFilesState>()(
                 ? {
                     ...file,
                     serverModified: modified,
-                    // serverSha deliberately untouched — see ignoredSha above.
-                    ignoredSha: sha ?? file.ignoredSha,
+                    // serverSha deliberately untouched — see ignoredExternal.
+                    ignoredExternal: { sha: sha ?? file.ignoredExternal?.sha, modified },
                   }
                 : file
             ),

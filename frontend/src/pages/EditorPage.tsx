@@ -1170,7 +1170,7 @@ export function EditorPage() {
     // server that doesn't report one) writes unconditionally — so if the
     // user has already dismissed an external change on this tab, ask here
     // instead of silently clobbering it.
-    if (activeFile.ignoredSha && !activeFile.serverSha) {
+    if (activeFile.ignoredExternal && !activeFile.serverSha) {
       const overwrite = await confirmOverwrite(activeFile.name);
       if (!overwrite) return;
     }

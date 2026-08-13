@@ -274,8 +274,42 @@ describe("EditorPage save conflict (#119 case 5)", () => {
     await waitFor(() => {
       const active = useOpenFiles.getState().files.find((f) => f.id === id)!;
       expect(active.isDirty).toBe(false);
-      expect(active.ignoredSha).toBeUndefined();
+      expect(active.ignoredExternal).toBeUndefined();
     });
+  });
+
+  it("asks before overwriting even when the dismissal carries no sha", async () => {
+    const user = userEvent.setup();
+    let putCount = 0;
+
+    server.use(
+      http.get(`${API_BASE}/api/files/*`, () =>
+        HttpResponse.json({
+          path: "README.md",
+          root: "mock-root",
+          content: "# README.md\n\nmock content",
+          modified: "2026-05-20T00:00:00Z",
+          created: "2026-05-19T00:00:00Z",
+          state: "draft",
+        })
+      ),
+      http.put(`${API_BASE}/api/files/*`, () => {
+        putCount += 1;
+        return HttpResponse.json({ path: "README.md", root: "mock-root" });
+      })
+    );
+
+    await openAndDirtyReadme(user);
+    const id = useOpenFiles.getState().activeIdByRoot["mock-root"]!;
+    // A server that reports no sha: the watcher can only record the mtime.
+    useOpenFiles.getState().ignoreExternalChange(id, "2026-05-22T00:00:00Z");
+
+    await user.click(screen.getByTestId("editor-save"));
+
+    await waitFor(() =>
+      expect(screen.getByText("保存の競合")).toBeInTheDocument()
+    );
+    expect(putCount).toBe(0);
   });
 
   it("writes nothing when the user cancels that no-baseline overwrite prompt", async () => {
@@ -316,7 +350,7 @@ describe("EditorPage save conflict (#119 case 5)", () => {
     expect(putCount).toBe(0);
     const active = useOpenFiles.getState().files.find((f) => f.id === id)!;
     expect(active.isDirty).toBe(true);
-    expect(active.ignoredSha).toBe("sha-external");
+    expect(active.ignoredExternal?.sha).toBe("sha-external");
   });
 
   it("saves without an extra prompt when a baseline sha is available", async () => {
