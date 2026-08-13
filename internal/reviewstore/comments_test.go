@@ -267,6 +267,173 @@ func TestResolveAnchor_TableRowOccurrence(t *testing.T) {
 	}
 }
 
+// TestResolveAnchor_FencedHashIsNotAHeading (#205) guards the regression where
+// a shell comment inside a fenced code block was parsed as an ATX heading,
+// resetting the heading stack for every line after the fence. Every comment
+// below the first such fence then orphaned even though nothing was edited —
+// the frontend builds heading_path from ProseMirror `heading` nodes, so fenced
+// text never contributes there.
+func TestResolveAnchor_FencedHashIsNotAHeading(t *testing.T) {
+	content := "# 手順書\n\n## Step 0\n\n```bash\n# (b) 共有リソースの確認\nterraform state list\n```\n\n### ③ 移行先にデータが揃っていること\n\n本文\n"
+
+	a := Anchor{
+		HeadingPath: []string{"# 手順書", "## Step 0", "### ③ 移行先にデータが揃っていること"},
+		Snippet:     "③ 移行先にデータが揃っていること",
+		Occurrence:  0,
+	}
+	lr, ok := ResolveAnchor(content, a)
+	if !ok || lr[0] != 10 {
+		t.Fatalf("want line 10, got %v ok=%v", lr, ok)
+	}
+
+	// The fenced line itself stays anchorable (#163 D1) — the fix only stops it
+	// from being treated as a heading.
+	lr2, ok2 := ResolveAnchor(content, Anchor{
+		HeadingPath: []string{"## Step 0"}, Snippet: "# (b) 共有リソースの確認", Occurrence: 0,
+	})
+	if !ok2 || lr2[0] != 6 {
+		t.Fatalf("fenced line: want line 6, got %v ok=%v", lr2, ok2)
+	}
+}
+
+// TestHeadingStacks_Fences covers the fence-tracking edge cases directly: tilde
+// fences, an info string on the opening fence, a longer closing fence, and a
+// `#` line that is a real heading again once the fence closes.
+func TestHeadingStacks_Fences(t *testing.T) {
+	cases := []struct {
+		// want maps a 1-indexed line to the heading stack expected there.
+		want    map[int][]string
+		name    string
+		content string
+	}{
+		{
+			name:    "backtick fence with info string",
+			content: "# A\n\n```console\n# not a heading\n```\n\n## B\n",
+			want:    map[int][]string{4: {"# A"}, 7: {"# A", "## B"}},
+		},
+		{
+			name:    "tilde fence",
+			content: "# A\n\n~~~\n# not a heading\n~~~\n\n## B\n",
+			want:    map[int][]string{4: {"# A"}, 7: {"# A", "## B"}},
+		},
+		{
+			name:    "closing fence may be longer than the opener",
+			content: "# A\n\n```\n# not a heading\n`````\n\n## B\n",
+			want:    map[int][]string{4: {"# A"}, 7: {"# A", "## B"}},
+		},
+		{
+			name:    "a shorter run does not close the fence",
+			content: "# A\n\n````\n```\n# not a heading\n````\n\n## B\n",
+			want:    map[int][]string{5: {"# A"}, 8: {"# A", "## B"}},
+		},
+		{
+			name:    "a tilde run does not close a backtick fence",
+			content: "# A\n\n```\n~~~\n# not a heading\n```\n\n## B\n",
+			want:    map[int][]string{5: {"# A"}, 8: {"# A", "## B"}},
+		},
+		{
+			name:    "unterminated fence swallows the rest of the document",
+			content: "# A\n\n```\n# not a heading\n\n## also not a heading\n",
+			want:    map[int][]string{4: {"# A"}, 6: {"# A"}},
+		},
+		{
+			// A fence nested under a bullet is indented past the left margin
+			// but only up to 3 columns past the item's content column, so it
+			// is still a fence.
+			name:    "fence nested under a list item is a fence",
+			content: "# A\n\n- 手順:\n\n    ```bash\n    # not a heading\n    ```\n\n## B\n",
+			want:    map[int][]string{6: {"# A"}, 9: {"# A", "## B"}},
+		},
+		{
+			// 4 columns at the document root is an indented code block, so the
+			// ``` is literal text. Treating it as an opener would swallow the
+			// rest of the document and orphan everything below it.
+			name:    "4-column indent at the root is not a fence",
+			content: "# A\n\n    ```\n    # literal, not a heading\n\n## B\n\n本文\n",
+			want:    map[int][]string{4: {"# A"}, 8: {"# A", "## B"}},
+		},
+		{
+			// A delimiter indented 4+ columns past the opener is code content,
+			// not a closer. Closing there would end the block early and hand
+			// the lines below back to the heading parser.
+			name:    "over-indented delimiter does not close the fence",
+			content: "# A\n\n```\n    ```\n# not a heading\n```\n\n## B\n",
+			want:    map[int][]string{5: {"# A"}, 8: {"# A", "## B"}},
+		},
+		{
+			// Once the list ends, the allowance goes back to the root's 3.
+			name:    "allowance resets after the list ends",
+			content: "# A\n\n- 手順\n\n本文\n\n    ```\n\n## B\n",
+			want:    map[int][]string{7: {"# A"}, 9: {"# A", "## B"}},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stacks := headingStacks(tc.content)
+			for line, want := range tc.want {
+				got := stacks[line-1]
+				if len(got) != len(want) {
+					t.Fatalf("line %d: got %v, want %v", line, got, want)
+				}
+				for i := range want {
+					if got[i] != want[i] {
+						t.Fatalf("line %d: got %v, want %v", line, got, want)
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestResolveAnchorForDisplay covers the read-path fallback for a stale
+// heading_path: anchors ReanchorReview rewrote before #205 carry a path taken
+// from a mis-parsed stack (a fenced line recorded as the root heading), so
+// strict resolution stops matching once the parser is fixed.
+func TestResolveAnchorForDisplay(t *testing.T) {
+	content := "# 本当の見出し\n\n## 節\n\n```\n# 見出しではない\n```\n\n対象の一文\n"
+
+	stale := Anchor{
+		HeadingPath: []string{"# 見出しではない", "## 節"},
+		Snippet:     "対象の一文",
+		Occurrence:  0,
+	}
+	if _, ok := ResolveAnchor(content, stale); ok {
+		t.Fatal("strict resolution must still reject a stale heading_path, so reanchoring repairs it")
+	}
+	repaired, lr, ok := ResolveAnchorForDisplay(content, stale)
+	if !ok || lr[0] != 9 {
+		t.Fatalf("want line 9, got %v ok=%v", lr, ok)
+	}
+	// The repaired anchor is what the client gets, so it must resolve strictly
+	// — otherwise the frontend highlight and jump stay dead.
+	want := []string{"# 本当の見出し", "## 節"}
+	if len(repaired.HeadingPath) != len(want) {
+		t.Fatalf("repaired heading_path = %v, want %v", repaired.HeadingPath, want)
+	}
+	for i := range want {
+		if repaired.HeadingPath[i] != want[i] {
+			t.Fatalf("repaired heading_path = %v, want %v", repaired.HeadingPath, want)
+		}
+	}
+	if lr2, ok2 := ResolveAnchor(content, repaired); !ok2 || lr2[0] != 9 {
+		t.Fatalf("repaired anchor must resolve strictly to line 9, got %v ok=%v", lr2, ok2)
+	}
+
+	// Ambiguous snippets stay orphaned — there is no single line to point at.
+	ambiguous := "# A\n\n重複\n\n## B\n\n重複\n"
+	if _, _, ok := ResolveAnchorForDisplay(ambiguous, Anchor{
+		HeadingPath: []string{"## 消えた見出し"}, Snippet: "重複", Occurrence: 0,
+	}); ok {
+		t.Fatal("expected orphan for an ambiguous snippet")
+	}
+
+	// A snippet that is really gone stays orphaned.
+	if _, _, ok := ResolveAnchorForDisplay(content, Anchor{Snippet: "存在しない文字列"}); ok {
+		t.Fatal("expected orphan for a missing snippet")
+	}
+}
+
 func TestStripInlineMarkup(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"## 👁️ 台帳サマリ（`_watchlist.md` 全アクティブ行）", "## 👁️ 台帳サマリ（_watchlist.md 全アクティブ行）"},
