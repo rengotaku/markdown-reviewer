@@ -32,6 +32,25 @@ export interface OpenFile {
    */
   serverSha?: string;
   /**
+   * An external change the user explicitly chose to ignore (they kept their
+   * unsaved edits over it). Deliberately separate from `serverSha` (#202):
+   * the buffer is still built on `serverSha`, so that is what the next save
+   * must send as If-Match — folding the ignored sha into the baseline would
+   * make the save pass the precondition and overwrite the external change
+   * with no warning.
+   *
+   * Its presence, not its contents, is what marks "there is an un-reconciled
+   * external change on this tab": `sha` is absent against a server that
+   * doesn't report one, and the save guard has to fire there too (that is
+   * exactly the case with no If-Match to fall back on). `sha` / `modified`
+   * only decide whether a later poll is looking at the *same* dismissed
+   * content or at something new worth prompting about again.
+   *
+   * Cleared whenever the baseline legitimately moves: a save, an external
+   * reload, or the file coming back to the baseline content.
+   */
+  ignoredExternal?: { sha?: string; modified: string };
+  /**
    * RFC3339 mtime of the file on disk as of the last read/write. Used by the
    * external-change watcher to decide whether a poll-found newer mtime
    * counts as an external edit. Empty string for files that don't have a
@@ -103,12 +122,19 @@ interface OpenFilesState {
   ) => void;
   /**
    * Record a new serverModified (and, when known, serverSha) without
-   * touching the file's contents — used when the user chooses to keep their
-   * unsaved edits over an external change (so the watcher doesn't keep
-   * re-firing on the same mtime/sha), and to silently backfill serverSha on
-   * a rehydrated tab or an mtime-only "touch" (#119).
+   * touching the file's contents — used to silently backfill serverSha on a
+   * rehydrated tab or an mtime-only "touch" (#119). Both cases mean the
+   * on-disk content matches our baseline, so any previously ignored sha is
+   * no longer relevant and is cleared.
    */
   acknowledgeExternalChange: (id: string, modified: string, sha?: string) => void;
+  /**
+   * Record that the user chose to keep their unsaved edits over an external
+   * change (#202). Advances serverModified and remembers the ignored sha so
+   * the watcher stops re-prompting for that exact content, but deliberately
+   * leaves serverSha — the save baseline — alone.
+   */
+  ignoreExternalChange: (id: string, modified: string, sha?: string) => void;
 }
 
 const STORAGE_KEY = "markdown-reviewer-open-files";
@@ -367,6 +393,7 @@ export const useOpenFiles = create<OpenFilesState>()(
                     serverModified: modified ?? file.serverModified,
                     serverCreated: created ?? file.serverCreated,
                     serverSha: sha ?? file.serverSha,
+                    ignoredExternal: undefined,
                   }
                 : file
             ),
@@ -406,6 +433,7 @@ export const useOpenFiles = create<OpenFilesState>()(
                     serverModified: modified,
                     serverCreated: created ?? file.serverCreated,
                     serverSha: sha ?? file.serverSha,
+                    ignoredExternal: undefined,
                   }
                 : file
             ),
@@ -418,7 +446,29 @@ export const useOpenFiles = create<OpenFilesState>()(
           return {
             files: state.files.map((file) =>
               file.id === id
-                ? { ...file, serverModified: modified, serverSha: sha ?? file.serverSha }
+                ? {
+                    ...file,
+                    serverModified: modified,
+                    serverSha: sha ?? file.serverSha,
+                    ignoredExternal: undefined,
+                  }
+                : file
+            ),
+          };
+        }),
+
+      ignoreExternalChange: (id, modified, sha) =>
+        set((state) => {
+          if (!state.files.some((f) => f.id === id)) return state;
+          return {
+            files: state.files.map((file) =>
+              file.id === id
+                ? {
+                    ...file,
+                    serverModified: modified,
+                    // serverSha deliberately untouched — see ignoredExternal.
+                    ignoredExternal: { sha: sha ?? file.ignoredExternal?.sha, modified },
+                  }
                 : file
             ),
           };

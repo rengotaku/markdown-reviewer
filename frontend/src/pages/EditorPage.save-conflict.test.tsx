@@ -215,4 +215,185 @@ describe("EditorPage save conflict (#119 case 5)", () => {
     expect(active.isDirty).toBe(true);
     expect(active.markdown).toBe("edited content");
   });
+
+  // --- no baseline sha to protect the write (#202) --------------------------
+  //
+  // A tab rehydrated from a session that predates the sha field (or a server
+  // that doesn't report one) sends no If-Match, so the server can't answer
+  // 412. If the user has already dismissed an external change on that tab,
+  // saving would overwrite it with no warning at all.
+
+  it("asks before overwriting a dismissed external change when there is no If-Match baseline", async () => {
+    const user = userEvent.setup();
+    const capturedHeaders: (string | null)[] = [];
+
+    server.use(
+      http.get(`${API_BASE}/api/files/*`, () =>
+        HttpResponse.json({
+          path: "README.md",
+          root: "mock-root",
+          content: "# README.md\n\nmock content",
+          modified: "2026-05-20T00:00:00Z",
+          created: "2026-05-19T00:00:00Z",
+          state: "draft",
+          // no sha — pre-#119 server / rehydrated legacy tab
+        })
+      ),
+      http.put(`${API_BASE}/api/files/*`, async ({ request }) => {
+        capturedHeaders.push(request.headers.get("If-Match"));
+        const body = (await request.json()) as { content: string };
+        return HttpResponse.json({
+          path: "README.md",
+          root: "mock-root",
+          content: body.content,
+          modified: "2026-05-23T00:00:00Z",
+          created: "2026-05-19T00:00:00Z",
+          state: "draft",
+        });
+      })
+    );
+
+    await openAndDirtyReadme(user);
+    const id = useOpenFiles.getState().activeIdByRoot["mock-root"]!;
+    // The watcher's "keep my edits" outcome, on a tab with no baseline sha.
+    useOpenFiles
+      .getState()
+      .ignoreExternalChange(id, "2026-05-22T00:00:00Z", "sha-external");
+
+    await user.click(screen.getByTestId("editor-save"));
+
+    await waitFor(() =>
+      expect(screen.getByText("保存の競合")).toBeInTheDocument()
+    );
+    // Nothing written until the user actually confirms.
+    expect(capturedHeaders).toHaveLength(0);
+
+    await user.click(screen.getByRole("button", { name: "上書き保存" }));
+
+    await waitFor(() => expect(capturedHeaders).toHaveLength(1));
+    await waitFor(() => {
+      const active = useOpenFiles.getState().files.find((f) => f.id === id)!;
+      expect(active.isDirty).toBe(false);
+      expect(active.ignoredExternal).toBeUndefined();
+    });
+  });
+
+  it("asks before overwriting even when the dismissal carries no sha", async () => {
+    const user = userEvent.setup();
+    let putCount = 0;
+
+    server.use(
+      http.get(`${API_BASE}/api/files/*`, () =>
+        HttpResponse.json({
+          path: "README.md",
+          root: "mock-root",
+          content: "# README.md\n\nmock content",
+          modified: "2026-05-20T00:00:00Z",
+          created: "2026-05-19T00:00:00Z",
+          state: "draft",
+        })
+      ),
+      http.put(`${API_BASE}/api/files/*`, () => {
+        putCount += 1;
+        return HttpResponse.json({ path: "README.md", root: "mock-root" });
+      })
+    );
+
+    await openAndDirtyReadme(user);
+    const id = useOpenFiles.getState().activeIdByRoot["mock-root"]!;
+    // A server that reports no sha: the watcher can only record the mtime.
+    useOpenFiles.getState().ignoreExternalChange(id, "2026-05-22T00:00:00Z");
+
+    await user.click(screen.getByTestId("editor-save"));
+
+    await waitFor(() =>
+      expect(screen.getByText("保存の競合")).toBeInTheDocument()
+    );
+    expect(putCount).toBe(0);
+  });
+
+  it("writes nothing when the user cancels that no-baseline overwrite prompt", async () => {
+    const user = userEvent.setup();
+    let putCount = 0;
+
+    server.use(
+      http.get(`${API_BASE}/api/files/*`, () =>
+        HttpResponse.json({
+          path: "README.md",
+          root: "mock-root",
+          content: "# README.md\n\nmock content",
+          modified: "2026-05-20T00:00:00Z",
+          created: "2026-05-19T00:00:00Z",
+          state: "draft",
+        })
+      ),
+      http.put(`${API_BASE}/api/files/*`, () => {
+        putCount += 1;
+        return HttpResponse.json({ path: "README.md", root: "mock-root" });
+      })
+    );
+
+    await openAndDirtyReadme(user);
+    const id = useOpenFiles.getState().activeIdByRoot["mock-root"]!;
+    useOpenFiles
+      .getState()
+      .ignoreExternalChange(id, "2026-05-22T00:00:00Z", "sha-external");
+
+    await user.click(screen.getByTestId("editor-save"));
+
+    await waitFor(() =>
+      expect(screen.getByText("保存の競合")).toBeInTheDocument()
+    );
+    await user.click(screen.getByRole("button", { name: "キャンセル" }));
+
+    await waitFor(() => expect(useConfirm.getState().pending).toBeNull());
+    expect(putCount).toBe(0);
+    const active = useOpenFiles.getState().files.find((f) => f.id === id)!;
+    expect(active.isDirty).toBe(true);
+    expect(active.ignoredExternal?.sha).toBe("sha-external");
+  });
+
+  it("saves without an extra prompt when a baseline sha is available", async () => {
+    const user = userEvent.setup();
+    let putCount = 0;
+
+    server.use(
+      http.get(`${API_BASE}/api/files/*`, () =>
+        HttpResponse.json({
+          path: "README.md",
+          root: "mock-root",
+          content: "# README.md\n\nmock content",
+          modified: "2026-05-20T00:00:00Z",
+          created: "2026-05-19T00:00:00Z",
+          state: "draft",
+          sha: "sha-base",
+        })
+      ),
+      http.put(`${API_BASE}/api/files/*`, async ({ request }) => {
+        putCount += 1;
+        const body = (await request.json()) as { content: string };
+        return HttpResponse.json({
+          path: "README.md",
+          root: "mock-root",
+          content: body.content,
+          modified: "2026-05-23T00:00:00Z",
+          created: "2026-05-19T00:00:00Z",
+          state: "draft",
+          sha: "sha-saved",
+        });
+      })
+    );
+
+    await openAndDirtyReadme(user);
+    const id = useOpenFiles.getState().activeIdByRoot["mock-root"]!;
+    useOpenFiles
+      .getState()
+      .ignoreExternalChange(id, "2026-05-22T00:00:00Z", "sha-external");
+
+    await user.click(screen.getByTestId("editor-save"));
+
+    // With a baseline the server's 412 is the gate, so no client-side prompt.
+    await waitFor(() => expect(putCount).toBe(1));
+    expect(useConfirm.getState().pending).toBeNull();
+  });
 });

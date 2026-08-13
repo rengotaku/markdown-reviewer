@@ -1153,8 +1153,27 @@ export function EditorPage() {
   // overwrite (retry without If-Match, legacy last-write-wins) or cancel
   // (the file watcher's next tick will independently offer to take the
   // external change, since the on-disk sha now differs from ours).
+  // Shared by both overwrite prompts below so the wording can't drift apart.
+  const confirmOverwrite = (name: string) =>
+    confirm({
+      title: "保存の競合",
+      message: `「${name}」は他の場所で更新されているため、まだ保存していません。\n外部の変更を上書きして保存しますか？`,
+      confirmLabel: "上書き保存",
+      cancelLabel: "キャンセル",
+    });
+
   const handleSave = async () => {
     if (!activeFile) return;
+    // #202: the 412 path below is what normally forces an explicit overwrite
+    // decision, but it only exists when we have a baseline sha to send as
+    // If-Match. A tab with none (rehydrated from a pre-sha session, or a
+    // server that doesn't report one) writes unconditionally — so if the
+    // user has already dismissed an external change on this tab, ask here
+    // instead of silently clobbering it.
+    if (activeFile.ignoredExternal && !activeFile.serverSha) {
+      const overwrite = await confirmOverwrite(activeFile.name);
+      if (!overwrite) return;
+    }
     try {
       const res = await writeFile.mutateAsync({
         path: activeFile.path,
@@ -1175,12 +1194,7 @@ export function EditorPage() {
       showToast(`「${activeFile.name}」を保存しました`, "success");
     } catch (err) {
       if (err instanceof HTTPError && err.response.status === 412) {
-        const overwrite = await confirm({
-          title: "保存の競合",
-          message: `「${activeFile.name}」は他の場所で更新されているため、まだ保存していません。\n外部の変更を上書きして保存しますか？`,
-          confirmLabel: "上書き保存",
-          cancelLabel: "キャンセル",
-        });
+        const overwrite = await confirmOverwrite(activeFile.name);
         if (!overwrite) return;
         try {
           const res = await writeFile.mutateAsync({

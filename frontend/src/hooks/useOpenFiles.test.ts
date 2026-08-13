@@ -481,6 +481,69 @@ describe("useOpenFiles guards and recovery", () => {
     expect(useOpenFiles.getState().files[0].serverSha).toBe("sha-1");
   });
 
+  // --- ignoreExternalChange (#202) ------------------------------------------
+
+  it("ignoreExternalChange keeps serverSha as the save baseline and records ignoredExternal", () => {
+    useOpenFiles
+      .getState()
+      .addFiles([{ name: "a.md", root: ROOT, markdown: "# A", sha: "sha-base" }]);
+    useOpenFiles.getState().updateActiveMarkdown(ROOT, "# keep my edit");
+    const id = useOpenFiles.getState().files[0].id;
+
+    useOpenFiles.getState().ignoreExternalChange(id, "2026-06-02T00:00:00Z", "sha-external");
+
+    const f = useOpenFiles.getState().files[0];
+    // The buffer was built on sha-base, so If-Match must still say sha-base —
+    // otherwise the next save silently overwrites the external change.
+    expect(f.serverSha).toBe("sha-base");
+    expect(f.ignoredExternal?.sha).toBe("sha-external");
+    expect(f.serverModified).toBe("2026-06-02T00:00:00Z");
+    expect(f.markdown).toBe("# keep my edit");
+    expect(f.isDirty).toBe(true);
+  });
+
+  it("clears ignoredExternal once the file is saved", () => {
+    useOpenFiles
+      .getState()
+      .addFiles([{ name: "a.md", root: ROOT, markdown: "# A", sha: "sha-base" }]);
+    const id = useOpenFiles.getState().files[0].id;
+    useOpenFiles.getState().ignoreExternalChange(id, "2026-06-02T00:00:00Z", "sha-external");
+
+    useOpenFiles
+      .getState()
+      .markActiveSaved(ROOT, "2026-06-03T00:00:00Z", undefined, "sha-saved");
+
+    expect(useOpenFiles.getState().files[0].ignoredExternal).toBeUndefined();
+  });
+
+  it("clears ignoredExternal once an external reload is applied", () => {
+    useOpenFiles
+      .getState()
+      .addFiles([{ name: "a.md", root: ROOT, markdown: "# A", sha: "sha-base" }]);
+    const id = useOpenFiles.getState().files[0].id;
+    useOpenFiles.getState().ignoreExternalChange(id, "2026-06-02T00:00:00Z", "sha-external");
+
+    useOpenFiles
+      .getState()
+      .applyExternalReload(id, "# external", "2026-06-03T00:00:00Z", undefined, "sha-external");
+
+    expect(useOpenFiles.getState().files[0].ignoredExternal).toBeUndefined();
+  });
+
+  it("clears ignoredExternal when the file returns to the acknowledged baseline", () => {
+    useOpenFiles
+      .getState()
+      .addFiles([{ name: "a.md", root: ROOT, markdown: "# A", sha: "sha-base" }]);
+    const id = useOpenFiles.getState().files[0].id;
+    useOpenFiles.getState().ignoreExternalChange(id, "2026-06-02T00:00:00Z", "sha-external");
+
+    // A plain touch / backfill goes through acknowledgeExternalChange, which
+    // only happens when the on-disk content matches our baseline again.
+    useOpenFiles.getState().acknowledgeExternalChange(id, "2026-06-04T00:00:00Z", "sha-base");
+
+    expect(useOpenFiles.getState().files[0].ignoredExternal).toBeUndefined();
+  });
+
   it("migrates a version-1 persisted payload onto the placeholder root", async () => {
     localStorage.setItem(
       "markdown-reviewer-open-files",

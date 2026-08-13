@@ -20,8 +20,10 @@ export const FILE_WATCHER_INTERVAL_MS = 5000;
  *     a low-noise toast so the user knows something changed under them.
  *   - dirty: show a confirm dialog letting the user pick between accepting
  *     the external version (their edits are discarded) and keeping their
- *     own edits (the external mtime/sha is acknowledged so the dialog
- *     doesn't re-open on every subsequent tick).
+ *     own edits (the external sha is recorded as *ignored* so the dialog
+ *     doesn't re-open on every subsequent tick — but the save baseline is
+ *     left alone, so the next save still hits the If-Match check and asks
+ *     before overwriting, see #202).
  *
  * Change detection is sha-first when both sides know a sha (#119): the
  * content hash tells a real external edit (even one that lands in the same
@@ -115,6 +117,28 @@ export function useFileWatcher(
         .files.find((f) => f.id === active.id);
       if (!live) return;
 
+      // Already-dismissed external content (#202), checked *before* the
+      // sha/mtime split below. That split's backfill branch would otherwise
+      // promote the ignored external sha into serverSha on a tab that has no
+      // baseline of its own — which then lets the next save pass If-Match and
+      // overwrite the very change the user chose to ignore.
+      const ignored = live.ignoredExternal;
+      if (ignored) {
+        const sameContent = stat.sha
+          ? stat.sha === ignored.sha
+          : Boolean(stat.modified) && stat.modified === ignored.modified;
+        if (sameContent) {
+          // Keep following the mtime: the header shows it, and a later
+          // response without a sha falls back to comparing mtimes.
+          if (stat.modified && stat.modified !== live.serverModified) {
+            useOpenFiles
+              .getState()
+              .ignoreExternalChange(live.id, stat.modified, stat.sha);
+          }
+          return;
+        }
+      }
+
       const shaKnownBothSides = Boolean(stat.sha && live.serverSha);
       if (shaKnownBothSides) {
         // sha-first (#119): the content hash is authoritative. Catches a
@@ -141,8 +165,11 @@ export function useFileWatcher(
         if (!stat.modified || stat.modified === live.serverModified) {
           // Nothing changed by mtime. If the server *did* report a sha (only
           // this tab lacks its baseline), backfill it silently so future
-          // ticks can take the sha-first path above.
-          if (stat.sha && !live.serverSha) {
+          // ticks can take the sha-first path above. Never while an ignored
+          // external change is outstanding (#202): the sha on disk is the
+          // ignored content, not what this buffer was built from, so adopting
+          // it as the baseline would hand the next save a passing If-Match.
+          if (stat.sha && !live.serverSha && !live.ignoredExternal) {
             useOpenFiles
               .getState()
               .acknowledgeExternalChange(live.id, live.serverModified, stat.sha);
@@ -235,14 +262,17 @@ export function useFileWatcher(
         }
         // Checked outside the try so the failure path is covered too.
         if (unmountedRef.current) return;
+        // Not acknowledgeExternalChange: keeping your edits must not move the
+        // save baseline, or the next save passes If-Match and overwrites the
+        // external change with no warning (#202).
         useOpenFiles
           .getState()
-          .acknowledgeExternalChange(live.id, seen.modified, seen.sha);
+          .ignoreExternalChange(live.id, seen.modified, seen.sha);
         // The user explicitly decided to ignore this external change (#178
         // round 2) — it's been seen and dismissed, not left unread.
         clearChanged(live.root, live.path);
         showToast(
-          `「${live.name}」の編集を保持しました（外部変更は無視）`,
+          `「${live.name}」の編集を保持しました（保存時に外部変更の上書き確認が出ます）`,
           "warning"
         );
       }
