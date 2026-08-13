@@ -267,6 +267,95 @@ func TestResolveAnchor_TableRowOccurrence(t *testing.T) {
 	}
 }
 
+// TestResolveAnchor_FencedHashIsNotAHeading (#205) guards the regression where
+// a shell comment inside a fenced code block was parsed as an ATX heading,
+// resetting the heading stack for every line after the fence. Every comment
+// below the first such fence then orphaned even though nothing was edited —
+// the frontend builds heading_path from ProseMirror `heading` nodes, so fenced
+// text never contributes there.
+func TestResolveAnchor_FencedHashIsNotAHeading(t *testing.T) {
+	content := "# 手順書\n\n## Step 0\n\n```bash\n# (b) 共有リソースの確認\nterraform state list\n```\n\n### ③ 移行先にデータが揃っていること\n\n本文\n"
+
+	a := Anchor{
+		HeadingPath: []string{"# 手順書", "## Step 0", "### ③ 移行先にデータが揃っていること"},
+		Snippet:     "③ 移行先にデータが揃っていること",
+		Occurrence:  0,
+	}
+	lr, ok := ResolveAnchor(content, a)
+	if !ok || lr[0] != 10 {
+		t.Fatalf("want line 10, got %v ok=%v", lr, ok)
+	}
+
+	// The fenced line itself stays anchorable (#163 D1) — the fix only stops it
+	// from being treated as a heading.
+	lr2, ok2 := ResolveAnchor(content, Anchor{
+		HeadingPath: []string{"## Step 0"}, Snippet: "# (b) 共有リソースの確認", Occurrence: 0,
+	})
+	if !ok2 || lr2[0] != 6 {
+		t.Fatalf("fenced line: want line 6, got %v ok=%v", lr2, ok2)
+	}
+}
+
+// TestHeadingStacks_Fences covers the fence-tracking edge cases directly: tilde
+// fences, an info string on the opening fence, a longer closing fence, and a
+// `#` line that is a real heading again once the fence closes.
+func TestHeadingStacks_Fences(t *testing.T) {
+	cases := []struct {
+		// want maps a 1-indexed line to the heading stack expected there.
+		want    map[int][]string
+		name    string
+		content string
+	}{
+		{
+			name:    "backtick fence with info string",
+			content: "# A\n\n```console\n# not a heading\n```\n\n## B\n",
+			want:    map[int][]string{4: {"# A"}, 7: {"# A", "## B"}},
+		},
+		{
+			name:    "tilde fence",
+			content: "# A\n\n~~~\n# not a heading\n~~~\n\n## B\n",
+			want:    map[int][]string{4: {"# A"}, 7: {"# A", "## B"}},
+		},
+		{
+			name:    "closing fence may be longer than the opener",
+			content: "# A\n\n```\n# not a heading\n`````\n\n## B\n",
+			want:    map[int][]string{4: {"# A"}, 7: {"# A", "## B"}},
+		},
+		{
+			name:    "a shorter run does not close the fence",
+			content: "# A\n\n````\n```\n# not a heading\n````\n\n## B\n",
+			want:    map[int][]string{5: {"# A"}, 8: {"# A", "## B"}},
+		},
+		{
+			name:    "a tilde run does not close a backtick fence",
+			content: "# A\n\n```\n~~~\n# not a heading\n```\n\n## B\n",
+			want:    map[int][]string{5: {"# A"}, 8: {"# A", "## B"}},
+		},
+		{
+			name:    "unterminated fence swallows the rest of the document",
+			content: "# A\n\n```\n# not a heading\n\n## also not a heading\n",
+			want:    map[int][]string{4: {"# A"}, 6: {"# A"}},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stacks := headingStacks(tc.content)
+			for line, want := range tc.want {
+				got := stacks[line-1]
+				if len(got) != len(want) {
+					t.Fatalf("line %d: got %v, want %v", line, got, want)
+				}
+				for i := range want {
+					if got[i] != want[i] {
+						t.Fatalf("line %d: got %v, want %v", line, got, want)
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestStripInlineMarkup(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{"## 👁️ 台帳サマリ（`_watchlist.md` 全アクティブ行）", "## 👁️ 台帳サマリ（_watchlist.md 全アクティブ行）"},

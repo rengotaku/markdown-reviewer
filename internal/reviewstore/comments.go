@@ -301,7 +301,13 @@ func nextCommentID(comments []Comment) string {
 	return fmt.Sprintf("c-%03d", max+1)
 }
 
-var anchorHeadingRe = regexp.MustCompile(`^(#{1,6})\s+(.+?)\s*$`)
+var (
+	anchorHeadingRe = regexp.MustCompile(`^(#{1,6})\s+(.+?)\s*$`)
+	// A fenced code block delimiter: 3+ backticks or tildes, optionally
+	// followed by an info string (backtick fences may not have a backtick in
+	// theirs, per CommonMark).
+	fenceRe = regexp.MustCompile("^(`{3,}|~{3,})(.*)$")
+)
 
 // ResolveAnchor finds the 1-indexed line range of an anchor in the canonical
 // content. It searches for the snippet under a matching heading path, picking
@@ -335,6 +341,13 @@ func ResolveAnchor(content string, a Anchor) (lineRange [2]int, ok bool) {
 
 // headingStacks returns, for each 0-indexed line, the heading stack in effect
 // on that line (each element keeps its `#` prefix so the level is explicit).
+//
+// Lines inside a fenced code block are skipped: a shell comment such as
+// `# (b) 共有リソースの確認` is not a heading, and treating it as one used to
+// reset the stack for the whole rest of the document, orphaning every comment
+// below the first fence (#205). The frontend builds heading_path from
+// ProseMirror `heading` nodes, where fenced text can never contribute, so the
+// backend has to match that.
 func headingStacks(content string) [][]string {
 	lines := strings.Split(content, "\n")
 	out := make([][]string, len(lines))
@@ -343,13 +356,17 @@ func headingStacks(content string) [][]string {
 		level int
 	}
 	var stack []entry
+	var fence fenceState
 	for i, line := range lines {
-		if m := anchorHeadingRe.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
-			level := len(m[1])
-			for len(stack) > 0 && stack[len(stack)-1].level >= level {
-				stack = stack[:len(stack)-1]
+		trimmed := strings.TrimSpace(line)
+		if !fence.step(trimmed) {
+			if m := anchorHeadingRe.FindStringSubmatch(trimmed); m != nil {
+				level := len(m[1])
+				for len(stack) > 0 && stack[len(stack)-1].level >= level {
+					stack = stack[:len(stack)-1]
+				}
+				stack = append(stack, entry{text: m[1] + " " + stripInlineMarkup(strings.TrimSpace(m[2])), level: level})
 			}
-			stack = append(stack, entry{text: m[1] + " " + stripInlineMarkup(strings.TrimSpace(m[2])), level: level})
 		}
 		snap := make([]string, len(stack))
 		for j, e := range stack {
@@ -358,6 +375,37 @@ func headingStacks(content string) [][]string {
 		out[i] = snap
 	}
 	return out
+}
+
+// fenceState tracks whether a line-by-line scan is currently inside a fenced
+// code block.
+type fenceState struct {
+	char byte // 0 when outside; '`' or '~' while a fence is open
+	n    int  // length of the opening delimiter run
+}
+
+// step advances the state with the next whitespace-trimmed line and reports
+// whether that line belongs to a fenced code block (delimiter lines included).
+func (f *fenceState) step(trimmed string) bool {
+	m := fenceRe.FindStringSubmatch(trimmed)
+	if f.char == 0 {
+		if m == nil {
+			return false
+		}
+		// A backtick fence may not carry a backtick in its info string, so
+		// something like ```` ```go` ```` is not an opener.
+		if m[1][0] == '`' && strings.ContainsRune(m[2], '`') {
+			return false
+		}
+		f.char, f.n = m[1][0], len(m[1])
+		return true
+	}
+	// Inside a fence: only a run of the same character, at least as long as
+	// the opener and with nothing but whitespace after it, closes the block.
+	if m != nil && m[1][0] == f.char && len(m[1]) >= f.n && strings.TrimSpace(m[2]) == "" {
+		f.char, f.n = 0, 0
+	}
+	return true
 }
 
 // headingSuffixMatch reports whether want is a suffix of stack, so a partial
