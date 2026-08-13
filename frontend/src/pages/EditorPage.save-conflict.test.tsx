@@ -254,7 +254,7 @@ describe("EditorPage save conflict (#119 case 5)", () => {
     );
 
     await openAndDirtyReadme(user);
-    const id = useOpenFiles.getState().activeIdByRoot["mock-root"];
+    const id = useOpenFiles.getState().activeIdByRoot["mock-root"]!;
     // The watcher's "keep my edits" outcome, on a tab with no baseline sha.
     useOpenFiles
       .getState()
@@ -300,7 +300,7 @@ describe("EditorPage save conflict (#119 case 5)", () => {
     );
 
     await openAndDirtyReadme(user);
-    const id = useOpenFiles.getState().activeIdByRoot["mock-root"];
+    const id = useOpenFiles.getState().activeIdByRoot["mock-root"]!;
     useOpenFiles
       .getState()
       .ignoreExternalChange(id, "2026-05-22T00:00:00Z", "sha-external");
@@ -351,7 +351,7 @@ describe("EditorPage save conflict (#119 case 5)", () => {
     );
 
     await openAndDirtyReadme(user);
-    const id = useOpenFiles.getState().activeIdByRoot["mock-root"];
+    const id = useOpenFiles.getState().activeIdByRoot["mock-root"]!;
     useOpenFiles
       .getState()
       .ignoreExternalChange(id, "2026-05-22T00:00:00Z", "sha-external");
