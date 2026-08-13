@@ -307,6 +307,9 @@ var (
 	// followed by an info string (backtick fences may not have a backtick in
 	// theirs, per CommonMark).
 	fenceRe = regexp.MustCompile("^(`{3,}|~{3,})(.*)$")
+	// A bullet or ordered list marker plus the whitespace that follows it,
+	// which together set the item's content column.
+	listMarkerRe = regexp.MustCompile(`^(\s*)([-*+]|\d{1,9}[.)])([ \t]+)`)
 )
 
 // ResolveAnchor finds the 1-indexed line range of an anchor in the canonical
@@ -339,6 +342,42 @@ func ResolveAnchor(content string, a Anchor) (lineRange [2]int, ok bool) {
 	return [2]int{}, false
 }
 
+// ResolveAnchorForDisplay resolves like ResolveAnchor but falls back to the
+// snippet alone when the heading gate rejects every line and the snippet still
+// occurs exactly once: that line is then the only thing the anchor can mean, so
+// showing it beats reporting an orphan.
+//
+// A stored heading_path goes stale when an ancestor heading is renamed, and
+// anchors that ReanchorReview rewrote before #205 carry a path recorded from a
+// mis-parsed stack — one that names a line which is really fenced code and so
+// stops matching once the parser is fixed.
+//
+// Only the read paths use this. ReanchorReview deliberately keeps the strict
+// ResolveAnchor so a stale heading_path still counts as "needs repair" and gets
+// rewritten on the next external edit instead of being papered over forever.
+func ResolveAnchorForDisplay(content string, a Anchor) (lineRange [2]int, ok bool) {
+	if lr, found := ResolveAnchor(content, a); found {
+		return lr, true
+	}
+	if a.Snippet == "" || a.Occurrence != 0 {
+		return [2]int{}, false
+	}
+	match := -1
+	for i, line := range strings.Split(content, "\n") {
+		if !strings.Contains(stripInlineMarkup(line), a.Snippet) {
+			continue
+		}
+		if match >= 0 {
+			return [2]int{}, false // ambiguous — leave it orphaned
+		}
+		match = i
+	}
+	if match < 0 {
+		return [2]int{}, false
+	}
+	return [2]int{match + 1, match + 1}, true
+}
+
 // headingStacks returns, for each 0-indexed line, the heading stack in effect
 // on that line (each element keeps its `#` prefix so the level is explicit).
 //
@@ -358,9 +397,11 @@ func headingStacks(content string) [][]string {
 	var stack []entry
 	var fence fenceState
 	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if !fence.step(trimmed) {
-			if m := anchorHeadingRe.FindStringSubmatch(trimmed); m != nil {
+		// An indented code block is code for the same reason a fence is, so a
+		// `#` line that sits 4+ columns past its container is not a heading
+		// either.
+		if !fence.step(line) && fence.indentAllowsBlock(leadingIndent(line)) {
+			if m := anchorHeadingRe.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
 				level := len(m[1])
 				for len(stack) > 0 && stack[len(stack)-1].level >= level {
 					stack = stack[:len(stack)-1]
@@ -379,33 +420,88 @@ func headingStacks(content string) [][]string {
 
 // fenceState tracks whether a line-by-line scan is currently inside a fenced
 // code block.
+//
+// Indentation decides between a fence and an indented code block, and it is
+// measured against the enclosing container rather than the left margin: a
+// delimiter may be indented up to 3 columns past its container's content
+// column (CommonMark). Both directions matter in practice — code fences nested
+// under a bullet are routinely indented 2–6 columns and must stay fences,
+// while a 4-column indented ``` at the document root is literal text inside an
+// indented code block and must not open one (mistaking it for an opener makes
+// the rest of the document look like code, which is exactly the orphaning
+// #205 is about). Only list containers are tracked; blockquotes are not, so a
+// fence inside `>` is still invisible here — that predates this and is
+// unchanged.
 type fenceState struct {
-	char byte // 0 when outside; '`' or '~' while a fence is open
-	n    int  // length of the opening delimiter run
+	// contentIndent is the content column of the innermost open list item, or
+	// 0 at the document root.
+	contentIndent int
+	char          byte // 0 when outside; '`' or '~' while a fence is open
+	n             int  // length of the opening delimiter run
 }
 
-// step advances the state with the next whitespace-trimmed line and reports
-// whether that line belongs to a fenced code block (delimiter lines included).
-func (f *fenceState) step(trimmed string) bool {
+// step advances the state with the next raw line and reports whether that line
+// belongs to a fenced code block (delimiter lines included).
+func (f *fenceState) step(line string) bool {
+	trimmed := strings.TrimSpace(line)
 	m := fenceRe.FindStringSubmatch(trimmed)
-	if f.char == 0 {
-		if m == nil {
-			return false
+
+	if f.char != 0 {
+		// Inside a fence: only a run of the same character, at least as long
+		// as the opener and with nothing but whitespace after it, closes it.
+		if m != nil && m[1][0] == f.char && len(m[1]) >= f.n && strings.TrimSpace(m[2]) == "" {
+			f.char, f.n = 0, 0
 		}
-		// A backtick fence may not carry a backtick in its info string, so
-		// something like ```` ```go` ```` is not an opener.
-		if m[1][0] == '`' && strings.ContainsRune(m[2], '`') {
-			return false
-		}
-		f.char, f.n = m[1][0], len(m[1])
 		return true
 	}
-	// Inside a fence: only a run of the same character, at least as long as
-	// the opener and with nothing but whitespace after it, closes the block.
-	if m != nil && m[1][0] == f.char && len(m[1]) >= f.n && strings.TrimSpace(m[2]) == "" {
-		f.char, f.n = 0, 0
+
+	if trimmed == "" {
+		return false
 	}
+	indent := leadingIndent(line)
+	if indent < f.contentIndent {
+		// Dedented out of the list item — back to the document root.
+		f.contentIndent = 0
+	}
+	if lm := listMarkerRe.FindStringSubmatch(line); lm != nil && indent <= f.contentIndent+3 {
+		f.contentIndent = indent + len(lm[2]) + len(lm[3])
+	}
+
+	if m == nil || !f.indentAllowsBlock(indent) {
+		return false
+	}
+	// A backtick fence may not carry a backtick in its info string, so
+	// something like ```` ```go` ```` is not an opener.
+	if m[1][0] == '`' && strings.ContainsRune(m[2], '`') {
+		return false
+	}
+	f.char, f.n = m[1][0], len(m[1])
 	return true
+}
+
+// indentAllowsBlock reports whether a line at the given indentation can start a
+// leaf block (a fence or an ATX heading) rather than being indented-code
+// content: CommonMark allows up to 3 columns past the container's content
+// column.
+func (f *fenceState) indentAllowsBlock(indent int) bool {
+	return indent <= f.contentIndent+3
+}
+
+// leadingIndent counts the indentation columns of a line, expanding tabs to the
+// next multiple of 4 the way CommonMark does.
+func leadingIndent(line string) int {
+	n := 0
+	for _, r := range line {
+		switch r {
+		case ' ':
+			n++
+		case '\t':
+			n += 4 - n%4
+		default:
+			return n
+		}
+	}
+	return n
 }
 
 // headingSuffixMatch reports whether want is a suffix of stack, so a partial

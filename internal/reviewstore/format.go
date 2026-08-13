@@ -29,7 +29,7 @@ func CommentLocation(content string, cm Comment) string {
 	}
 	parts := make([]string, 0, len(anchors))
 	for _, a := range anchors {
-		if lr, ok := ResolveAnchor(content, a); ok {
+		if lr, ok := ResolveAnchorForDisplay(content, a); ok {
 			heading := ""
 			if n := len(a.HeadingPath); n > 0 {
 				heading = a.HeadingPath[n-1] + " "

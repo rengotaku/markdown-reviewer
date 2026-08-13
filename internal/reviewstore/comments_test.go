@@ -336,6 +336,28 @@ func TestHeadingStacks_Fences(t *testing.T) {
 			content: "# A\n\n```\n# not a heading\n\n## also not a heading\n",
 			want:    map[int][]string{4: {"# A"}, 6: {"# A"}},
 		},
+		{
+			// A fence nested under a bullet is indented past the left margin
+			// but only up to 3 columns past the item's content column, so it
+			// is still a fence.
+			name:    "fence nested under a list item is a fence",
+			content: "# A\n\n- 手順:\n\n    ```bash\n    # not a heading\n    ```\n\n## B\n",
+			want:    map[int][]string{6: {"# A"}, 9: {"# A", "## B"}},
+		},
+		{
+			// 4 columns at the document root is an indented code block, so the
+			// ``` is literal text. Treating it as an opener would swallow the
+			// rest of the document and orphan everything below it.
+			name:    "4-column indent at the root is not a fence",
+			content: "# A\n\n    ```\n    # literal, not a heading\n\n## B\n\n本文\n",
+			want:    map[int][]string{4: {"# A"}, 8: {"# A", "## B"}},
+		},
+		{
+			// Once the list ends, the allowance goes back to the root's 3.
+			name:    "allowance resets after the list ends",
+			content: "# A\n\n- 手順\n\n本文\n\n    ```\n\n## B\n",
+			want:    map[int][]string{7: {"# A"}, 9: {"# A", "## B"}},
+		},
 	}
 
 	for _, tc := range cases {
@@ -353,6 +375,40 @@ func TestHeadingStacks_Fences(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestResolveAnchorForDisplay covers the read-path fallback for a stale
+// heading_path: anchors ReanchorReview rewrote before #205 carry a path taken
+// from a mis-parsed stack (a fenced line recorded as the root heading), so
+// strict resolution stops matching once the parser is fixed.
+func TestResolveAnchorForDisplay(t *testing.T) {
+	content := "# 本当の見出し\n\n## 節\n\n```\n# 見出しではない\n```\n\n対象の一文\n"
+
+	stale := Anchor{
+		HeadingPath: []string{"# 見出しではない", "## 節"},
+		Snippet:     "対象の一文",
+		Occurrence:  0,
+	}
+	if _, ok := ResolveAnchor(content, stale); ok {
+		t.Fatal("strict resolution must still reject a stale heading_path, so reanchoring repairs it")
+	}
+	lr, ok := ResolveAnchorForDisplay(content, stale)
+	if !ok || lr[0] != 9 {
+		t.Fatalf("want line 9, got %v ok=%v", lr, ok)
+	}
+
+	// Ambiguous snippets stay orphaned — there is no single line to point at.
+	ambiguous := "# A\n\n重複\n\n## B\n\n重複\n"
+	if _, ok := ResolveAnchorForDisplay(ambiguous, Anchor{
+		HeadingPath: []string{"## 消えた見出し"}, Snippet: "重複", Occurrence: 0,
+	}); ok {
+		t.Fatal("expected orphan for an ambiguous snippet")
+	}
+
+	// A snippet that is really gone stays orphaned.
+	if _, ok := ResolveAnchorForDisplay(content, Anchor{Snippet: "存在しない文字列"}); ok {
+		t.Fatal("expected orphan for a missing snippet")
 	}
 }
 

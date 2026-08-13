@@ -77,7 +77,7 @@ func buildCommentJSON(content string, c reviewstore.Comment) CommentJSON {
 	var lineRange [2]int
 	resolved := false
 	for _, a := range anchors {
-		lr, ok := reviewstore.ResolveAnchor(content, a)
+		lr, ok := reviewstore.ResolveAnchorForDisplay(content, a)
 		if !ok {
 			continue
 		}
