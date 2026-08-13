@@ -219,9 +219,25 @@ export function useFileWatcher(
           );
         }
       } else {
+        // Acknowledge what is on disk *now*, not the pre-dialog stat. The
+        // dialog can stay up across further external writes, and the trigger
+        // each of those fires is swallowed by the pendingPathRef guard above
+        // — so acking the stale sha would leave the newest external change
+        // undetected until some later event (the interval is off whenever
+        // SSE is connected). A re-stat failure falls back to the pre-dialog
+        // values: acking something slightly stale only makes the next tick
+        // re-prompt, which is the safe direction.
+        let seen = stat;
+        try {
+          const latest = await statFile(live.path, live.root);
+          if (unmountedRef.current) return;
+          seen = latest;
+        } catch {
+          // keep `stat`
+        }
         useOpenFiles
           .getState()
-          .acknowledgeExternalChange(live.id, stat.modified, stat.sha);
+          .acknowledgeExternalChange(live.id, seen.modified, seen.sha);
         // The user explicitly decided to ignore this external change (#178
         // round 2) — it's been seen and dismissed, not left unread.
         clearChanged(live.root, live.path);

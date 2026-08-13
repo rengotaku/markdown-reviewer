@@ -616,6 +616,60 @@ describe("useFileWatcher", () => {
     expect(f.isDirty).toBe(true);
   });
 
+  it("acknowledges the newest on-disk state when declining, not the pre-dialog one", async () => {
+    const id = seedActiveFile({
+      name: "g.md",
+      path: "g.md",
+      markdown: "my edits",
+      serverModified: "2026-05-20T00:00:00Z",
+      serverSha: "sha-base",
+      isDirty: true,
+    });
+
+    // The first stat opens the dialog; every stat after it reports a *second*
+    // external write that landed while the dialog was up. Its own trigger is
+    // swallowed by the pendingPathRef guard, so the decline branch is the
+    // only place that can still notice it.
+    let statCalls = 0;
+    server.use(
+      http.get(`${API_BASE}/api/stat/g.md`, () => {
+        statCalls += 1;
+        return statCalls === 1
+          ? HttpResponse.json({
+              path: "g.md",
+              modified: "2026-05-21T00:00:00Z",
+              sha: "sha-first",
+            })
+          : HttpResponse.json({
+              path: "g.md",
+              modified: "2026-05-22T00:00:00Z",
+              sha: "sha-second",
+            });
+      })
+    );
+
+    renderHook(() => useFileWatcher(POLL_MS, { paused: true, trigger: 1 }), {
+      wrapper,
+    });
+
+    await waitFor(() => expect(useConfirm.getState().pending).not.toBeNull(), {
+      timeout: 2000,
+    });
+    act(() => useConfirm.getState().resolve(false));
+
+    await waitFor(
+      () => {
+        const f = useOpenFiles.getState().files.find((x) => x.id === id)!;
+        expect(f.serverSha).toBe("sha-second");
+        expect(f.serverModified).toBe("2026-05-22T00:00:00Z");
+      },
+      { timeout: 2000 }
+    );
+    const f = useOpenFiles.getState().files.find((x) => x.id === id)!;
+    expect(f.markdown).toBe("my edits");
+    expect(f.isDirty).toBe(true);
+  });
+
   it("does not act on the dialog answer once the hook has unmounted", async () => {
     const id = seedActiveFile({
       name: "f.md",
