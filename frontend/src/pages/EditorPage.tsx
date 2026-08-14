@@ -2126,6 +2126,15 @@ export function EditorPage() {
       <Menu
         open={!!contextMenu}
         onClose={closeContextMenu}
+        // MUI restores focus to whatever was focused when the menu opened —
+        // the editor's contenteditable. Focusing it hands control to
+        // ProseMirror, which scrolls its own selection into view, yanking the
+        // document by however far the caret sits from the marker that was
+        // right-clicked (measured: +5004px, marker off-screen). `preventScroll`
+        // does not help: the scroll comes from PM's selection sync, not the
+        // browser's focus behavior, so the only fix is not to refocus. Same
+        // failure mode AddCommentDialog documents for the comment dialog.
+        disableRestoreFocus
         anchorReference="anchorPosition"
         anchorPosition={
           contextMenu ? { top: contextMenu.y, left: contextMenu.x } : undefined
