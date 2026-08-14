@@ -187,6 +187,37 @@ describe("AddCommentDialog", () => {
     });
   });
 
+  it("edit mode: seeded body, 保存 button, keeps the target, submits without a scope", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    render(
+      <AddCommentDialog
+        open
+        mode="edit"
+        targetSnippet="対象の一文"
+        defaultBody="もとの本文"
+        onClose={() => {}}
+        onSubmit={onSubmit}
+      />
+    );
+
+    expect(screen.getByText("コメントを編集")).toBeInTheDocument();
+    expect(screen.getByTestId("comment-target-snippet")).toHaveTextContent("対象の一文");
+    const input = screen.getByTestId("comment-body-input") as HTMLTextAreaElement;
+    expect(input.value).toBe("もとの本文");
+
+    const submit = screen.getByTestId("comment-submit");
+    expect(submit).toHaveTextContent("保存");
+
+    await user.clear(input);
+    await user.type(input, "書き換えた本文");
+    await user.click(submit);
+
+    // The scope was fixed when the comment was created; editing never changes
+    // it, so the dialog must not claim one.
+    expect(onSubmit).toHaveBeenCalledWith({ body: "書き換えた本文" });
+  });
+
   it("prefills the body input with defaultBody", () => {
     render(
       <AddCommentDialog

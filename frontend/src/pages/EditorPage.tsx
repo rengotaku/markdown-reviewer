@@ -21,6 +21,7 @@ import MenuIcon from "@mui/icons-material/Menu";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import AddCommentIcon from "@mui/icons-material/AddComment";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
+import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import CommentIcon from "@mui/icons-material/Comment";
 import FormatAlignCenterIcon from "@mui/icons-material/FormatAlignCenter";
 import UnfoldMoreIcon from "@mui/icons-material/UnfoldMore";
@@ -104,6 +105,12 @@ function buildTargetSnippet(raw: string): string {
   const cleaned = raw.replace(/\s+/g, " ").trim();
   if (cleaned.length <= TARGET_SNIPPET_LENGTH) return cleaned;
   return `${cleaned.slice(0, TARGET_SNIPPET_LENGTH)}…`;
+}
+
+/** The text a comment is anchored to, for the edit dialog's target preview.
+ *  Global comments have no anchor and show nothing. */
+function commentTargetText(c: CommentJSON): string {
+  return c.anchor?.snippet ?? c.anchors?.[0]?.snippet ?? "";
 }
 
 export function EditorPage() {
@@ -975,7 +982,7 @@ export function EditorPage() {
 
   const [commentDialog, setCommentDialog] = useState<{
     open: boolean;
-    mode: "anchored" | "global";
+    mode: "anchored" | "global" | "edit";
     snippet: string;
     /**
      * The editor selection captured when the dialog opened (anchored mode).
@@ -983,10 +990,14 @@ export function EditorPage() {
      * even if focus shifts to the dialog.
      */
     range?: { from: number; to: number };
+    /** Set in "edit" mode: the comment whose body the dialog rewrites. */
+    editingId?: string;
+    /** Set in "edit" mode: the body the dialog opens with. */
+    defaultBody?: string;
   }>({ open: false, mode: "anchored", snippet: "" });
   // Editor context menu. Without commentId → "コメント追加" for the current
-  // selection; with commentId → "このコメントを削除" for the highlight that was
-  // right-clicked.
+  // selection; with commentId → "このコメントを編集 / 削除" for the highlight
+  // that was right-clicked.
   const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
@@ -1326,16 +1337,39 @@ export function EditorPage() {
     handleAddCommentClick();
   };
 
+  const contextMenuComment = comments.find((c) => c.id === contextMenu?.commentId);
   // AI-authored comments are read-only to the human reviewer (they can't be
   // deleted from the right-click menu either); see CommentSidePane's
   // isAiAuthored for the same "ai" author marker.
-  const contextMenuCommentIsAiAuthored =
-    comments.find((c) => c.id === contextMenu?.commentId)?.author === "ai";
+  const contextMenuCommentIsAiAuthored = contextMenuComment?.author === "ai";
+  // Resolved comments are read-only until reopened — the backend rejects a
+  // body edit with 409, so the menu mirrors the side pane and disables it.
+  const contextMenuCommentIsResolved = contextMenuComment?.status === "resolved";
+  const contextEditDisabledReason = contextMenuCommentIsAiAuthored
+    ? "AI のコメントは編集できません"
+    : contextMenuCommentIsResolved
+      ? "解決済みのため編集できません"
+      : null;
 
   const handleContextDeleteComment = () => {
     const id = contextMenu?.commentId;
     closeContextMenu();
     if (id && !contextMenuCommentIsAiAuthored) void handleDeleteComment(id);
+  };
+
+  // Edit the right-clicked comment without leaving the editor: the same dialog
+  // used to add a comment, seeded with the stored body and switched to "edit".
+  const handleContextEditComment = () => {
+    const target = contextMenuComment;
+    closeContextMenu();
+    if (!target || contextEditDisabledReason) return;
+    setCommentDialog({
+      open: true,
+      mode: "edit",
+      snippet: buildTargetSnippet(commentTargetText(target)),
+      editingId: target.id,
+      defaultBody: target.body,
+    });
   };
 
   const closeCommentDialog = () =>
@@ -1349,10 +1383,21 @@ export function EditorPage() {
     scope,
   }: {
     body: string;
-    scope: "inline" | "block" | "global";
+    scope?: "inline" | "block" | "global";
   }) => {
     if (!editor || !activeFile) {
       closeCommentDialog();
+      return;
+    }
+    // "edit" mode rewrites an existing body; the scope was fixed at creation
+    // and the dialog emits none.
+    const editingId = commentDialog.editingId;
+    if (editingId) {
+      try {
+        await handleEditComment(editingId, body);
+      } finally {
+        closeCommentDialog();
+      }
       return;
     }
     const date = todayISO();
@@ -2135,18 +2180,34 @@ export function EditorPage() {
         }}
       >
         {contextMenu?.commentId ? (
-          <MenuItem
-            onClick={handleContextDeleteComment}
-            disabled={contextMenuCommentIsAiAuthored}
-            data-testid="ctx-delete-comment"
-          >
-            <ListItemIcon>
-              <DeleteOutlineIcon fontSize="small" />
-            </ListItemIcon>
-            <ListItemText>
-              {contextMenuCommentIsAiAuthored ? "AI のコメントは削除できません" : "このコメントを削除"}
-            </ListItemText>
-          </MenuItem>
+          [
+            <MenuItem
+              key="edit"
+              onClick={handleContextEditComment}
+              disabled={!!contextEditDisabledReason}
+              data-testid="ctx-edit-comment"
+            >
+              <ListItemIcon>
+                <EditOutlinedIcon fontSize="small" />
+              </ListItemIcon>
+              <ListItemText>
+                {contextEditDisabledReason ?? "このコメントを編集"}
+              </ListItemText>
+            </MenuItem>,
+            <MenuItem
+              key="delete"
+              onClick={handleContextDeleteComment}
+              disabled={contextMenuCommentIsAiAuthored}
+              data-testid="ctx-delete-comment"
+            >
+              <ListItemIcon>
+                <DeleteOutlineIcon fontSize="small" />
+              </ListItemIcon>
+              <ListItemText>
+                {contextMenuCommentIsAiAuthored ? "AI のコメントは削除できません" : "このコメントを削除"}
+              </ListItemText>
+            </MenuItem>,
+          ]
         ) : (
           <MenuItem onClick={handleContextAddComment} data-testid="ctx-add-comment">
             <ListItemIcon>
@@ -2161,6 +2222,7 @@ export function EditorPage() {
         open={commentDialog.open}
         mode={commentDialog.mode}
         targetSnippet={commentDialog.snippet}
+        defaultBody={commentDialog.defaultBody}
         onClose={closeCommentDialog}
         onSubmit={handleCommentSubmit}
       />
