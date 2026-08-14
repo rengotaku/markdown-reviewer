@@ -91,9 +91,11 @@ const SELECT_FILE_PARAM = "select_file";
 // How often to re-poll the active review file's comments for out-of-band
 // changes (mr CLI / API / other viewers). Matches the file-tree cadence.
 const COMMENTS_POLL_MS = 30_000;
-/** How long after a pointerdown a `contextmenu` still counts as pointer-driven.
- *  A real gesture fires them back to back; Shift+F10 has no pointerdown at all. */
-const POINTER_CONTEXTMENU_WINDOW_MS = 1_000;
+/** Grace period after the pointer comes back up in which a `contextmenu` still
+ *  counts as pointer-driven — for browsers that fire it on release rather than
+ *  on press. Short on purpose: the gesture itself is covered by the pointer
+ *  still being down, so this only has to bridge one event. */
+const POINTER_CONTEXTMENU_WINDOW_MS = 300;
 
 function todayISO(): string {
   const d = new Date();
@@ -997,9 +999,11 @@ export function EditorPage() {
     /** Opened by a pointer gesture rather than the keyboard's context-menu key. */
     viaPointer?: boolean;
   } | null>(null);
-  // When a pointer last went down in the editor, used to tell a pointer-driven
-  // context menu from a keyboard-driven one (see the contextmenu handler).
-  const lastPointerDownAt = useRef(Number.NEGATIVE_INFINITY);
+  // Whether a pointer gesture in the editor is still in progress, and when the
+  // last one ended. Together they tell a pointer-driven context menu from a
+  // keyboard-driven one (see the contextmenu handler).
+  const pointerIsDown = useRef(false);
+  const pointerUpAt = useRef(Number.NEGATIVE_INFINITY);
 
   // Re-render the toolbar Add-Comment button when selection / doc changes.
   const [, setSelectionTick] = useState(0);
@@ -1031,7 +1035,13 @@ export function EditorPage() {
         return; // view not ready yet
       }
       const onPointerDown = () => {
-        lastPointerDownAt.current = performance.now();
+        pointerIsDown.current = true;
+      };
+      // On window, so a release outside the editor still ends the gesture.
+      const onPointerUp = () => {
+        if (!pointerIsDown.current) return;
+        pointerIsDown.current = false;
+        pointerUpAt.current = performance.now();
       };
       const handler = (e: Event) => {
         const ev = e as MouseEvent;
@@ -1043,12 +1053,16 @@ export function EditorPage() {
         // Pointer- and keyboard-invoked menus need opposite focus handling on
         // close (see the Menu's restoreFocus prop). `button` alone does not
         // separate them: a plain right-click reports 2, but macOS Ctrl+click
-        // and a touch long-press report 0 — the same as Shift+F10. So treat it
-        // as pointer-driven when a pointer went down just before, which only a
-        // real pointer gesture does.
+        // and a touch long-press report 0 — the same as Shift+F10. What does
+        // separate them is the gesture: a pointer-driven menu fires while the
+        // pointer is still down (or, in browsers that fire on release, just
+        // after it lifts). Shift+F10 has no gesture around it at all — and
+        // keying it shortly after an unrelated click must not be mistaken for
+        // one, which is why an idle "clicked recently" stamp is not enough.
         const viaPointer =
           ev.button === 2 ||
-          performance.now() - lastPointerDownAt.current < POINTER_CONTEXTMENU_WINDOW_MS;
+          pointerIsDown.current ||
+          performance.now() - pointerUpAt.current < POINTER_CONTEXTMENU_WINDOW_MS;
         if (commentId) {
           ev.preventDefault();
           setContextMenu({ x: ev.clientX, y: ev.clientY, commentId, viaPointer });
@@ -1062,9 +1076,13 @@ export function EditorPage() {
       // Capture phase: ProseMirror handles pointerdown itself and the stamp
       // must land before the contextmenu that follows it.
       dom.addEventListener("pointerdown", onPointerDown, true);
+      window.addEventListener("pointerup", onPointerUp, true);
+      window.addEventListener("pointercancel", onPointerUp, true);
       dom.addEventListener("contextmenu", handler);
       detach = () => {
         dom.removeEventListener("pointerdown", onPointerDown, true);
+        window.removeEventListener("pointerup", onPointerUp, true);
+        window.removeEventListener("pointercancel", onPointerUp, true);
         dom.removeEventListener("contextmenu", handler);
       };
     };
