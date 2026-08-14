@@ -19,14 +19,19 @@ import { useConfirm } from "@/hooks/useConfirm";
  *   - "block"         → wraps an entire block (scope=block).
  *                       Triggered from the drag-handle context menu.
  *   - "global"        → file-wide comment. Body only.
+ *   - "edit"          → rewrites an existing comment's body, seeded with
+ *                       `defaultBody`. Triggered from the marker's right-click
+ *                       menu. The scope is already fixed, so none is emitted.
  */
-export type CommentDialogMode = "anchored" | "block" | "global";
+export type CommentDialogMode = "anchored" | "block" | "global" | "edit";
 
 export type CommentDialogScope = "inline" | "block" | "global";
 
 export interface CommentDialogSubmit {
   body: string;
-  scope: CommentDialogScope;
+  /** Absent in "edit" mode: the comment's scope was decided when it was
+   *  created and this dialog never changes it. */
+  scope?: CommentDialogScope;
 }
 
 interface Props {
@@ -67,7 +72,12 @@ export function AddCommentDialog(props: Props) {
   }
 
   const requestClose = async () => {
-    if (body.trim().length === 0) {
+    // Confirm only when there is unsaved work — i.e. the body differs from what
+    // the dialog opened with. For a new comment that baseline is empty (the
+    // original "is the body non-empty" check); when editing, `defaultBody` is
+    // non-empty from the start, so comparing against it keeps an untouched
+    // cancel from prompting.
+    if (body.trim() === (defaultBody ?? "").trim()) {
       onClose();
       return;
     }
@@ -113,6 +123,8 @@ function dialogTitle(mode: CommentDialogMode): string {
       return "全体コメントを追加";
     case "block":
       return "ブロックにコメントを追加";
+    case "edit":
+      return "コメントを編集";
     default:
       return "コメントを追加";
   }
@@ -120,6 +132,10 @@ function dialogTitle(mode: CommentDialogMode): string {
 
 function targetLabel(mode: CommentDialogMode): string {
   return mode === "block" ? "対象ブロック" : "対象テキスト";
+}
+
+function submitLabel(mode: CommentDialogMode): string {
+  return mode === "edit" ? "保存" : "追加";
 }
 
 interface DialogBodyProps extends Props {
@@ -136,7 +152,7 @@ function DialogBody({
   onSubmit,
 }: DialogBodyProps) {
   const trimmed = body.trim();
-  const showTarget = mode === "anchored" || mode === "block";
+  const showTarget = mode !== "global";
   const canSubmit = trimmed.length > 0;
 
   const snippetPreview = targetSnippet.length
@@ -154,6 +170,9 @@ function DialogBody({
         return;
       case "global":
         onSubmit({ body: trimmed, scope: "global" });
+        return;
+      case "edit":
+        onSubmit({ body: trimmed });
         return;
     }
   };
@@ -209,7 +228,7 @@ function DialogBody({
           disabled={!canSubmit}
           data-testid="comment-submit"
         >
-          追加
+          {submitLabel(mode)}
         </Button>
       </DialogActions>
     </>
