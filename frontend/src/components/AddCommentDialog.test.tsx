@@ -218,6 +218,48 @@ describe("AddCommentDialog", () => {
     expect(onSubmit).toHaveBeenCalledWith({ body: "書き換えた本文" });
   });
 
+  it("edit mode: cancelling without touching the body closes without a confirmation", async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    render(
+      <AddCommentDialog
+        open
+        mode="edit"
+        targetSnippet="対象の一文"
+        defaultBody="もとの本文"
+        onClose={onClose}
+        onSubmit={() => {}}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: "キャンセル" }));
+
+    expect(useConfirm.getState().pending).toBeNull();
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("edit mode: cancelling after changing the body asks for confirmation", async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    render(
+      <AddCommentDialog
+        open
+        mode="edit"
+        targetSnippet="対象の一文"
+        defaultBody="もとの本文"
+        onClose={onClose}
+        onSubmit={() => {}}
+      />
+    );
+
+    await user.type(screen.getByTestId("comment-body-input"), "を書き換えた");
+    await user.click(screen.getByRole("button", { name: "キャンセル" }));
+
+    await waitFor(() => expect(useConfirm.getState().pending).not.toBeNull());
+    expect(useConfirm.getState().pending?.title).toBe("コメントを破棄しますか？");
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
   it("prefills the body input with defaultBody", () => {
     render(
       <AddCommentDialog

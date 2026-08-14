@@ -72,7 +72,12 @@ export function AddCommentDialog(props: Props) {
   }
 
   const requestClose = async () => {
-    if (body.trim().length === 0) {
+    // Confirm only when there is unsaved work — i.e. the body differs from what
+    // the dialog opened with. For a new comment that baseline is empty (the
+    // original "is the body non-empty" check); when editing, `defaultBody` is
+    // non-empty from the start, so comparing against it keeps an untouched
+    // cancel from prompting.
+    if (body.trim() === (defaultBody ?? "").trim()) {
       onClose();
       return;
     }
