@@ -91,6 +91,9 @@ const SELECT_FILE_PARAM = "select_file";
 // How often to re-poll the active review file's comments for out-of-band
 // changes (mr CLI / API / other viewers). Matches the file-tree cadence.
 const COMMENTS_POLL_MS = 30_000;
+/** How long after a pointerdown a `contextmenu` still counts as pointer-driven.
+ *  A real gesture fires them back to back; Shift+F10 has no pointerdown at all. */
+const POINTER_CONTEXTMENU_WINDOW_MS = 1_000;
 
 function todayISO(): string {
   const d = new Date();
@@ -991,9 +994,12 @@ export function EditorPage() {
     x: number;
     y: number;
     commentId?: string;
-    /** Opened by a right-click rather than the keyboard's context-menu key. */
+    /** Opened by a pointer gesture rather than the keyboard's context-menu key. */
     viaPointer?: boolean;
   } | null>(null);
+  // When a pointer last went down in the editor, used to tell a pointer-driven
+  // context menu from a keyboard-driven one (see the contextmenu handler).
+  const lastPointerDownAt = useRef(Number.NEGATIVE_INFINITY);
 
   // Re-render the toolbar Add-Comment button when selection / doc changes.
   const [, setSelectionTick] = useState(0);
@@ -1024,6 +1030,9 @@ export function EditorPage() {
       } catch {
         return; // view not ready yet
       }
+      const onPointerDown = () => {
+        lastPointerDownAt.current = performance.now();
+      };
       const handler = (e: Event) => {
         const ev = e as MouseEvent;
         // Right-click on a comment highlight → offer to delete that comment,
@@ -1031,10 +1040,15 @@ export function EditorPage() {
         const target = ev.target as HTMLElement | null;
         const markEl = target?.closest?.("[data-comment-id]") as HTMLElement | null;
         const commentId = markEl?.getAttribute("data-comment-id") ?? undefined;
-        // A keyboard-invoked context menu (Shift+F10 / the menu key) reports
-        // button 0; a real right-click reports 2. The two need opposite focus
-        // handling on close — see the Menu's restoreFocus prop.
-        const viaPointer = ev.button === 2;
+        // Pointer- and keyboard-invoked menus need opposite focus handling on
+        // close (see the Menu's restoreFocus prop). `button` alone does not
+        // separate them: a plain right-click reports 2, but macOS Ctrl+click
+        // and a touch long-press report 0 — the same as Shift+F10. So treat it
+        // as pointer-driven when a pointer went down just before, which only a
+        // real pointer gesture does.
+        const viaPointer =
+          ev.button === 2 ||
+          performance.now() - lastPointerDownAt.current < POINTER_CONTEXTMENU_WINDOW_MS;
         if (commentId) {
           ev.preventDefault();
           setContextMenu({ x: ev.clientX, y: ev.clientY, commentId, viaPointer });
@@ -1045,8 +1059,14 @@ export function EditorPage() {
         ev.preventDefault();
         setContextMenu({ x: ev.clientX, y: ev.clientY, viaPointer });
       };
+      // Capture phase: ProseMirror handles pointerdown itself and the stamp
+      // must land before the contextmenu that follows it.
+      dom.addEventListener("pointerdown", onPointerDown, true);
       dom.addEventListener("contextmenu", handler);
-      detach = () => dom.removeEventListener("contextmenu", handler);
+      detach = () => {
+        dom.removeEventListener("pointerdown", onPointerDown, true);
+        dom.removeEventListener("contextmenu", handler);
+      };
     };
 
     tryAttach();
