@@ -991,6 +991,8 @@ export function EditorPage() {
     x: number;
     y: number;
     commentId?: string;
+    /** Opened by a right-click rather than the keyboard's context-menu key. */
+    viaPointer?: boolean;
   } | null>(null);
 
   // Re-render the toolbar Add-Comment button when selection / doc changes.
@@ -1029,15 +1031,19 @@ export function EditorPage() {
         const target = ev.target as HTMLElement | null;
         const markEl = target?.closest?.("[data-comment-id]") as HTMLElement | null;
         const commentId = markEl?.getAttribute("data-comment-id") ?? undefined;
+        // A keyboard-invoked context menu (Shift+F10 / the menu key) reports
+        // button 0; a real right-click reports 2. The two need opposite focus
+        // handling on close — see the Menu's restoreFocus prop.
+        const viaPointer = ev.button === 2;
         if (commentId) {
           ev.preventDefault();
-          setContextMenu({ x: ev.clientX, y: ev.clientY, commentId });
+          setContextMenu({ x: ev.clientX, y: ev.clientY, commentId, viaPointer });
           return;
         }
         const sel = editor.state.selection;
         if (sel.empty || sel.from === sel.to) return;
         ev.preventDefault();
-        setContextMenu({ x: ev.clientX, y: ev.clientY });
+        setContextMenu({ x: ev.clientX, y: ev.clientY, viaPointer });
       };
       dom.addEventListener("contextmenu", handler);
       detach = () => dom.removeEventListener("contextmenu", handler);
@@ -2134,7 +2140,11 @@ export function EditorPage() {
         // does not help: the scroll comes from PM's selection sync, not the
         // browser's focus behavior, so the only fix is not to refocus. Same
         // failure mode AddCommentDialog documents for the comment dialog.
-        disableRestoreFocus
+        //
+        // Keyboard invocation is the opposite case: the menu acted at the
+        // caret, so scrolling back to it is where the user already is, and
+        // dropping focus to <body> would strand them. Restore it there.
+        disableRestoreFocus={contextMenu?.viaPointer ?? true}
         anchorReference="anchorPosition"
         anchorPosition={
           contextMenu ? { top: contextMenu.y, left: contextMenu.x } : undefined
