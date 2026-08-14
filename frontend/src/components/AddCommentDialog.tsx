@@ -191,6 +191,13 @@ function DialogBody({
           minRows={3}
           fullWidth
           autoFocus
+          // MUI zeroes DialogContent's padding-top when it follows a
+          // DialogTitle, and an outlined label is painted above the input's
+          // top border — so as the first child (global mode, where no target
+          // preview precedes it) the label lands in the title's space and is
+          // clipped by the content box. Reserve the room on the field itself:
+          // a `pt` on DialogContent loses to MUI's compound selector.
+          sx={{ mt: 1.5 }}
           inputProps={{ "data-testid": "comment-body-input" }}
         />
       </DialogContent>
