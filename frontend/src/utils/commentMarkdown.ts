@@ -1,4 +1,5 @@
 import MarkdownIt from "markdown-it";
+import { resolveInternalLink } from "@/utils/internalLink";
 
 // commentMarkdown renders comment/reply bodies (human- or AI-authored review
 // notes) as simple, unhighlighted Markdown for CommentSidePane (#147). It is
@@ -17,6 +18,11 @@ import MarkdownIt from "markdown-it";
 //     code blocks render as plain <pre><code> with no <span class=...> noise.
 const md = new MarkdownIt({ html: false, linkify: true, breaks: true });
 
+/** markdown-it `env` shape threaded through to `link_open` (#215 follow-up). */
+interface RenderEnv {
+  currentPath?: string;
+}
+
 // Images are deliberately not part of the supported syntax set (#147), and
 // leaving the rule on would make merely *opening* the side pane fire a GET to
 // whatever URL a comment names — a silent tracking/SSRF-ish beacon for bodies
@@ -32,6 +38,21 @@ const defaultRenderLinkOpen =
 md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
   tokens[idx].attrSet("target", "_blank");
   tokens[idx].attrSet("rel", "noopener noreferrer");
+
+  // External-link marker (#215 follow-up): only computed when the caller
+  // passes `currentPath` (LinkPreviewCard, which knows which file's body
+  // it's rendering). CommentSidePane calls renderCommentMarkdown() without
+  // it, so its output — and thus its rendering — is byte-for-byte
+  // unchanged; the class is opt-in per call, not global.
+  const currentPath = (env as RenderEnv | undefined)?.currentPath;
+  if (currentPath !== undefined) {
+    const href = tokens[idx].attrGet("href") ?? "";
+    const isAnchor = href.startsWith("#");
+    if (href && !isAnchor && resolveInternalLink(href, currentPath) === null) {
+      tokens[idx].attrJoin("class", "cm-link-external");
+    }
+  }
+
   return defaultRenderLinkOpen(tokens, idx, options, env, self);
 };
 
@@ -50,8 +71,18 @@ md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
  * renderCommentMarkdown renders a comment/reply's Markdown source into a
  * safe HTML string suitable for `dangerouslySetInnerHTML`. No syntax
  * highlighting; see the security notes above for the XSS posture.
+ *
+ * `currentPath` is optional and only used by LinkPreviewCard (#215
+ * follow-up): when given, every rendered link that isn't an internal
+ * same-root document link (relative to `currentPath`) or a pure in-page
+ * anchor gets a `cm-link-external` class so the caller's stylesheet can
+ * show an "opens elsewhere" marker. Omit it (as CommentSidePane does) to
+ * get the exact same output as before this option existed.
  */
-export function renderCommentMarkdown(source: string): string {
+export function renderCommentMarkdown(
+  source: string,
+  currentPath?: string
+): string {
   if (!source) return "";
-  return md.render(source);
+  return md.render(source, { currentPath } satisfies RenderEnv);
 }

@@ -11,7 +11,7 @@ import type { SystemStyleObject } from "@mui/system";
  *  tint.
  *
  *  Shared between CommentSidePane's comment/reply bodies and
- *  LinkPreviewModal's internal-link preview (#213) — both render Markdown
+ *  LinkPreviewCard's internal-link preview (#213/#215) — both render Markdown
  *  via renderCommentMarkdown and want the same compact-article look. */
 export function markdownBodySx(theme: Theme): SystemStyleObject<Theme> {
   const codeBg = alpha(theme.palette.text.primary, 0.08);
@@ -83,5 +83,28 @@ export function markdownBodySx(theme: Theme): SystemStyleObject<Theme> {
       py: 0.5,
     },
     "& a": { color: theme.palette.primary.main },
+    // External-link marker (#215 follow-up): renderCommentMarkdown only adds
+    // `cm-link-external` when called with a `currentPath` — today that's
+    // LinkPreviewCard alone, so this rule is inert for CommentSidePane
+    // (no such class ever appears in its output) despite the shared sx.
+    "& a.cm-link-external::after": {
+      content: '""',
+      display: "inline-block",
+      width: "0.7em",
+      height: "0.7em",
+      ml: "0.2em",
+      verticalAlign: "-0.05em",
+      backgroundColor: "currentColor",
+      opacity: 0.65,
+      WebkitMaskImage:
+        "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M19 19H5V5h7V3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z'/%3E%3C/svg%3E\")",
+      maskImage:
+        "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M19 19H5V5h7V3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z'/%3E%3C/svg%3E\")",
+      WebkitMaskSize: "contain",
+      maskSize: "contain",
+      WebkitMaskRepeat: "no-repeat",
+      maskRepeat: "no-repeat",
+      pointerEvents: "none",
+    },
   };
 }
