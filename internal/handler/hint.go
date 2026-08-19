@@ -44,6 +44,7 @@ func buildAIHint(baseURL, relPath, rootName string) string {
 	b.WriteString("API 全仕様:             GET ")
 	b.WriteString(helpURL)
 	b.WriteString("\n")
+	b.WriteString("同一ルート配下の他ファイルへは相対リンク `[text](./path.md)` で書くとクリック遷移・ホバープレビューできます（詳細は上記 API 全仕様）。\n")
 	b.WriteString("-->\n\n")
 	return b.String()
 }
