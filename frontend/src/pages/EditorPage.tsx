@@ -1202,6 +1202,26 @@ export function EditorPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeRoot]);
 
+  // In-app link navigation (#213): TiptapEditor's click handler and
+  // LinkPreviewModal's "Open" button both raise a request rather than
+  // opening the file themselves, so this single subscriber is what actually
+  // routes into handleSelect — reusing its unsaved-changes confirm, tab
+  // reactivation and read-failure toast instead of duplicating them.
+  const openPathRequest = useEditorInstance((s) => s.openPathRequest);
+  const clearOpenPathRequest = useEditorInstance((s) => s.clearOpenPathRequest);
+  useEffect(() => {
+    if (!openPathRequest) return;
+    clearOpenPathRequest();
+    // Reacting to a request raised by another component (TiptapEditor's
+    // click handler / LinkPreviewModal's "Open" button) is exactly what an
+    // effect subscribing to external store state is for; there's no render
+    // to derive this from. Mirrors the identical, pre-existing deeplink
+    // effect above.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void handleSelect(openPathRequest.path);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openPathRequest, clearOpenPathRequest]);
+
   // Save conflict (#119 case 5): the server rejects the write with 412 when
   // `If-Match` no longer matches the on-disk sha — i.e. the file changed on
   // disk since we last read/wrote it — and writes nothing. Offer to
