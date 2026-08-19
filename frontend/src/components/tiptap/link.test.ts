@@ -3,6 +3,7 @@ import { Editor } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
 import Link from "@tiptap/extension-link";
 import { Markdown } from "tiptap-markdown";
+import { ExternalLinkDecoration } from "./extensions/ExternalLinkDecoration";
 
 function createEditor(initialContent = "") {
   return new Editor({
@@ -13,6 +14,7 @@ function createEditor(initialContent = "") {
         transformPastedText: true,
         transformCopiedText: false,
       }),
+      ExternalLinkDecoration,
     ],
     content: initialContent,
   });
@@ -114,5 +116,30 @@ describe("Link extension configuration", () => {
       (ext) => ext.name === "link"
     );
     expect(linkExtension?.options.linkOnPaste).toBe(true);
+  });
+});
+
+// External-link decoration (#215 follow-up) is CSS/decoration-only — it
+// must never leak into the serialized markdown. Regression coverage for
+// that guarantee lives here (round-trip), the visual/classification
+// behavior is covered by ExternalLinkDecoration.test.ts.
+describe("external-link decoration does not affect markdown round-trip", () => {
+  let editor: Editor;
+  afterEach(() => editor.destroy());
+
+  it("round-trips a document containing an external link unchanged", () => {
+    const source = "before [example](https://example.com) after";
+    editor = createEditor();
+    editor.commands.setContent(source);
+    editor.commands.setLinkBasePath("docs/intro.md");
+    expect(getMarkdown(editor)).toBe(source);
+  });
+
+  it("round-trips a document containing an internal relative link unchanged", () => {
+    const source = "see [sibling](./sibling.md) for details";
+    editor = createEditor();
+    editor.commands.setContent(source);
+    editor.commands.setLinkBasePath("docs/intro.md");
+    expect(getMarkdown(editor)).toBe(source);
   });
 });

@@ -27,12 +27,16 @@ import { createCodeLowlight } from "./extensions/codeHighlight";
 import { MarkdownPaste } from "./extensions/MarkdownPaste";
 import { CommentHighlight } from "./extensions/CommentHighlight";
 import { DiffGutter } from "./extensions/DiffGutter";
-import { LinkPreviewModal } from "../LinkPreviewModal";
+import { ExternalLinkDecoration } from "./extensions/ExternalLinkDecoration";
+import { LinkPreviewCard } from "../LinkPreviewCard";
 import { LinkHoverGuard } from "./linkHoverGuard";
 import "./styles/editor.css";
 
-/** Hover delay (ms) before an internal link's preview modal opens (#213). */
+/** Hover delay (ms) before an internal link's preview card opens (#213). */
 const LINK_PREVIEW_HOVER_DELAY_MS = 300;
+/** Grace period (ms) after the pointer leaves both the link and the card
+ *  before the preview card actually closes (#215). */
+const LINK_PREVIEW_CLOSE_GRACE_MS = 250;
 
 // Built once per module: registering the grammars is pure setup and the
 // instance is stateless across editors.
@@ -126,6 +130,7 @@ export function TiptapEditor() {
       MarkdownPaste,
       CommentHighlight,
       DiffGutter,
+      ExternalLinkDecoration,
     ],
     content: "",
     editable: true,
@@ -189,25 +194,35 @@ export function TiptapEditor() {
     return () => cancelAnimationFrame(raf);
   }, [scrollToTopToken]);
 
-  // Preview modal state for hovering an internal link (#213). `path` is ""
-  // when nothing is being previewed; kept separate from `open` so the
-  // dialog's exit transition still shows the last-hovered file's path/body
-  // rather than blanking mid-animation.
+  // Preview card state for hovering an internal link (#213, non-modal
+  // hover-card follow-up #215). `path`/`anchorEl` are kept separate from
+  // `open` so a pending close (e.g. the grace countdown) still shows the
+  // last-hovered file's path/anchor rather than blanking early.
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewPath, setPreviewPath] = useState("");
-  // One guard instance per mounted editor: it owns the hover timer and the
-  // reopen-suppression state (see linkHoverGuard.ts for the bug it fixes).
+  const [previewAnchorEl, setPreviewAnchorEl] = useState<Element | null>(null);
+  // One guard instance per mounted editor: it owns the hover timer, the
+  // reopen-suppression state, and the card's hover stay area (see
+  // linkHoverGuard.ts for the bugs it fixes).
   const hoverGuardRef = useRef<LinkHoverGuard>(new LinkHoverGuard());
 
-  // Dismiss the preview (any of: Esc, backdrop click, close button, the
-  // "Open" button). Tells the hover guard so hovering back onto the same,
-  // still-under-the-pointer anchor doesn't immediately reopen it. Shared by
-  // the click-capture handler below and LinkPreviewModal's onClose/onOpen
-  // props in the JSX.
+  // Dismiss the preview (any of: Esc, close button, the "Open" button, the
+  // close-grace countdown elapsing). Tells the hover guard so hovering back
+  // onto the same, still-under-the-pointer anchor doesn't immediately
+  // reopen it. Shared by the click-capture handler below and
+  // LinkPreviewCard's onClose/onOpen props in the JSX.
   const closePreview = useCallback(() => {
     hoverGuardRef.current.handleClose();
     setPreviewOpen(false);
   }, []);
+
+  // Keep the external-link decoration in sync with whichever file is open —
+  // hrefs are resolved relative to it, same basis as the click/hover
+  // handlers below (#215 follow-up).
+  useEffect(() => {
+    if (!editor) return;
+    editor.commands.setLinkBasePath(activeFilePath);
+  }, [editor, activeFilePath]);
 
   useEffect(() => {
     if (!editor) return;
@@ -247,6 +262,7 @@ export function TiptapEditor() {
       const resolved = resolveInternalLink(href, activeFilePath);
       if (!resolved) return;
       guard.handleMouseOver(anchor, LINK_PREVIEW_HOVER_DELAY_MS, () => {
+        setPreviewAnchorEl(anchor);
         setPreviewPath(resolved);
         setPreviewOpen(true);
       });
@@ -254,12 +270,14 @@ export function TiptapEditor() {
     const onMouseOut = (e: MouseEvent) => {
       const anchor = (e.target as HTMLElement).closest("a");
       if (!anchor) return;
-      // Only cancels the pending timer (before it has opened the dialog) —
-      // once the dialog is open, moving the mouse off the link shouldn't
-      // dismiss it (the user may be moving toward the dialog itself). Also
-      // lifts the reopen suppression once the pointer genuinely leaves the
-      // anchor it was set for.
-      guard.handleMouseOut(anchor);
+      // Cancels the pending open timer (before the card has opened). Once
+      // the card is open, this also starts the close-grace countdown
+      // (#215) — the card stays open as long as the pointer is over either
+      // the anchor or the card itself (see linkHoverGuard.ts), so moving
+      // toward the card doesn't dismiss it. Also lifts the reopen
+      // suppression once the pointer genuinely leaves the anchor it was
+      // set for.
+      guard.handleMouseOut(anchor, LINK_PREVIEW_CLOSE_GRACE_MS, closePreview);
     };
 
     dom.addEventListener("click", onClickCapture, { capture: true });
@@ -290,8 +308,9 @@ export function TiptapEditor() {
       )}
       <FrontmatterTable entries={frontmatter} />
       <EditorContent editor={editor} />
-      <LinkPreviewModal
+      <LinkPreviewCard
         open={previewOpen}
+        anchorEl={previewAnchorEl}
         path={previewPath}
         root={activeRoot}
         onClose={closePreview}
@@ -299,6 +318,13 @@ export function TiptapEditor() {
           closePreview();
           requestOpenPath(path);
         }}
+        onMouseEnter={() => hoverGuardRef.current.handleCardMouseEnter()}
+        onMouseLeave={() =>
+          hoverGuardRef.current.handleCardMouseLeave(
+            LINK_PREVIEW_CLOSE_GRACE_MS,
+            closePreview
+          )
+        }
       />
     </Box>
   );
