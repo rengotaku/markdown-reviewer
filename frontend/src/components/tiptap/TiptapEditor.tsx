@@ -1,4 +1,4 @@
-import { useEffect, useRef, useMemo } from "react";
+import { useCallback, useEffect, useRef, useMemo, useState } from "react";
 import Box from "@mui/material/Box";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
@@ -17,6 +17,7 @@ import { useActiveRoot } from "@/hooks/useActiveRoot";
 import { useEditorInstance } from "@/hooks/useEditorInstance";
 import { useEditorPrefs } from "@/hooks/useEditorPrefs";
 import { splitPreamble, parseFrontmatter } from "@/utils/frontmatter";
+import { resolveInternalLink } from "@/utils/internalLink";
 import { FrontmatterTable } from "./FrontmatterTable";
 import { TableMenu } from "./toolbar/TableMenu";
 import { BlockCopyButton } from "./toolbar/BlockCopyButton";
@@ -26,7 +27,12 @@ import { createCodeLowlight } from "./extensions/codeHighlight";
 import { MarkdownPaste } from "./extensions/MarkdownPaste";
 import { CommentHighlight } from "./extensions/CommentHighlight";
 import { DiffGutter } from "./extensions/DiffGutter";
+import { LinkPreviewModal } from "../LinkPreviewModal";
+import { LinkHoverGuard } from "./linkHoverGuard";
 import "./styles/editor.css";
+
+/** Hover delay (ms) before an internal link's preview modal opens (#213). */
+const LINK_PREVIEW_HOVER_DELAY_MS = 300;
 
 // Built once per module: registering the grammars is pure setup and the
 // instance is stateless across editors.
@@ -58,6 +64,14 @@ export function TiptapEditor() {
     const file = id ? s.files.find((f) => f.id === id) : undefined;
     return file ? file.markdown : "";
   });
+  // Root-relative path of the file currently open — the base against which
+  // in-app link hrefs are resolved (#213).
+  const activeFilePath = useOpenFiles((s) => {
+    const id = activeRoot ? s.activeIdByRoot[activeRoot] : null;
+    const file = id ? s.files.find((f) => f.id === id) : undefined;
+    return file ? file.path : "";
+  });
+  const requestOpenPath = useEditorInstance((s) => s.requestOpenPath);
   const frontmatter = useMemo(
     () => parseFrontmatter(splitPreamble(activeMarkdown).frontmatterYaml),
     [activeMarkdown]
@@ -175,6 +189,90 @@ export function TiptapEditor() {
     return () => cancelAnimationFrame(raf);
   }, [scrollToTopToken]);
 
+  // Preview modal state for hovering an internal link (#213). `path` is ""
+  // when nothing is being previewed; kept separate from `open` so the
+  // dialog's exit transition still shows the last-hovered file's path/body
+  // rather than blanking mid-animation.
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewPath, setPreviewPath] = useState("");
+  // One guard instance per mounted editor: it owns the hover timer and the
+  // reopen-suppression state (see linkHoverGuard.ts for the bug it fixes).
+  const hoverGuardRef = useRef<LinkHoverGuard>(new LinkHoverGuard());
+
+  // Dismiss the preview (any of: Esc, backdrop click, close button, the
+  // "Open" button). Tells the hover guard so hovering back onto the same,
+  // still-under-the-pointer anchor doesn't immediately reopen it. Shared by
+  // the click-capture handler below and LinkPreviewModal's onClose/onOpen
+  // props in the JSX.
+  const closePreview = useCallback(() => {
+    hoverGuardRef.current.handleClose();
+    setPreviewOpen(false);
+  }, []);
+
+  useEffect(() => {
+    if (!editor) return;
+    const dom = editor.view.dom;
+    const guard = hoverGuardRef.current;
+
+    // Click capture: internal links navigate in-app instead of following
+    // the browser's normal anchor behavior. Registered with `capture: true`
+    // and calling stopPropagation() so it runs and wins *before* TipTap's
+    // Link extension's own bubble-phase click handler (which calls
+    // window.open for openOnClick) ever sees the event.
+    const onClickCapture = (e: MouseEvent) => {
+      const anchor = (e.target as HTMLElement).closest("a");
+      if (!anchor) return;
+      const href = anchor.getAttribute("href");
+      if (!href) return;
+      const resolved = resolveInternalLink(href, activeFilePath);
+      if (!resolved) return;
+      e.preventDefault();
+      e.stopPropagation();
+      closePreview();
+      requestOpenPath(resolved);
+    };
+
+    // Hover preview: start a timer on hovering an internal link's anchor,
+    // cancel it if the pointer leaves before it fires. `mouseover`/`mouseout`
+    // (rather than `mouseenter`/`mouseleave`, which don't bubble) let one
+    // listener on the editor root cover every link without per-anchor
+    // listeners that would need re-wiring on every render. The guard
+    // refuses to (re)schedule for an anchor that was just closed while
+    // still hovered (#213 follow-up).
+    const onMouseOver = (e: MouseEvent) => {
+      const anchor = (e.target as HTMLElement).closest("a");
+      if (!anchor) return;
+      const href = anchor.getAttribute("href");
+      if (!href) return;
+      const resolved = resolveInternalLink(href, activeFilePath);
+      if (!resolved) return;
+      guard.handleMouseOver(anchor, LINK_PREVIEW_HOVER_DELAY_MS, () => {
+        setPreviewPath(resolved);
+        setPreviewOpen(true);
+      });
+    };
+    const onMouseOut = (e: MouseEvent) => {
+      const anchor = (e.target as HTMLElement).closest("a");
+      if (!anchor) return;
+      // Only cancels the pending timer (before it has opened the dialog) —
+      // once the dialog is open, moving the mouse off the link shouldn't
+      // dismiss it (the user may be moving toward the dialog itself). Also
+      // lifts the reopen suppression once the pointer genuinely leaves the
+      // anchor it was set for.
+      guard.handleMouseOut(anchor);
+    };
+
+    dom.addEventListener("click", onClickCapture, { capture: true });
+    dom.addEventListener("mouseover", onMouseOver);
+    dom.addEventListener("mouseout", onMouseOut);
+    return () => {
+      dom.removeEventListener("click", onClickCapture, { capture: true });
+      dom.removeEventListener("mouseover", onMouseOver);
+      dom.removeEventListener("mouseout", onMouseOut);
+      guard.dispose();
+    };
+  }, [editor, activeFilePath, requestOpenPath, closePreview]);
+
   return (
     <Box
       ref={containerRef}
@@ -192,6 +290,16 @@ export function TiptapEditor() {
       )}
       <FrontmatterTable entries={frontmatter} />
       <EditorContent editor={editor} />
+      <LinkPreviewModal
+        open={previewOpen}
+        path={previewPath}
+        root={activeRoot}
+        onClose={closePreview}
+        onOpen={(path) => {
+          closePreview();
+          requestOpenPath(path);
+        }}
+      />
     </Box>
   );
 }

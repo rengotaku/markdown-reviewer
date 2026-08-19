@@ -6,3 +6,4 @@ export { AddCommentDialog } from "./AddCommentDialog";
 export { CommentSidePane } from "./CommentSidePane";
 export { DiffView } from "./DiffView";
 export { NameTooltip } from "./NameTooltip";
+export { LinkPreviewModal } from "./LinkPreviewModal";
