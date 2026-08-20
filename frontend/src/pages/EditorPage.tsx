@@ -1840,6 +1840,13 @@ export function EditorPage() {
                 onClick={() => setSidebarPinned(true)}
                 aria-label="open sidebar"
                 data-testid="sidebar-open-button"
+                // #221: this button stands in for the sidebar header's own
+                // hamburger while the sidebar is hidden, so it must sit at
+                // the same x. The sidebar header uses pl: 0.5 (4px) while
+                // this header uses px: 2 (16px), so pull it back by the
+                // 12px difference. Only this button moves — the logo and
+                // everything after it keep the header's own padding.
+                sx={{ ml: -1.5 }}
               >
                 <MenuIcon fontSize="small" />
               </IconButton>
