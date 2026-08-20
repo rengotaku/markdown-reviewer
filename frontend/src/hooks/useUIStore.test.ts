@@ -4,32 +4,51 @@ import { useUIStore } from "./useUIStore";
 describe("useUIStore", () => {
   beforeEach(() => {
     // Reset store state before each test
-    useUIStore.setState({ isSidebarOpen: true, sidebarViewMode: "tree" });
+    useUIStore.setState({
+      isSidebarOpen: false,
+      sidebarPinned: true,
+      sidebarViewMode: "tree",
+    });
   });
 
-  it("has sidebar open by default", () => {
+  it("has the hover overlay closed and the sidebar pinned by default (#219)", () => {
     const state = useUIStore.getState();
-    expect(state.isSidebarOpen).toBe(true);
+    expect(state.isSidebarOpen).toBe(false);
+    expect(state.sidebarPinned).toBe(true);
   });
 
-  it("toggles sidebar state", () => {
+  it("toggles the hover-overlay open state", () => {
     const { toggleSidebar } = useUIStore.getState();
 
     toggleSidebar();
-    expect(useUIStore.getState().isSidebarOpen).toBe(false);
+    expect(useUIStore.getState().isSidebarOpen).toBe(true);
 
     toggleSidebar();
-    expect(useUIStore.getState().isSidebarOpen).toBe(true);
+    expect(useUIStore.getState().isSidebarOpen).toBe(false);
   });
 
-  it("sets sidebar open state directly", () => {
+  it("sets the hover-overlay open state directly", () => {
     const { setSidebarOpen } = useUIStore.getState();
-
-    setSidebarOpen(false);
-    expect(useUIStore.getState().isSidebarOpen).toBe(false);
 
     setSidebarOpen(true);
     expect(useUIStore.getState().isSidebarOpen).toBe(true);
+
+    setSidebarOpen(false);
+    expect(useUIStore.getState().isSidebarOpen).toBe(false);
+  });
+
+  it("toggles and sets the sidebar pinned state", () => {
+    const { toggleSidebarPinned, setSidebarPinned } = useUIStore.getState();
+
+    toggleSidebarPinned();
+    expect(useUIStore.getState().sidebarPinned).toBe(false);
+    toggleSidebarPinned();
+    expect(useUIStore.getState().sidebarPinned).toBe(true);
+
+    setSidebarPinned(false);
+    expect(useUIStore.getState().sidebarPinned).toBe(false);
+    setSidebarPinned(true);
+    expect(useUIStore.getState().sidebarPinned).toBe(true);
   });
 
   it("toggles and sets the comment pane state", () => {
@@ -89,6 +108,10 @@ describe("useUIStore", () => {
     const persisted = JSON.parse(raw as string) as {
       state: Record<string, unknown>;
     };
-    expect(persisted.state).toEqual({ sidebarViewMode: "recent", sidebarWidth: 360 });
+    expect(persisted.state).toEqual({
+      sidebarViewMode: "recent",
+      sidebarWidth: 360,
+      sidebarPinned: true,
+    });
   });
 });

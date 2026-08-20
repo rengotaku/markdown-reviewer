@@ -48,6 +48,7 @@ import { useServerConnection } from "@/hooks/useServerConnection";
 import { useConfirm } from "@/hooks/useConfirm";
 import { useToast } from "@/hooks/useToast";
 import { useUIStore } from "@/hooks/useUIStore";
+import { useHoverPanel } from "@/hooks/useHoverPanel";
 import { useEditorInstance } from "@/hooks/useEditorInstance";
 import { useEditorPrefs } from "@/hooks/useEditorPrefs";
 import { useCommentAuthor } from "@/hooks/useCommentAuthor";
@@ -119,12 +120,41 @@ function commentTargetText(c: CommentJSON): string {
 }
 
 export function EditorPage() {
-  const isSidebarOpen = useUIStore((s) => s.isSidebarOpen);
-  const toggleSidebar = useUIStore((s) => s.toggleSidebar);
+  // #219: `isSidebarOpen` now only tracks the transient hover overlay (see
+  // useUIStore.ts). Whether the sidebar is visible at all is `isSidebarShown`
+  // below, which also accounts for `sidebarPinned`.
+  const isHoverOverlayOpen = useUIStore((s) => s.isSidebarOpen);
+  const setSidebarOpen = useUIStore((s) => s.setSidebarOpen);
+  const sidebarPinned = useUIStore((s) => s.sidebarPinned);
+  const setSidebarPinned = useUIStore((s) => s.setSidebarPinned);
   const isCommentPaneOpen = useUIStore((s) => s.isCommentPaneOpen);
   const toggleCommentPane = useUIStore((s) => s.toggleCommentPane);
   const sidebarWidth = useUIStore((s) => s.sidebarWidth);
   const setSidebarWidth = useUIStore((s) => s.setSidebarWidth);
+
+  // Pinned => always shown (push layout). Unpinned => shown only while the
+  // hover-panel guard has the overlay open.
+  const isSidebarShown = sidebarPinned || isHoverOverlayOpen;
+
+  const { hotZoneHandlers, panelHandlers } = useHoverPanel({
+    onOpen: () => setSidebarOpen(true),
+    onClose: () => setSidebarOpen(false),
+    disabled: sidebarPinned,
+  });
+
+  /** Header-row hamburger (#219): toggles the pin, and — going by the
+   *  keyboard-accessibility note in #219 — is always the pin control, not
+   *  just a hover side-effect. Un-pinning also force-closes the overlay
+   *  immediately rather than waiting for the hover-out grace period, since
+   *  an explicit click is an unambiguous "hide it now". */
+  const handleTogglePin = () => {
+    if (sidebarPinned) {
+      setSidebarPinned(false);
+      setSidebarOpen(false);
+    } else {
+      setSidebarPinned(true);
+    }
+  };
 
   const asideRef = useRef<HTMLDivElement>(null);
 
@@ -1638,47 +1668,80 @@ export function EditorPage() {
 
   return (
     <Box sx={{ display: "flex", height: "100vh", overflow: "hidden" }}>
-      {!isSidebarOpen && (
+      {/* #219: unpinned + hidden state now has zero width — no permanent
+          rail — so the editor gets the full window width back. The only
+          way back in is the 8px hot zone below (or the persistent "open
+          sidebar" button in the main header once it's fully hidden).
+          Bug fix (post-review): this must stay mounted for the whole time
+          the sidebar is unpinned, *including while the overlay is open* —
+          it used to only render while hidden, so unmounting it the instant
+          the overlay opened dropped the pointer's `mouseleave` on the
+          floor. HoverPanelGuard's "still over the hot zone" flag was then
+          stuck true forever (nothing ever told it otherwise), so leaving
+          the panel could never satisfy "both regions empty" and the
+          close-grace timer never got armed — the overlay stayed open for
+          good. Keeping the hot zone element (and its data-testid) present
+          throughout — it's a thin strip the aside's fixed overlay simply
+          draws on top of — means every mouseleave reaches the guard. */}
+      {!sidebarPinned && (
         <Box
-          component="aside"
+          data-testid="sidebar-hot-zone"
+          onMouseEnter={hotZoneHandlers.onMouseEnter}
+          onMouseLeave={hotZoneHandlers.onMouseLeave}
           sx={{
-            width: 40,
-            flexShrink: 0,
-            borderRight: "1px solid",
-            borderColor: "divider",
-            bgcolor: "background.paper",
-            display: "flex",
-            alignItems: "flex-start",
-            justifyContent: "flex-start",
-            pl: 0.5,
-            pt: 0.75,
+            position: "fixed",
+            top: 0,
+            left: 0,
+            bottom: 0,
+            width: 8,
+            // Kept strictly above the overlay aside's z-index (below) so
+            // this strip keeps receiving raw pointer enter/leave events for
+            // its 8px column even while the overlay sits on top of it —
+            // otherwise the aside would swallow those events the moment it
+            // renders, and a boundary crossing at x=8 wouldn't fire a real
+            // mouseleave on this element (see the bug note above).
+            zIndex: (theme) => theme.zIndex.drawer + 2,
           }}
-        >
-          <Tooltip title="サイドバーを開く" placement="right">
-            <IconButton
-              size="small"
-              onClick={toggleSidebar}
-              aria-label="open sidebar"
-              data-testid="sidebar-rail-open"
-            >
-              <MenuIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-        </Box>
+        />
       )}
-      {isSidebarOpen && (
+      {isSidebarShown && (
         <Box
           ref={asideRef}
           component="aside"
+          onMouseEnter={panelHandlers.onMouseEnter}
+          onMouseLeave={panelHandlers.onMouseLeave}
           sx={{
             width: sidebarWidth,
+            // Pinned: part of the flex row, pushing the editor over.
+            // Unpinned (hover overlay): fixed so it floats above the
+            // content instead of shifting it (#219 — Notion-style reveal).
             flexShrink: 0,
+            position: sidebarPinned ? "relative" : "fixed",
+            top: sidebarPinned ? undefined : 0,
+            left: sidebarPinned ? undefined : 0,
+            bottom: sidebarPinned ? undefined : 0,
+            zIndex: sidebarPinned ? undefined : (theme) => theme.zIndex.drawer + 1,
+            boxShadow: sidebarPinned ? "none" : 4,
             borderRight: "1px solid",
             borderColor: "divider",
             bgcolor: "background.paper",
             display: "flex",
             flexDirection: "column",
-            position: "relative",
+            // The overlay slides in from the edge; pinned mode never
+            // animates (it's laid out by flex from the first render, and
+            // toggling pin on/off shouldn't visually "slide" a push panel).
+            ...(sidebarPinned
+              ? {}
+              : {
+                  animation: "sidebar-slide-in 120ms ease-out",
+                  "@keyframes sidebar-slide-in": {
+                    from: { transform: "translateX(-100%)" },
+                    to: { transform: "translateX(0)" },
+                  },
+                  "@media (prefers-reduced-motion: reduce)": {
+                    animation: "none",
+                  },
+                }),
           }}
         >
           <Box
@@ -1689,7 +1752,8 @@ export function EditorPage() {
               // 直下の Sidebar フィルタバー（2 行目 — multi-root では root
               // 切替がヘッダーの RootSelect に移り、RootTabs は廃止された）
               // のディバイダを他ペインの 2 行目と揃えて 1 本の連続線にする
-              // ために引き続き必要（#65, #90）。
+              // ために引き続き必要（#65, #90）。オーバーレイ表示時もこの
+              // 高さ・見た目を崩さない（#219）。
               height: BAR_HEIGHT,
               flexShrink: 0,
               boxSizing: "border-box",
@@ -1698,9 +1762,21 @@ export function EditorPage() {
               gap: 1,
             }}
           >
-            <Tooltip title="サイドバーを閉じる">
-              <IconButton size="small" onClick={toggleSidebar} aria-label="close sidebar">
-                <MenuOpenIcon fontSize="small" />
+            {/* #219: この 1 個のボタンがピン留めのトグル。マウスホバーだけ
+                がサイドバーへの唯一の導線にならないよう、開いている間は
+                常にここからクリックでピン留めの on/off ができる。 */}
+            <Tooltip title={sidebarPinned ? "サイドバーのピン留めを解除" : "サイドバーをピン留め"}>
+              <IconButton
+                size="small"
+                onClick={handleTogglePin}
+                aria-label={sidebarPinned ? "close sidebar" : "pin sidebar"}
+                data-testid="sidebar-pin-toggle"
+              >
+                {sidebarPinned ? (
+                  <MenuOpenIcon fontSize="small" />
+                ) : (
+                  <MenuIcon fontSize="small" />
+                )}
               </IconButton>
             </Tooltip>
             <RootSelect />
@@ -1752,6 +1828,23 @@ export function EditorPage() {
             boxSizing: "border-box",
           }}
         >
+          {/* #219: persistent keyboard/click entry point back into the
+              sidebar once it's fully hidden (no pin, pointer not hovering
+              the hot zone). Reopens it pinned, matching the old rail
+              button's behavior, but doesn't reserve permanent sidebar
+              width the way that rail did. */}
+          {!isSidebarShown && (
+            <Tooltip title="サイドバーを開く">
+              <IconButton
+                size="small"
+                onClick={() => setSidebarPinned(true)}
+                aria-label="open sidebar"
+                data-testid="sidebar-open-button"
+              >
+                <MenuIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          )}
           <Box
             component="img"
             src="/logo.png"
