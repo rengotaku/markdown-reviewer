@@ -1833,13 +1833,25 @@ export function EditorPage() {
               the hot zone). Reopens it pinned, matching the old rail
               button's behavior, but doesn't reserve permanent sidebar
               width the way that rail did. */}
-          {!isSidebarShown && (
+          {/* #223: while unpinned, this button always occupies its slot in
+              the header row — it's only made invisible once the hover
+              overlay covers it. Unmounting it (the original #219 shape)
+              removed its 38px footprint (30px button + 8px flex gap) the
+              moment the overlay opened, so the logo and the filename after
+              it jumped left every time the pointer touched the hot zone. */}
+          {!sidebarPinned && (
             <Tooltip title="サイドバーを開く">
               <IconButton
                 size="small"
                 onClick={() => setSidebarPinned(true)}
                 aria-label="open sidebar"
                 data-testid="sidebar-open-button"
+                // The overlay draws its own hamburger at the same spot, so
+                // hide this one while the overlay is up — and take it out
+                // of the tab order / a11y tree with it, since an invisible
+                // control must not be focusable.
+                aria-hidden={isSidebarShown}
+                tabIndex={isSidebarShown ? -1 : undefined}
                 // #221: this button stands in for the sidebar header's own
                 // hamburger while the sidebar is hidden, so it must sit at
                 // the same x. The sidebar header uses pl: 0.5 (4px) while
@@ -1848,7 +1860,11 @@ export function EditorPage() {
                 // margin, so the button's own footprint in the flex row is
                 // unchanged and the logo (and everything after it) keeps
                 // the header's own padding.
-                sx={{ transform: "translateX(-12px)" }}
+                sx={{
+                  transform: "translateX(-12px)",
+                  visibility: isSidebarShown ? "hidden" : "visible",
+                  pointerEvents: isSidebarShown ? "none" : undefined,
+                }}
               >
                 <MenuIcon fontSize="small" />
               </IconButton>
