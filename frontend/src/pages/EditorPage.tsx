@@ -1843,10 +1843,12 @@ export function EditorPage() {
                 // #221: this button stands in for the sidebar header's own
                 // hamburger while the sidebar is hidden, so it must sit at
                 // the same x. The sidebar header uses pl: 0.5 (4px) while
-                // this header uses px: 2 (16px), so pull it back by the
-                // 12px difference. Only this button moves — the logo and
-                // everything after it keep the header's own padding.
-                sx={{ ml: -1.5 }}
+                // this header uses px: 2 (16px), so shift it left by the
+                // 12px difference. `transform` rather than a negative
+                // margin, so the button's own footprint in the flex row is
+                // unchanged and the logo (and everything after it) keeps
+                // the header's own padding.
+                sx={{ transform: "translateX(-12px)" }}
               >
                 <MenuIcon fontSize="small" />
               </IconButton>
