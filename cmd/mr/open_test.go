@@ -1,10 +1,16 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
+	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"markdown-reviewer/internal/reviewstore"
 	"markdown-reviewer/internal/serverdefaults"
 )
 
@@ -12,7 +18,7 @@ import (
 func noPlist() (string, error) { return "", errors.New("no plist") }
 
 func TestDeeplink(t *testing.T) {
-	got := deeplink("http://localhost:15174", "works", "2608041155/phases/phase0/draft.md")
+	got := deeplink("http://localhost:15174", "works", "2608041155/phases/phase0/draft.md", "")
 	want := "http://localhost:15174/?root=works&select_file=2608041155%2Fphases%2Fphase0%2Fdraft.md"
 	if got != want {
 		t.Errorf("deeplink() = %q, want %q", got, want)
@@ -20,7 +26,7 @@ func TestDeeplink(t *testing.T) {
 }
 
 func TestDeeplink_EscapesMultibyteAndSpaces(t *testing.T) {
-	got := deeplink("http://localhost:15174", "レビュー", "日本語/note v2.md")
+	got := deeplink("http://localhost:15174", "レビュー", "日本語/note v2.md", "")
 	// A raw space or '/' in select_file would break the query the UI parses.
 	for _, bad := range []string{" ", "日本語/note"} {
 		if strings.Contains(got, bad) {
@@ -36,7 +42,7 @@ func TestDeeplink_EscapesMultibyteAndSpaces(t *testing.T) {
 }
 
 func TestDeeplink_TrimsTrailingSlashOnBase(t *testing.T) {
-	got := deeplink("http://localhost:15174/", "works", "a.md")
+	got := deeplink("http://localhost:15174/", "works", "a.md", "")
 	if strings.Contains(got, "15174//") {
 		t.Errorf("deeplink() = %q, doubled the slash", got)
 	}
@@ -123,3 +129,131 @@ func TestBrowserCommandFor(t *testing.T) {
 		t.Error("browserCommandFor(\"plan9\") = nil error, want an error naming the platform")
 	}
 }
+
+func setupTestRootWithComment(t *testing.T) (rootDir string, relFile string) {
+	t.Helper()
+	rootDir = t.TempDir()
+	rootsJSON, err := json.Marshal([]map[string]string{{"name": "works", "path": rootDir}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("REVIEW_ROOTS", string(rootsJSON))
+	t.Setenv("REVIEWER_CONFIG_DIR", t.TempDir())
+
+	relFile = "foo.md"
+	absPath := filepath.Join(rootDir, relFile)
+	if err := os.WriteFile(absPath, []byte("# Foo\nTest document\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := reviewstore.Ingest("works", relFile); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = reviewstore.AddComment("works", relFile, reviewstore.Comment{
+		ID:    "c-001",
+		Scope: "file",
+		Body:  "existing comment",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return rootDir, relFile
+}
+
+func captureStdout(t *testing.T, f func() error) (string, error) {
+	t.Helper()
+	oldStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+
+	var buf bytes.Buffer
+	outC := make(chan struct{})
+	go func() {
+		io.Copy(&buf, r)
+		close(outC)
+	}()
+
+	fnErr := f()
+	w.Close()
+	os.Stdout = oldStdout
+	<-outC
+
+	return buf.String(), fnErr
+}
+
+// 7. --comment 付き --print
+func TestCmdOpen_Case7_WithCommentPrint(t *testing.T) {
+	rootDir, relFile := setupTestRootWithComment(t)
+	absPath := filepath.Join(rootDir, relFile)
+
+	out, err := captureStdout(t, func() error {
+		return cmdOpen([]string{absPath, "--comment", "c-001", "--print"})
+	})
+	if err != nil {
+		t.Fatalf("cmdOpen failed: %v", err)
+	}
+
+	out = strings.TrimSpace(out)
+	lines := strings.Split(out, "\n")
+	if len(lines) != 1 {
+		t.Errorf("stdout line count = %d, want 1 (got %q)", len(lines), out)
+	}
+	if !strings.Contains(out, "comment_id=c-001") {
+		t.Errorf("stdout = %q, want URL containing comment_id=c-001", out)
+	}
+}
+
+// 8. 存在しない comment id
+func TestCmdOpen_Case8_NonExistentCommentID(t *testing.T) {
+	rootDir, relFile := setupTestRootWithComment(t)
+	absPath := filepath.Join(rootDir, relFile)
+
+	out, err := captureStdout(t, func() error {
+		return cmdOpen([]string{absPath, "--comment", "c-999", "--print"})
+	})
+
+	if err == nil {
+		t.Fatal("cmdOpen expected error for non-existent comment id, got nil")
+	}
+	if !strings.Contains(err.Error(), "c-999") {
+		t.Errorf("error = %q, want error message mentioning comment id c-999", err.Error())
+	}
+	if strings.TrimSpace(out) != "" {
+		t.Errorf("stdout = %q, want empty stdout when comment id is invalid", out)
+	}
+}
+
+// 9. --comment なし（既存動作の回帰確認）
+func TestCmdOpen_Case9_WithoutCommentRegression(t *testing.T) {
+	rootDir, relFile := setupTestRootWithComment(t)
+	absPath := filepath.Join(rootDir, relFile)
+
+	out, err := captureStdout(t, func() error {
+		return cmdOpen([]string{absPath, "--print"})
+	})
+	if err != nil {
+		t.Fatalf("cmdOpen failed: %v", err)
+	}
+
+	out = strings.TrimSpace(out)
+	if strings.Contains(out, "comment_id=") {
+		t.Errorf("stdout = %q, should not contain comment_id=", out)
+	}
+	if !strings.Contains(out, "?root=works") || !strings.Contains(out, "select_file=foo.md") {
+		t.Errorf("stdout = %q, missing expected root/select_file params", out)
+	}
+}
+
+func TestDeeplink_WithComment(t *testing.T) {
+	got := deeplink("http://localhost:15174", "works", "draft.md", "c-001")
+	want := "http://localhost:15174/?root=works&select_file=draft.md&comment_id=c-001"
+	if got != want {
+		t.Errorf("deeplink() = %q, want %q", got, want)
+	}
+}
+

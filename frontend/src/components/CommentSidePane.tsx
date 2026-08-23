@@ -24,11 +24,14 @@ import ReplayIcon from "@mui/icons-material/Replay";
 import ReplyIcon from "@mui/icons-material/Reply";
 import OpenInFullIcon from "@mui/icons-material/OpenInFull";
 import RefreshIcon from "@mui/icons-material/Refresh";
+import LinkIcon from "@mui/icons-material/Link";
 import type { SxProps, Theme } from "@mui/material/styles";
 import type { SystemStyleObject } from "@mui/system";
 import type { CommentJSON, CommentReply } from "@/api";
 import { BAR_HEIGHT } from "@/theme/dimensions";
 import { renderCommentMarkdown } from "@/utils/commentMarkdown";
+import { buildCommentDeepLink } from "@/utils/deeplink";
+import { useToast } from "@/hooks/useToast";
 import { markdownBodySx } from "./markdownBodySx";
 
 /** AI-authored comments/replies are read-only to the human reviewer: they can
@@ -120,6 +123,8 @@ const SCOPE_BADGE: Record<string, { label: string; color: string }> = {
 };
 
 interface Props {
+  root?: string;
+  filePath?: string;
   comments: ReadonlyArray<CommentJSON>;
   /** The active file is under review (draft files cannot take comments). */
   reviewActive: boolean;
@@ -196,6 +201,8 @@ function contextLabel(c: CommentJSON): string | null {
 type StatusFilter = "all" | "open" | "resolved";
 
 export function CommentSidePane({
+  root,
+  filePath,
   comments,
   reviewActive,
   onClose,
@@ -211,6 +218,18 @@ export function CommentSidePane({
   onDeleteReply,
   onJump,
 }: Props) {
+  const canCopyLink = Boolean(root && filePath);
+  const handleCopyLink = async (id: string) => {
+    if (!root || !filePath) return;
+    const url = buildCommentDeepLink(window.location.origin, root, filePath, id);
+    try {
+      await navigator.clipboard.writeText(url);
+      useToast.getState().show("リンクをコピーしました", "success");
+    } catch {
+      useToast.getState().show("リンクのコピーに失敗しました", "error");
+    }
+  };
+
   const [filter, setFilter] = useState<StatusFilter>("all");
   const [detailId, setDetailId] = useState<string | null>(null);
   // Look the comment up live so the dialog reflects refetched replies/edits;
@@ -415,6 +434,8 @@ export function CommentSidePane({
               onDeleteReply={onDeleteReply}
               onJump={onJump}
               onOpenDetail={setDetailId}
+              onCopyLink={handleCopyLink}
+              canCopyLink={canCopyLink}
             />
           ))
         )}
@@ -436,6 +457,8 @@ export function CommentSidePane({
           onJump(id);
           setDetailId(null);
         }}
+        onCopyLink={handleCopyLink}
+        canCopyLink={canCopyLink}
       />
     </Box>
   );
@@ -451,6 +474,8 @@ interface RowProps {
   onDeleteReply: (id: string, index: number) => void;
   onJump: (id: string) => void;
   onOpenDetail: (id: string) => void;
+  onCopyLink: (id: string) => void;
+  canCopyLink?: boolean;
 }
 
 function CommentRow({
@@ -463,6 +488,8 @@ function CommentRow({
   onDeleteReply,
   onJump,
   onOpenDetail,
+  onCopyLink,
+  canCopyLink = true,
 }: RowProps) {
   const [replyOpen, setReplyOpen] = useState(false);
   const [replyBody, setReplyBody] = useState("");
@@ -756,6 +783,19 @@ function CommentRow({
             <OpenInFullIcon fontSize="small" />
           </IconButton>
         </Tooltip>
+        <Tooltip title={canCopyLink ? "リンクをコピー" : "ファイルが開かれていないためコピーできません"}>
+          <span>
+            <IconButton
+              size="small"
+              disabled={!canCopyLink}
+              onClick={() => onCopyLink(c.id)}
+              aria-label="copy comment link"
+              data-testid="comment-copy-link"
+            >
+              <LinkIcon fontSize="small" />
+            </IconButton>
+          </span>
+        </Tooltip>
       </Box>
     </Box>
   );
@@ -954,6 +994,8 @@ interface DetailDialogProps {
   onEditReply: (id: string, index: number, body: string) => void;
   onDeleteReply: (id: string, index: number) => void;
   onJump: (id: string) => void;
+  onCopyLink: (id: string) => void;
+  canCopyLink?: boolean;
 }
 
 /** A roomy, centered view of one comment: full target, body, the whole reply
@@ -969,6 +1011,8 @@ function CommentDetailDialog({
   onEditReply,
   onDeleteReply,
   onJump,
+  onCopyLink,
+  canCopyLink = true,
 }: DetailDialogProps) {
   const [replyBody, setReplyBody] = useState("");
   const [editOpen, setEditOpen] = useState(false);
@@ -1195,6 +1239,19 @@ function CommentDetailDialog({
                 data-testid="comment-detail-delete"
               >
                 <DeleteOutlineIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+          <Tooltip title={canCopyLink ? "リンクをコピー" : "ファイルが開かれていないためコピーできません"}>
+            <span>
+              <IconButton
+                size="small"
+                disabled={!canCopyLink}
+                onClick={() => onCopyLink(c.id)}
+                aria-label="copy comment link"
+                data-testid="comment-detail-copy-link"
+              >
+                <LinkIcon fontSize="small" />
               </IconButton>
             </span>
           </Tooltip>

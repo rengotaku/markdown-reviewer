@@ -90,6 +90,7 @@ function basename(path: string): string {
 
 const TARGET_SNIPPET_LENGTH = 60;
 const SELECT_FILE_PARAM = "select_file";
+const COMMENT_ID_PARAM = "comment_id";
 // How often to re-poll the active review file's comments for out-of-band
 // changes (mr CLI / API / other viewers). Matches the file-tree cadence.
 const COMMENTS_POLL_MS = 30_000;
@@ -262,6 +263,7 @@ export function EditorPage() {
   // from the editor — the canonical body is clean. `commentsRefresh` forces a
   // refetch after any create/resolve/reply/delete.
   const [comments, setComments] = useState<CommentJSON[]>([]);
+  const [commentsLoadedForPath, setCommentsLoadedForPath] = useState<string | null>(null);
   const [commentsRefresh, setCommentsRefresh] = useState(0);
   const reviewActive = reviewState === "review";
   // Once every comment is resolved there's no open review work left, so the
@@ -569,14 +571,23 @@ export function EditorPage() {
     // Draft files have no review.json. The render-time reset (fileKey change)
     // already empties the list, so we only need to fetch when under review;
     // setState only happens after an await, avoiding the sync-setState lint.
-    if (!activePath || reviewState !== "review") return;
+    if (!activePath || reviewState !== "review") {
+      setCommentsLoadedForPath(null);
+      return;
+    }
     let cancelled = false;
     void (async () => {
       try {
         const res = await listComments(activePath, activeFileRoot);
-        if (!cancelled) setComments(res.comments);
+        if (!cancelled) {
+          setComments(res.comments);
+          setCommentsLoadedForPath(activePath);
+        }
       } catch {
-        if (!cancelled) setComments([]);
+        if (!cancelled) {
+          setComments([]);
+          setCommentsLoadedForPath(activePath);
+        }
       }
     })();
     return () => {
@@ -993,6 +1004,7 @@ export function EditorPage() {
 
   const [searchParams, setSearchParams] = useSearchParams();
   const initialSelectFileRef = useRef(searchParams.get(SELECT_FILE_PARAM));
+  const initialCommentIdRef = useRef(searchParams.get(COMMENT_ID_PARAM));
 
   // Keep the URL's `select_file` param in sync with the active tab so the
   // current view is bookmarkable / shareable. Runs on every active-file
@@ -1231,6 +1243,19 @@ export function EditorPage() {
     void handleSelect(path);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeRoot]);
+
+  // Deeplink: `?comment_id=<id>` jumps to that comment once the file and comments land.
+  useEffect(() => {
+    const commentId = initialCommentIdRef.current;
+    if (!commentId) return;
+    if (!activePath || reviewState !== "review") return;
+    if (commentsLoadedForPath !== activePath) return;
+    if (!editor || editor.isDestroyed) return;
+
+    initialCommentIdRef.current = null;
+    handleJumpToComment(commentId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activePath, reviewState, commentsLoadedForPath, editor, comments]);
 
   // In-app link navigation (#213): TiptapEditor's click handler and
   // LinkPreviewModal's "Open" button both raise a request rather than
@@ -2305,6 +2330,8 @@ export function EditorPage() {
           }}
         >
           <CommentSidePane
+            root={activeFileRoot}
+            filePath={activePath}
             comments={comments}
             reviewActive={reviewActive}
             onClose={toggleCommentPane}

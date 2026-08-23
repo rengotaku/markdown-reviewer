@@ -32,7 +32,7 @@ function renderPane(props: Partial<React.ComponentProps<typeof CommentSidePane>>
     onJump: vi.fn(),
   };
   render(
-    <CommentSidePane comments={[]} reviewActive canAddComment {...handlers} {...props} />
+    <CommentSidePane root="works" filePath="doc.md" comments={[]} reviewActive canAddComment {...handlers} {...props} />
   );
   return handlers;
 }
@@ -688,5 +688,65 @@ describe("CommentSidePane", () => {
       ],
     });
     expect(screen.getByTestId("comment-reply-header")).toBeInTheDocument();
+  });
+
+  it("ケース 1: リンクコピー: 一覧行", async () => {
+    const user = userEvent.setup();
+    const writeTextMock = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", {
+      ...navigator,
+      clipboard: {
+        writeText: writeTextMock,
+      },
+    });
+
+    renderPane({
+      root: "code",
+      filePath: "foo.md",
+      comments: [comment("c-001")],
+    });
+
+    const copyBtn = screen.getByTestId("comment-copy-link");
+    await user.click(copyBtn);
+
+    expect(writeTextMock).toHaveBeenCalledTimes(1);
+    const copiedUrl = writeTextMock.mock.calls[0][0];
+    expect(copiedUrl).toContain("root=code");
+    expect(copiedUrl).toContain("select_file=foo.md");
+    expect(copiedUrl).toContain("comment_id=c-001");
+
+    vi.unstubAllGlobals();
+  });
+
+  it("ケース 2: リンクコピー: 詳細ダイアログ", async () => {
+    const user = userEvent.setup();
+    const writeTextMock = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", {
+      ...navigator,
+      clipboard: {
+        writeText: writeTextMock,
+      },
+    });
+
+    renderPane({
+      root: "code",
+      filePath: "foo.md",
+      comments: [comment("c-001")],
+    });
+
+    const openDetailBtn = screen.getByTestId("comment-open-detail");
+    await user.click(openDetailBtn);
+
+    const dialog = screen.getByTestId("comment-detail-dialog");
+    const dialogCopyBtn = within(dialog).getByTestId("comment-detail-copy-link");
+    await user.click(dialogCopyBtn);
+
+    expect(writeTextMock).toHaveBeenCalledTimes(1);
+    const copiedUrl = writeTextMock.mock.calls[0][0];
+    expect(copiedUrl).toContain("root=code");
+    expect(copiedUrl).toContain("select_file=foo.md");
+    expect(copiedUrl).toContain("comment_id=c-001");
+
+    vi.unstubAllGlobals();
   });
 });

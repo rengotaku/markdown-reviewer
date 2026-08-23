@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 
+	"markdown-reviewer/internal/reviewstore"
 	"markdown-reviewer/internal/serverdefaults"
 )
 
@@ -24,13 +25,30 @@ const baseURLEnv = "MARKDOWN_REVIEWER_BASE_URL"
 func cmdOpen(args []string) error {
 	pos, flags := parseArgs(args)
 	if len(pos) != 1 {
-		return fmt.Errorf("usage: mr open <path> [--print]")
+		return fmt.Errorf("usage: mr open <path> [--comment ID] [--print]")
 	}
 	root, rel, _, err := resolvePath(pos[0])
 	if err != nil {
 		return err
 	}
-	link := deeplink(baseURL(launchdPort), root, rel)
+	commentID := flags["comment"]
+	if commentID != "" {
+		review, err := reviewstore.ReadReview(root, rel)
+		if err != nil {
+			return err
+		}
+		found := false
+		for _, c := range review.Comments {
+			if c.ID == commentID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("comment %q not found in %s", commentID, rel)
+		}
+	}
+	link := deeplink(baseURL(launchdPort), root, rel, commentID)
 	// Printed before the launch so a launcher failure still leaves the caller
 	// with a usable URL.
 	fmt.Println(link)
@@ -64,10 +82,14 @@ func browserCommandFor(goos string) (string, error) {
 // deeplink builds the URL that opens rel in root: the `root` + `select_file`
 // pair EditorPage reads on mount. Both values are query-escaped so paths with
 // spaces or multibyte segments survive the round trip.
-func deeplink(base, root, rel string) string {
-	return strings.TrimSuffix(base, "/") +
+func deeplink(base, root, rel, commentID string) string {
+	link := strings.TrimSuffix(base, "/") +
 		"/?root=" + url.QueryEscape(root) +
 		"&select_file=" + url.QueryEscape(rel)
+	if commentID != "" {
+		link += "&comment_id=" + url.QueryEscape(commentID)
+	}
+	return link
 }
 
 // baseURL resolves where the server is reachable. Precedence, widest override

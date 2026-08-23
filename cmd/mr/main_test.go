@@ -28,6 +28,19 @@ func TestParseArgs_FlagBeforePositional(t *testing.T) {
 	}
 }
 
+func TestParseArgs_CommentFlag(t *testing.T) {
+	pos, flags := parseArgs([]string{"file.md", "--comment", "c-001", "--print"})
+	if flags["comment"] != "c-001" {
+		t.Errorf("--comment = %q, want \"c-001\"", flags["comment"])
+	}
+	if flags["print"] != "true" {
+		t.Errorf("--print = %q, want \"true\"", flags["print"])
+	}
+	if len(pos) != 1 || pos[0] != "file.md" {
+		t.Fatalf("positionals = %v", pos)
+	}
+}
+
 func TestRelUnder(t *testing.T) {
 	root := filepath.FromSlash("/Users/x/ot/reviews")
 	cases := []struct {
