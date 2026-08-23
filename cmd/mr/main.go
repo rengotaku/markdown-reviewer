@@ -11,7 +11,7 @@
 //	mr reply    <path> <id> <text> [--author NAME]   add a threaded reply
 //	mr resolve  <path> <id>       mark a comment resolved
 //	mr reopen   <path> <id>       reopen a resolved comment
-//	mr open     <path> [--print]  open the file in the web UI
+//	mr open     <path> [--comment ID] [--print]  open the file in the web UI
 //
 // <path> may be absolute or relative to the current directory; it must live
 // under one of the configured REVIEW_ROOTS.
@@ -78,7 +78,7 @@ Usage:
   mr reply    <path> <id> <text> [--author NAME]
   mr resolve  <path> <id>              mark a comment resolved
   mr reopen   <path> <id>              reopen a resolved comment
-  mr open     <path> [--print]         open the file in the web UI (--print: URL only)
+  mr open     <path> [--comment ID] [--print]  open the file in the web UI (--print: URL only)
 
 <path> is absolute or relative to cwd, and must be under a configured root.
 --since ID: only comments after ID (e.g. --since c-008).
@@ -208,7 +208,7 @@ func statusVerb(status string) string {
 // Everything else (--all, --json) is boolean, so positional/flag order stays
 // free without the flag package's stricter model and without mistaking a
 // positional path for a flag value.
-var valueFlags = map[string]bool{"author": true, "since": true, "root": true}
+var valueFlags = map[string]bool{"author": true, "since": true, "root": true, "comment": true}
 
 // parseArgs splits args into positionals and flags. A flag is "--name"; it is
 // boolean (stored as "true") unless it is in valueFlags, in which case the next

@@ -1374,4 +1374,118 @@ describe("EditorPage jump to comment (#167)", () => {
       expect(ed.view.dom.querySelectorAll(".comment-flash.is-flash")).toHaveLength(2)
     );
   });
+
+  describe("comment_id deeplink (STEP 3)", () => {
+    it("ケース 3: comment_id 付きで開く → ジャンプする", async () => {
+      const comment: CommentJSON = {
+        id: "c-001",
+        scope: "inline",
+        body: "対象のコメント",
+        status: "open",
+        anchor: { heading_path: ["## Title"], snippet: "hello world", occurrence: 0 },
+        context: { heading_path: ["Title"], line_range: [2, 2] },
+        orphan: false,
+      };
+      await useComments([comment])();
+
+      const scrollSpy = vi.mocked(Element.prototype.scrollIntoView);
+      renderPage("/?select_file=README.md&comment_id=c-001");
+      installFakeEditor("<h2>Title</h2><p>hello world</p>");
+
+      await waitFor(() => {
+        expect(scrollSpy).toHaveBeenCalled();
+      });
+      const scrolledEl = scrollSpy.mock.instances[0] as HTMLElement;
+      expect(scrolledEl.textContent).toContain("hello world");
+    });
+
+    it("ケース 4: 存在しない comment_id", async () => {
+      const comment: CommentJSON = {
+        id: "c-001",
+        scope: "inline",
+        body: "対象のコメント",
+        status: "open",
+        anchor: { heading_path: ["## Title"], snippet: "hello world", occurrence: 0 },
+        context: { heading_path: ["Title"], line_range: [2, 2] },
+        orphan: false,
+      };
+      await useComments([comment])();
+
+      const scrollSpy = vi.mocked(Element.prototype.scrollIntoView);
+      renderPage("/?select_file=README.md&comment_id=does-not-exist");
+      installFakeEditor("<h2>Title</h2><p>hello world</p>");
+
+      await waitFor(() => {
+        expect(screen.getByTestId("editor-active-path")).toHaveTextContent("README.md");
+      });
+      expect(scrollSpy).not.toHaveBeenCalled();
+    });
+
+    it("ケース 5: orphan な comment_id", async () => {
+      const comment: CommentJSON = {
+        id: "c-001",
+        scope: "inline",
+        body: "孤立したコメント",
+        status: "open",
+        anchor: { heading_path: ["## Gone"], snippet: "missing snippet", occurrence: 0 },
+        context: { heading_path: ["Gone"], line_range: [2, 2] },
+        orphan: true,
+      };
+      await useComments([comment])();
+
+      const scrollSpy = vi.mocked(Element.prototype.scrollIntoView);
+      renderPage("/?select_file=README.md&comment_id=c-001");
+      installFakeEditor("<h2>Title</h2><p>hello world</p>");
+
+      await waitFor(() => {
+        expect(screen.getByTestId("editor-active-path")).toHaveTextContent("README.md");
+      });
+      expect(scrollSpy).not.toHaveBeenCalled();
+    });
+
+    it("ケース 6: comment_id なし（既存動作の回帰確認）", async () => {
+      const comment: CommentJSON = {
+        id: "c-001",
+        scope: "inline",
+        body: "対象のコメント",
+        status: "open",
+        anchor: { heading_path: ["## Title"], snippet: "hello world", occurrence: 0 },
+        context: { heading_path: ["Title"], line_range: [2, 2] },
+        orphan: false,
+      };
+      await useComments([comment])();
+
+      const scrollSpy = vi.mocked(Element.prototype.scrollIntoView);
+      renderPage("/?select_file=README.md");
+      installFakeEditor("<h2>Title</h2><p>hello world</p>");
+
+      await waitFor(() => {
+        expect(screen.getByTestId("editor-active-path")).toHaveTextContent("README.md");
+      });
+      expect(scrollSpy).not.toHaveBeenCalled();
+    });
+
+    it("P1: preserves comment_id deeplink until the matching activePath's comments finish loading", async () => {
+      const comment: CommentJSON = {
+        id: "c-001",
+        scope: "inline",
+        body: "対象のコメント",
+        status: "open",
+        anchor: { heading_path: ["## Title"], snippet: "hello world", occurrence: 0 },
+        context: { heading_path: ["Title"], line_range: [2, 2] },
+        orphan: false,
+      };
+      await useComments([comment])();
+
+      const scrollSpy = vi.mocked(Element.prototype.scrollIntoView);
+      renderPage("/?select_file=README.md&comment_id=c-001");
+      installFakeEditor("<h2>Title</h2><p>hello world</p>");
+
+      await waitFor(() => {
+        expect(scrollSpy).toHaveBeenCalled();
+      });
+      const scrolledEl = scrollSpy.mock.instances[0] as HTMLElement;
+      expect(scrolledEl.textContent).toContain("hello world");
+    });
+  });
 });
