@@ -571,10 +571,7 @@ export function EditorPage() {
     // Draft files have no review.json. The render-time reset (fileKey change)
     // already empties the list, so we only need to fetch when under review;
     // setState only happens after an await, avoiding the sync-setState lint.
-    if (!activePath || reviewState !== "review") {
-      setCommentsLoadedForPath(null);
-      return;
-    }
+    if (!activePath || reviewState !== "review") return;
     let cancelled = false;
     void (async () => {
       try {
@@ -592,6 +589,7 @@ export function EditorPage() {
     })();
     return () => {
       cancelled = true;
+      setCommentsLoadedForPath(null);
     };
   }, [activePath, activeFileRoot, reviewState, commentsRefresh]);
 
@@ -1244,6 +1242,72 @@ export function EditorPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeRoot]);
 
+  // jump target is now resolved from the comment's own anchor(s) via
+  // resolveAnchorInDoc, independent of whether a decoration exists:
+  //  - open comment (decoration present): scroll to + flash that decoration,
+  //    exactly as before.
+  //  - resolved comment (no decoration): scroll to the live anchor position
+  //    via editor.view.domAtPos and flash it with a transient decoration
+  //    (CommentHighlight.flashCommentRanges) instead.
+  //  - orphan (no anchor resolves): do nothing, as before — canJump already
+  //    keeps the label from being clickable in this case.
+  const handleJumpToComment = (id: string) => {
+    if (!editor || editor.isDestroyed) return;
+    const comment = comments.find((c) => c.id === id);
+    if (!comment) return;
+
+    // Both fields, not one or the other: a multi-line inline comment (#162)
+    // keeps its first block in `anchor` and the rest in `anchors`, and
+    // cross_section carries `anchors` only.
+    const anchors = [
+      ...(comment.anchor ? [comment.anchor] : []),
+      ...(comment.anchors ?? []),
+    ];
+    const ranges = anchors
+      .map((a) => resolveAnchorInDoc(editor.state.doc, a))
+      .filter((r): r is { from: number; to: number } => r !== null)
+      .sort((a, b) => a.from - b.from);
+    if (ranges.length === 0) return; // orphan: no anchor resolves.
+
+    // Retire any in-flight flash before starting a new jump, whichever branch
+    // it came from: the flash decoration set and its timer are shared, so a
+    // pending clear would cut this jump short and a stale flash would blink
+    // alongside the new target.
+    if (flashTimerRef.current !== null) {
+      window.clearTimeout(flashTimerRef.current);
+      flashTimerRef.current = null;
+      editor.commands.clearCommentFlash();
+    }
+
+    const root = editor.view.dom;
+    const decorated = root.querySelectorAll<HTMLElement>(
+      `[data-comment-id="${CSS.escape(id)}"]`
+    );
+    if (decorated.length > 0) {
+      decorated[0].scrollIntoView({ behavior: "smooth", block: "center" });
+      decorated.forEach((el) => {
+        el.classList.remove("is-flash");
+        void el.offsetWidth; // force reflow so the animation restarts
+        el.classList.add("is-flash");
+      });
+      window.setTimeout(() => {
+        decorated.forEach((el) => el.classList.remove("is-flash"));
+      }, 1600);
+      return;
+    }
+
+    const { node } = editor.view.domAtPos(ranges[0].from);
+    const target =
+      node.nodeType === Node.TEXT_NODE ? node.parentElement : (node as HTMLElement);
+    target?.scrollIntoView({ behavior: "smooth", block: "center" });
+    editor.commands.flashCommentRanges(ranges);
+    flashTimerRef.current = window.setTimeout(() => {
+      flashTimerRef.current = null;
+      if (!editor || editor.isDestroyed) return;
+      editor.commands.clearCommentFlash();
+    }, 1600);
+  };
+
   // Deeplink: `?comment_id=<id>` jumps to that comment once the file and comments land.
   useEffect(() => {
     const commentId = initialCommentIdRef.current;
@@ -1623,71 +1687,6 @@ export function EditorPage() {
   // (`[data-comment-id]`) alone, so resolved comments — which intentionally
   // carry no decoration (#96/#97) — silently did nothing when clicked. The
   // jump target is now resolved from the comment's own anchor(s) via
-  // resolveAnchorInDoc, independent of whether a decoration exists:
-  //  - open comment (decoration present): scroll to + flash that decoration,
-  //    exactly as before.
-  //  - resolved comment (no decoration): scroll to the live anchor position
-  //    via editor.view.domAtPos and flash it with a transient decoration
-  //    (CommentHighlight.flashCommentRanges) instead.
-  //  - orphan (no anchor resolves): do nothing, as before — canJump already
-  //    keeps the label from being clickable in this case.
-  const handleJumpToComment = (id: string) => {
-    if (!editor || editor.isDestroyed) return;
-    const comment = comments.find((c) => c.id === id);
-    if (!comment) return;
-
-    // Both fields, not one or the other: a multi-line inline comment (#162)
-    // keeps its first block in `anchor` and the rest in `anchors`, and
-    // cross_section carries `anchors` only.
-    const anchors = [
-      ...(comment.anchor ? [comment.anchor] : []),
-      ...(comment.anchors ?? []),
-    ];
-    const ranges = anchors
-      .map((a) => resolveAnchorInDoc(editor.state.doc, a))
-      .filter((r): r is { from: number; to: number } => r !== null)
-      .sort((a, b) => a.from - b.from);
-    if (ranges.length === 0) return; // orphan: no anchor resolves.
-
-    // Retire any in-flight flash before starting a new jump, whichever branch
-    // it came from: the flash decoration set and its timer are shared, so a
-    // pending clear would cut this jump short and a stale flash would blink
-    // alongside the new target.
-    if (flashTimerRef.current !== null) {
-      window.clearTimeout(flashTimerRef.current);
-      flashTimerRef.current = null;
-      editor.commands.clearCommentFlash();
-    }
-
-    const root = editor.view.dom;
-    const decorated = root.querySelectorAll<HTMLElement>(
-      `[data-comment-id="${CSS.escape(id)}"]`
-    );
-    if (decorated.length > 0) {
-      decorated[0].scrollIntoView({ behavior: "smooth", block: "center" });
-      decorated.forEach((el) => {
-        el.classList.remove("is-flash");
-        void el.offsetWidth; // force reflow so the animation restarts
-        el.classList.add("is-flash");
-      });
-      window.setTimeout(() => {
-        decorated.forEach((el) => el.classList.remove("is-flash"));
-      }, 1600);
-      return;
-    }
-
-    const { node } = editor.view.domAtPos(ranges[0].from);
-    const target =
-      node.nodeType === Node.TEXT_NODE ? node.parentElement : (node as HTMLElement);
-    target?.scrollIntoView({ behavior: "smooth", block: "center" });
-    editor.commands.flashCommentRanges(ranges);
-    flashTimerRef.current = window.setTimeout(() => {
-      flashTimerRef.current = null;
-      if (!editor || editor.isDestroyed) return;
-      editor.commands.clearCommentFlash();
-    }, 1600);
-  };
-
   const canSave = Boolean(activeFile);
   const isSaving = writeFile.isPending;
 

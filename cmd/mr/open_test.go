@@ -142,12 +142,12 @@ func setupTestRootWithComment(t *testing.T) (rootDir string, relFile string) {
 
 	relFile = "foo.md"
 	absPath := filepath.Join(rootDir, relFile)
-	if err := os.WriteFile(absPath, []byte("# Foo\nTest document\n"), 0o644); err != nil {
-		t.Fatal(err)
+	if writeErr := os.WriteFile(absPath, []byte("# Foo\nTest document\n"), 0o644); writeErr != nil {
+		t.Fatal(writeErr)
 	}
 
-	if err := reviewstore.Ingest("works", relFile); err != nil {
-		t.Fatal(err)
+	if ingestErr := reviewstore.Ingest("works", relFile); ingestErr != nil {
+		t.Fatal(ingestErr)
 	}
 
 	_, err = reviewstore.AddComment("works", relFile, reviewstore.Comment{
@@ -174,12 +174,12 @@ func captureStdout(t *testing.T, f func() error) (string, error) {
 	var buf bytes.Buffer
 	outC := make(chan struct{})
 	go func() {
-		io.Copy(&buf, r)
+		_, _ = io.Copy(&buf, r)
 		close(outC)
 	}()
 
 	fnErr := f()
-	w.Close()
+	_ = w.Close()
 	os.Stdout = oldStdout
 	<-outC
 
@@ -256,4 +256,3 @@ func TestDeeplink_WithComment(t *testing.T) {
 		t.Errorf("deeplink() = %q, want %q", got, want)
 	}
 }
-

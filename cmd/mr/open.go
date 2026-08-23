@@ -33,9 +33,9 @@ func cmdOpen(args []string) error {
 	}
 	commentID := flags["comment"]
 	if commentID != "" {
-		review, err := reviewstore.ReadReview(root, rel)
-		if err != nil {
-			return err
+		review, readErr := reviewstore.ReadReview(root, rel)
+		if readErr != nil {
+			return readErr
 		}
 		found := false
 		for _, c := range review.Comments {
