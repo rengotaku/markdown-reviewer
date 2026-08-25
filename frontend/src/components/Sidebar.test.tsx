@@ -6,6 +6,7 @@ import { MemoryRouter } from "react-router-dom";
 import { Sidebar } from "./Sidebar";
 import { useUIStore } from "@/hooks/useUIStore";
 import { useChangedPaths } from "@/hooks/useChangedPaths";
+import { useRecentOpened, RECENT_OPENED_LIMIT } from "@/hooks/useRecentOpened";
 
 function renderWithProviders(ui: React.ReactElement, initialPath = "/") {
   const client = new QueryClient({
@@ -23,6 +24,89 @@ describe("Sidebar", () => {
     // The view mode lives in a module-level persisted store; reset it so a
     // previous test's "recent" selection doesn't leak into tree-mode tests.
     useUIStore.setState({ sidebarViewMode: "tree" });
+    useRecentOpened.setState({ entries: [] });
+  });
+
+  describe("Recently section (#228)", () => {
+    /** Seed history for the root the mock /api/config reports. */
+    function seedRecent(paths: string[], root = "mock-root") {
+      for (const path of paths) {
+        useRecentOpened.getState().record(root, path, path.split("/").pop() ?? path);
+      }
+    }
+
+    it("is absent while nothing has been opened yet", async () => {
+      renderWithProviders(<Sidebar onSelect={() => {}} />);
+      await waitFor(() =>
+        expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
+      );
+      expect(screen.queryByTestId("sidebar-recently-opened")).not.toBeInTheDocument();
+    });
+
+    it("lists previously opened files newest first, and opens one on click", async () => {
+      const user = userEvent.setup();
+      const onSelect = vi.fn();
+      seedRecent(["README.md", "docs/intro.md"]);
+      renderWithProviders(<Sidebar onSelect={onSelect} />);
+
+      await waitFor(() =>
+        expect(screen.getByTestId("sidebar-recently-opened")).toBeInTheDocument()
+      );
+      const rows = screen
+        .getAllByTestId(/^sidebar-recently-opened-file-/)
+        .map((el) => el.getAttribute("data-testid"));
+      expect(rows).toEqual([
+        "sidebar-recently-opened-file-docs/intro.md",
+        "sidebar-recently-opened-file-README.md",
+      ]);
+
+      await user.click(screen.getByTestId("sidebar-recently-opened-file-docs/intro.md"));
+      expect(onSelect).toHaveBeenCalledWith("docs/intro.md");
+    });
+
+    it(`shows at most ${RECENT_OPENED_LIMIT} entries`, async () => {
+      seedRecent(
+        Array.from({ length: RECENT_OPENED_LIMIT + 5 }, (_, i) => `f${i}.md`)
+      );
+      renderWithProviders(<Sidebar onSelect={() => {}} />);
+
+      await waitFor(() =>
+        expect(screen.getByTestId("sidebar-recently-opened")).toBeInTheDocument()
+      );
+      expect(screen.getAllByTestId(/^sidebar-recently-opened-file-/)).toHaveLength(
+        RECENT_OPENED_LIMIT
+      );
+    });
+
+    it("collapses and expands on the header click", async () => {
+      const user = userEvent.setup();
+      seedRecent(["README.md"]);
+      renderWithProviders(<Sidebar onSelect={() => {}} />);
+
+      await waitFor(() =>
+        expect(screen.getByTestId("sidebar-recently-opened")).toBeInTheDocument()
+      );
+      await user.click(screen.getByTestId("sidebar-recently-opened-toggle"));
+      expect(
+        screen.queryByTestId("sidebar-recently-opened-file-README.md")
+      ).not.toBeInTheDocument();
+
+      await user.click(screen.getByTestId("sidebar-recently-opened-toggle"));
+      expect(
+        screen.getByTestId("sidebar-recently-opened-file-README.md")
+      ).toBeInTheDocument();
+    });
+
+    it("is hidden in the mtime-ordered '更新順' view", async () => {
+      seedRecent(["README.md"]);
+      useUIStore.setState({ sidebarViewMode: "recent" });
+      renderWithProviders(<Sidebar onSelect={() => {}} />);
+
+      await waitFor(() =>
+        expect(screen.getByTestId("sidebar-recent-file-README.md")).toBeInTheDocument()
+      );
+      expect(screen.queryByTestId("sidebar-recently-opened")).not.toBeInTheDocument();
+    });
   });
 
   it("renders only top-level entries (lazy-collapsed by default)", async () => {
@@ -151,6 +235,89 @@ describe("Sidebar", () => {
 describe("Sidebar recent view (#68)", () => {
   beforeEach(() => {
     useUIStore.setState({ sidebarViewMode: "tree" });
+    useRecentOpened.setState({ entries: [] });
+  });
+
+  describe("Recently section (#228)", () => {
+    /** Seed history for the root the mock /api/config reports. */
+    function seedRecent(paths: string[], root = "mock-root") {
+      for (const path of paths) {
+        useRecentOpened.getState().record(root, path, path.split("/").pop() ?? path);
+      }
+    }
+
+    it("is absent while nothing has been opened yet", async () => {
+      renderWithProviders(<Sidebar onSelect={() => {}} />);
+      await waitFor(() =>
+        expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
+      );
+      expect(screen.queryByTestId("sidebar-recently-opened")).not.toBeInTheDocument();
+    });
+
+    it("lists previously opened files newest first, and opens one on click", async () => {
+      const user = userEvent.setup();
+      const onSelect = vi.fn();
+      seedRecent(["README.md", "docs/intro.md"]);
+      renderWithProviders(<Sidebar onSelect={onSelect} />);
+
+      await waitFor(() =>
+        expect(screen.getByTestId("sidebar-recently-opened")).toBeInTheDocument()
+      );
+      const rows = screen
+        .getAllByTestId(/^sidebar-recently-opened-file-/)
+        .map((el) => el.getAttribute("data-testid"));
+      expect(rows).toEqual([
+        "sidebar-recently-opened-file-docs/intro.md",
+        "sidebar-recently-opened-file-README.md",
+      ]);
+
+      await user.click(screen.getByTestId("sidebar-recently-opened-file-docs/intro.md"));
+      expect(onSelect).toHaveBeenCalledWith("docs/intro.md");
+    });
+
+    it(`shows at most ${RECENT_OPENED_LIMIT} entries`, async () => {
+      seedRecent(
+        Array.from({ length: RECENT_OPENED_LIMIT + 5 }, (_, i) => `f${i}.md`)
+      );
+      renderWithProviders(<Sidebar onSelect={() => {}} />);
+
+      await waitFor(() =>
+        expect(screen.getByTestId("sidebar-recently-opened")).toBeInTheDocument()
+      );
+      expect(screen.getAllByTestId(/^sidebar-recently-opened-file-/)).toHaveLength(
+        RECENT_OPENED_LIMIT
+      );
+    });
+
+    it("collapses and expands on the header click", async () => {
+      const user = userEvent.setup();
+      seedRecent(["README.md"]);
+      renderWithProviders(<Sidebar onSelect={() => {}} />);
+
+      await waitFor(() =>
+        expect(screen.getByTestId("sidebar-recently-opened")).toBeInTheDocument()
+      );
+      await user.click(screen.getByTestId("sidebar-recently-opened-toggle"));
+      expect(
+        screen.queryByTestId("sidebar-recently-opened-file-README.md")
+      ).not.toBeInTheDocument();
+
+      await user.click(screen.getByTestId("sidebar-recently-opened-toggle"));
+      expect(
+        screen.getByTestId("sidebar-recently-opened-file-README.md")
+      ).toBeInTheDocument();
+    });
+
+    it("is hidden in the mtime-ordered '更新順' view", async () => {
+      seedRecent(["README.md"]);
+      useUIStore.setState({ sidebarViewMode: "recent" });
+      renderWithProviders(<Sidebar onSelect={() => {}} />);
+
+      await waitFor(() =>
+        expect(screen.getByTestId("sidebar-recent-file-README.md")).toBeInTheDocument()
+      );
+      expect(screen.queryByTestId("sidebar-recently-opened")).not.toBeInTheDocument();
+    });
   });
 
   it("toggle switches between tree and recent list", async () => {
@@ -425,6 +592,89 @@ describe("Sidebar changed-paths dots (#178)", () => {
 describe("Sidebar name tooltip (#192)", () => {
   beforeEach(() => {
     useUIStore.setState({ sidebarViewMode: "tree" });
+    useRecentOpened.setState({ entries: [] });
+  });
+
+  describe("Recently section (#228)", () => {
+    /** Seed history for the root the mock /api/config reports. */
+    function seedRecent(paths: string[], root = "mock-root") {
+      for (const path of paths) {
+        useRecentOpened.getState().record(root, path, path.split("/").pop() ?? path);
+      }
+    }
+
+    it("is absent while nothing has been opened yet", async () => {
+      renderWithProviders(<Sidebar onSelect={() => {}} />);
+      await waitFor(() =>
+        expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
+      );
+      expect(screen.queryByTestId("sidebar-recently-opened")).not.toBeInTheDocument();
+    });
+
+    it("lists previously opened files newest first, and opens one on click", async () => {
+      const user = userEvent.setup();
+      const onSelect = vi.fn();
+      seedRecent(["README.md", "docs/intro.md"]);
+      renderWithProviders(<Sidebar onSelect={onSelect} />);
+
+      await waitFor(() =>
+        expect(screen.getByTestId("sidebar-recently-opened")).toBeInTheDocument()
+      );
+      const rows = screen
+        .getAllByTestId(/^sidebar-recently-opened-file-/)
+        .map((el) => el.getAttribute("data-testid"));
+      expect(rows).toEqual([
+        "sidebar-recently-opened-file-docs/intro.md",
+        "sidebar-recently-opened-file-README.md",
+      ]);
+
+      await user.click(screen.getByTestId("sidebar-recently-opened-file-docs/intro.md"));
+      expect(onSelect).toHaveBeenCalledWith("docs/intro.md");
+    });
+
+    it(`shows at most ${RECENT_OPENED_LIMIT} entries`, async () => {
+      seedRecent(
+        Array.from({ length: RECENT_OPENED_LIMIT + 5 }, (_, i) => `f${i}.md`)
+      );
+      renderWithProviders(<Sidebar onSelect={() => {}} />);
+
+      await waitFor(() =>
+        expect(screen.getByTestId("sidebar-recently-opened")).toBeInTheDocument()
+      );
+      expect(screen.getAllByTestId(/^sidebar-recently-opened-file-/)).toHaveLength(
+        RECENT_OPENED_LIMIT
+      );
+    });
+
+    it("collapses and expands on the header click", async () => {
+      const user = userEvent.setup();
+      seedRecent(["README.md"]);
+      renderWithProviders(<Sidebar onSelect={() => {}} />);
+
+      await waitFor(() =>
+        expect(screen.getByTestId("sidebar-recently-opened")).toBeInTheDocument()
+      );
+      await user.click(screen.getByTestId("sidebar-recently-opened-toggle"));
+      expect(
+        screen.queryByTestId("sidebar-recently-opened-file-README.md")
+      ).not.toBeInTheDocument();
+
+      await user.click(screen.getByTestId("sidebar-recently-opened-toggle"));
+      expect(
+        screen.getByTestId("sidebar-recently-opened-file-README.md")
+      ).toBeInTheDocument();
+    });
+
+    it("is hidden in the mtime-ordered '更新順' view", async () => {
+      seedRecent(["README.md"]);
+      useUIStore.setState({ sidebarViewMode: "recent" });
+      renderWithProviders(<Sidebar onSelect={() => {}} />);
+
+      await waitFor(() =>
+        expect(screen.getByTestId("sidebar-recent-file-README.md")).toBeInTheDocument()
+      );
+      expect(screen.queryByTestId("sidebar-recently-opened")).not.toBeInTheDocument();
+    });
   });
 
   it("shows the full name on hover for a file row in the tree", async () => {

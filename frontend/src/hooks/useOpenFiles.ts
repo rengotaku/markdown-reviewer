@@ -1,5 +1,4 @@
 import { create } from "zustand";
-import { persist, createJSONStorage, type StateStorage } from "zustand/middleware";
 
 export interface OpenFile {
   id: string;
@@ -9,10 +8,6 @@ export interface OpenFile {
    * Name of the configured root this file belongs to. Determines which
    * `?root=<name>` is sent on subsequent reads/writes/stats and is what
    * drives "show only this root's tabs in the editor" filtering.
-   *
-   * Empty string is reserved for entries persisted by an older single-root
-   * build; reattachLegacyFilesToRoot moves them onto the default root once
-   * /api/config arrives.
    */
   root: string;
   markdown: string;
@@ -25,8 +20,7 @@ export interface OpenFile {
    * (from a read/write response, or backfilled from a stat poll). Lets the
    * external-change watcher (#119) tell an actual content change apart from
    * an mtime-only touch, and drives the save-conflict If-Match header.
-   * Undefined for files with no server sha yet — fresh "untitled" buffers,
-   * or tabs rehydrated from a persisted session that pre-dates this field
+   * Undefined for files with no server sha yet — fresh "untitled" buffers
    * (the watcher falls back to mtime comparison for those until the next
    * successful read/write/stat backfills it).
    */
@@ -137,7 +131,19 @@ interface OpenFilesState {
   ignoreExternalChange: (id: string, modified: string, sha?: string) => void;
 }
 
-const STORAGE_KEY = "markdown-reviewer-open-files";
+/**
+ * Key an older build used to persist the open-tab session (#248). Tabs are no
+ * longer restored across reloads — the editor starts empty and only shows what
+ * the user picks in the file tree — so the leftover payload is cleared once on
+ * load instead of being left to rot in localStorage.
+ */
+const LEGACY_STORAGE_KEY = "markdown-reviewer-open-files";
+
+try {
+  localStorage.removeItem(LEGACY_STORAGE_KEY);
+} catch {
+  // noop — private mode / disabled storage
+}
 
 function generateId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -146,33 +152,7 @@ function generateId(): string {
   return `file-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-const safeLocalStorage: StateStorage = {
-  getItem: (name) => {
-    try {
-      return localStorage.getItem(name);
-    } catch {
-      return null;
-    }
-  },
-  setItem: (name, value) => {
-    try {
-      localStorage.setItem(name, value);
-    } catch (error) {
-      console.warn(`[useOpenFiles] Failed to persist '${name}':`, error);
-    }
-  },
-  removeItem: (name) => {
-    try {
-      localStorage.removeItem(name);
-    } catch {
-      // noop
-    }
-  },
-};
-
-export const useOpenFiles = create<OpenFilesState>()(
-  persist(
-    (set) => ({
+export const useOpenFiles = create<OpenFilesState>()((set) => ({
       files: [],
       activeIdByRoot: {},
 
@@ -473,94 +453,4 @@ export const useOpenFiles = create<OpenFilesState>()(
             ),
           };
         }),
-    }),
-    {
-      name: STORAGE_KEY,
-      storage: createJSONStorage(() => safeLocalStorage),
-      version: 3,
-      // Older persisted state (version 1) stored `activeId: string` instead
-      // of `activeIdByRoot`, and OpenFile entries had no `root` field.
-      // Migrate by parking every legacy entry on a placeholder root ("").
-      // The first /api/config load reassigns them to the default root via
-      // reattachLegacyFilesToRoot. Version 2 → 3 (#119) drops the dead
-      // `initialHash` field in favor of `serverSha`, which the entry simply
-      // won't have until the next successful read/write/stat.
-      migrate: (state, version) => {
-        if (!state) return state as OpenFilesState;
-        let migrated = state as unknown as {
-          files?: (OpenFile & { initialHash?: string })[];
-          activeId?: string | null;
-          activeIdByRoot?: Record<string, string | null>;
-        };
-
-        if (version < 2) {
-          const files = (migrated.files ?? []).map((f) => ({
-            ...f,
-            root: f.root ?? "",
-          }));
-          const activeIdByRoot: Record<string, string | null> = {};
-          if (migrated.activeId) activeIdByRoot[""] = migrated.activeId;
-          migrated = { ...migrated, files, activeIdByRoot };
-        }
-
-        if (version < 3) {
-          const files = (migrated.files ?? []).map((f) => {
-            const rest = { ...f };
-            delete rest.initialHash;
-            return rest;
-          });
-          migrated = { ...migrated, files };
-        }
-
-        return migrated as unknown as OpenFilesState;
-      },
-      partialize: (state) => ({
-        files: state.files,
-        activeIdByRoot: state.activeIdByRoot,
-      }),
-      onRehydrateStorage: () => (state) => {
-        if (!state) return;
-        state.files = state.files.map((f) => ({
-          ...(f.path ? f : { ...f, path: f.name }),
-          // Older persisted entries don't have `root`; default to "" and let
-          // the editor reattach them once /api/config arrives.
-          root: f.root ?? "",
-          // Older persisted entries don't have savedMarkdown. Treat the
-          // last-persisted markdown as the saved baseline.
-          savedMarkdown: f.savedMarkdown ?? f.markdown,
-          // Older persisted entries don't have serverModified. The next
-          // watcher poll will populate it from the live stat response.
-          serverModified: f.serverModified ?? "",
-          serverCreated: f.serverCreated ?? "",
-        }));
-        state.activeIdByRoot = state.activeIdByRoot ?? {};
-        // Drop stale active ids whose files have been closed/removed.
-        for (const [root, id] of Object.entries(state.activeIdByRoot)) {
-          if (id && !state.files.some((f) => f.id === id)) {
-            state.activeIdByRoot[root] = null;
-          }
-        }
-      },
-    }
-  )
-);
-
-/**
- * Re-home any persisted files that didn't carry a `root` field (legacy
- * single-root persistence) onto the given default root. Idempotent — files
- * that already have a non-empty root are left alone.
- */
-export function reattachLegacyFilesToRoot(defaultRoot: string) {
-  if (!defaultRoot) return;
-  const state = useOpenFiles.getState();
-  const filesNeedRoot = state.files.some((f) => !f.root);
-  const legacyActive = state.activeIdByRoot[""];
-  if (!filesNeedRoot && !legacyActive) return;
-  const files = state.files.map((f) => (f.root ? f : { ...f, root: defaultRoot }));
-  const nextActiveByRoot = { ...state.activeIdByRoot };
-  if (legacyActive) {
-    if (!nextActiveByRoot[defaultRoot]) nextActiveByRoot[defaultRoot] = legacyActive;
-    delete nextActiveByRoot[""];
-  }
-  useOpenFiles.setState({ files, activeIdByRoot: nextActiveByRoot });
-}
+}));

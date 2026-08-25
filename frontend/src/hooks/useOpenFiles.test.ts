@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { useOpenFiles, reattachLegacyFilesToRoot } from "./useOpenFiles";
+import { useOpenFiles } from "./useOpenFiles";
 
 // All tests pin a single root name so they keep exercising the same
 // behaviors that mattered pre-multi-root, just routed through the per-root
@@ -241,98 +241,9 @@ describe("useOpenFiles", () => {
     );
   });
 
-  // --- legacy migration --------------------------------------------------
-
-  it("reattachLegacyFilesToRoot moves rootless files onto the default root", () => {
-    useOpenFiles.setState({
-      files: [
-        {
-          id: "legacy-1",
-          name: "a.md",
-          path: "a.md",
-          root: "",
-          markdown: "# A",
-          savedMarkdown: "# A",
-          isDirty: false,
-          reloadToken: 0,
-          serverModified: "",
-          serverCreated: "",
-        },
-        {
-          id: "fresh-1",
-          name: "b.md",
-          path: "b.md",
-          root: "rooms",
-          markdown: "# B",
-          savedMarkdown: "# B",
-          isDirty: false,
-          reloadToken: 0,
-          serverModified: "",
-          serverCreated: "",
-        },
-      ],
-      activeIdByRoot: { "": "legacy-1", rooms: "fresh-1" },
-    });
-
-    reattachLegacyFilesToRoot("works");
-
-    const state = useOpenFiles.getState();
-    // Legacy file is rehomed; existing rooted file stays put.
-    expect(state.files.find((f) => f.id === "legacy-1")?.root).toBe("works");
-    expect(state.files.find((f) => f.id === "fresh-1")?.root).toBe("rooms");
-    // activeIdByRoot[""] is migrated to activeIdByRoot["works"]; rooms stays.
-    expect(state.activeIdByRoot.works).toBe("legacy-1");
-    expect(state.activeIdByRoot[""]).toBeUndefined();
-    expect(state.activeIdByRoot.rooms).toBe("fresh-1");
-  });
-
-  it("reattachLegacyFilesToRoot is a no-op when nothing legacy is present", () => {
-    useOpenFiles.setState({
-      files: [
-        {
-          id: "x",
-          name: "x.md",
-          path: "x.md",
-          root: "works",
-          markdown: "x",
-          savedMarkdown: "x",
-          isDirty: false,
-          reloadToken: 0,
-          serverModified: "",
-          serverCreated: "",
-        },
-      ],
-      activeIdByRoot: { works: "x" },
-    });
-    const before = useOpenFiles.getState();
-    reattachLegacyFilesToRoot("works");
-    const after = useOpenFiles.getState();
-    expect(after.files).toEqual(before.files);
-    expect(after.activeIdByRoot).toEqual(before.activeIdByRoot);
-  });
-
-  it("reattachLegacyFilesToRoot refuses an empty default root", () => {
-    useOpenFiles.setState({
-      files: [
-        {
-          id: "y",
-          name: "y.md",
-          path: "y.md",
-          root: "",
-          markdown: "y",
-          savedMarkdown: "y",
-          isDirty: false,
-          reloadToken: 0,
-          serverModified: "",
-          serverCreated: "",
-        },
-      ],
-      activeIdByRoot: { "": "y" },
-    });
-    reattachLegacyFilesToRoot("");
-    // Files are untouched (still rootless) since an empty default would
-    // overwrite them with another invalid value.
-    expect(useOpenFiles.getState().files[0].root).toBe("");
+  it("does not persist open tabs to localStorage (#248)", () => {
+    useOpenFiles.getState().addFiles([{ name: "a.md", root: "works", markdown: "# A" }]);
+    expect(localStorage.getItem("markdown-reviewer-open-files")).toBeNull();
   });
 
   it("closeFile only affects its own root's active id", () => {
@@ -542,83 +453,6 @@ describe("useOpenFiles guards and recovery", () => {
     useOpenFiles.getState().acknowledgeExternalChange(id, "2026-06-04T00:00:00Z", "sha-base");
 
     expect(useOpenFiles.getState().files[0].ignoredExternal).toBeUndefined();
-  });
-
-  it("migrates a version-1 persisted payload onto the placeholder root", async () => {
-    localStorage.setItem(
-      "markdown-reviewer-open-files",
-      JSON.stringify({
-        version: 1,
-        state: {
-          files: [{ id: "legacy-1", name: "old.md", markdown: "# Old" }],
-          activeId: "legacy-1",
-        },
-      })
-    );
-    await useOpenFiles.persist.rehydrate();
-
-    const state = useOpenFiles.getState();
-    expect(state.files).toHaveLength(1);
-    const f = state.files[0];
-    // migrate() parks legacy entries on root "" and onRehydrateStorage
-    // backfills the fields the v1 schema didn't have.
-    expect(f.root).toBe("");
-    expect(f.path).toBe("old.md");
-    expect(f.savedMarkdown).toBe("# Old");
-    expect(f.serverModified).toBe("");
-    expect(f.serverCreated).toBe("");
-    expect(state.activeIdByRoot[""]).toBe("legacy-1");
-  });
-
-  it("migrates a version-2 persisted payload by dropping the dead initialHash field", async () => {
-    localStorage.setItem(
-      "markdown-reviewer-open-files",
-      JSON.stringify({
-        version: 2,
-        state: {
-          files: [
-            {
-              id: "v2-1",
-              name: "old.md",
-              path: "old.md",
-              root: "works",
-              markdown: "# Old",
-              savedMarkdown: "# Old",
-              isDirty: false,
-              reloadToken: 0,
-              initialHash: "some-legacy-hash",
-              serverModified: "2026-01-01T00:00:00Z",
-              serverCreated: "",
-            },
-          ],
-          activeIdByRoot: { works: "v2-1" },
-        },
-      })
-    );
-    await useOpenFiles.persist.rehydrate();
-
-    const f = useOpenFiles.getState().files[0];
-    expect(f).not.toHaveProperty("initialHash");
-    // No sha was ever recorded for this legacy entry — undefined, not
-    // fabricated — so the watcher falls back to mtime comparison for it
-    // until the next successful read/write/stat.
-    expect(f.serverSha).toBeUndefined();
-    expect(f.serverModified).toBe("2026-01-01T00:00:00Z");
-  });
-
-  it("drops stale active ids whose files are gone on rehydrate", async () => {
-    localStorage.setItem(
-      "markdown-reviewer-open-files",
-      JSON.stringify({
-        version: 2,
-        state: {
-          files: [],
-          activeIdByRoot: { works: "gone-id" },
-        },
-      })
-    );
-    await useOpenFiles.persist.rehydrate();
-    expect(useOpenFiles.getState().activeIdByRoot["works"]).toBeNull();
   });
 
   describe("reorderFiles", () => {

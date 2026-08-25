@@ -7,6 +7,7 @@ import { Editor } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
 import { EditorPage } from "./EditorPage";
 import { useOpenFiles } from "@/hooks/useOpenFiles";
+import { useRecentOpened } from "@/hooks/useRecentOpened";
 import { useToast } from "@/hooks/useToast";
 import { useConfirm } from "@/hooks/useConfirm";
 import { useEditorInstance } from "@/hooks/useEditorInstance";
@@ -44,6 +45,22 @@ describe("EditorPage", () => {
     useOpenFiles.setState({ files: [], activeIdByRoot: {} });
     useToast.setState({ toasts: [] });
     useConfirm.setState({ pending: null, queue: [] });
+    useRecentOpened.setState({ entries: [] });
+  });
+
+  it("records an opened file in the Recently history (#228)", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
+    );
+
+    await user.click(screen.getByTestId("sidebar-file-README.md"));
+    await waitFor(() =>
+      expect(
+        useRecentOpened.getState().listForRoot("mock-root").map((e) => e.path)
+      ).toEqual(["README.md"])
+    );
   });
 
   it("shows the empty-state placeholder when no file is active", () => {
