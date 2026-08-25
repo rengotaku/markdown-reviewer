@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, useLocation } from "react-router-dom";
@@ -11,8 +11,10 @@ import { useRecentOpened } from "@/hooks/useRecentOpened";
 import { useToast } from "@/hooks/useToast";
 import { useConfirm } from "@/hooks/useConfirm";
 import { useEditorInstance } from "@/hooks/useEditorInstance";
+import { useEditorPrefs } from "@/hooks/useEditorPrefs";
 import { CommentHighlight } from "@/components/tiptap/extensions/CommentHighlight";
 import { DiffGutter } from "@/components/tiptap/extensions/DiffGutter";
+import { LineNumberGutter } from "@/components/tiptap/extensions/LineNumberGutter";
 import type { CommentJSON } from "@/api";
 
 vi.mock("@/components/tiptap/TiptapEditor", () => ({
@@ -975,6 +977,68 @@ describe("EditorPage", () => {
     }
   });
 
+  describe("タブの右クリックメニュー: コピー導線 (#232)", () => {
+    async function openReadmeTabMenu(user: ReturnType<typeof userEvent.setup>) {
+      await waitFor(() =>
+        expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
+      );
+      await user.click(screen.getByTestId("sidebar-file-README.md"));
+      await waitFor(() =>
+        expect(screen.getByTestId("editor-tab-README.md")).toBeInTheDocument()
+      );
+      fireEvent.contextMenu(screen.getByTestId("editor-tab-README.md"));
+    }
+
+    it("ファイル名をコピーする", async () => {
+      const user = userEvent.setup();
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+      try {
+        renderPage();
+        await openReadmeTabMenu(user);
+
+        await user.click(await screen.findByTestId("tab-ctx-copy-name"));
+        expect(writeText).toHaveBeenCalledWith("README.md");
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it("フルパス（root の絶対パス + ファイルパス）をコピーする", async () => {
+      const user = userEvent.setup();
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+      try {
+        renderPage();
+        await openReadmeTabMenu(user);
+
+        await user.click(await screen.findByTestId("tab-ctx-copy-path"));
+        expect(writeText).toHaveBeenCalledWith("/tmp/mock-root/README.md");
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it("コピーに失敗したらエラートーストを出す", async () => {
+      const user = userEvent.setup();
+      const writeText = vi.fn().mockRejectedValue(new Error("denied"));
+      vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
+      try {
+        renderPage();
+        await openReadmeTabMenu(user);
+
+        await user.click(await screen.findByTestId("tab-ctx-copy-name"));
+        await waitFor(() =>
+          expect(
+            useToast.getState().toasts.some((t) => t.severity === "error")
+          ).toBe(true)
+        );
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+  });
+
   it("shows the full file name on tab hover, and the tab still selects (#192)", async () => {
     const user = userEvent.setup();
     renderPage();
@@ -1175,6 +1239,132 @@ describe("EditorPage", () => {
 // component would otherwise populate. Once installed, EditorPage's own
 // "push comments into the editor" effect (`setCommentHighlights`) fires against
 // it exactly as it would against the real TiptapEditor instance.
+// 選択バブル (#233): 右クリックせずにコメント追加へ入れること。
+// TiptapEditor はこのファイル冒頭でモックしてあるので、jump-to-comment の
+// テストと同じく本物の Editor を組み立てて useEditorInstance に流し込む。
+describe("EditorPage line numbers toggle (#234)", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    useOpenFiles.setState({ files: [], activeIdByRoot: {} });
+    useToast.setState({ toasts: [] });
+    useConfirm.setState({ pending: null, queue: [] });
+    useEditorPrefs.setState({ showLineNumbers: false });
+  });
+
+  it("既定は非表示で、トグルすると表示に切り替わる", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    const toggle = await screen.findByTestId("editor-toggle-line-numbers");
+    expect(useEditorPrefs.getState().showLineNumbers).toBe(false);
+
+    await user.click(toggle);
+    expect(useEditorPrefs.getState().showLineNumbers).toBe(true);
+
+    await user.click(toggle);
+    expect(useEditorPrefs.getState().showLineNumbers).toBe(false);
+  });
+
+  it("設定は localStorage に保存される", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(await screen.findByTestId("editor-toggle-line-numbers"));
+    expect(localStorage.getItem("markdown-reviewer-prefs")).toContain(
+      '"showLineNumbers":true'
+    );
+  });
+});
+
+describe("EditorPage selection bubble (#233)", () => {
+  let fakeEditor: Editor | null = null;
+
+  beforeEach(() => {
+    localStorage.clear();
+    useOpenFiles.setState({ files: [], activeIdByRoot: {} });
+    useToast.setState({ toasts: [] });
+    useConfirm.setState({ pending: null, queue: [] });
+    useEditorInstance.setState({ editor: null });
+    Element.prototype.scrollIntoView = vi.fn();
+  });
+
+  afterEach(() => {
+    fakeEditor?.destroy();
+    fakeEditor = null;
+    useEditorInstance.setState({ editor: null });
+  });
+
+  function installEditor(html: string): Editor {
+    fakeEditor = new Editor({
+      extensions: [
+        StarterKit.configure({ link: false }),
+        CommentHighlight,
+        DiffGutter,
+        LineNumberGutter,
+      ],
+      content: html,
+    });
+    // jsdom has no layout, so coordsAtPos would throw — feed it a fixed rect
+    // so the bubble has something to anchor to.
+    fakeEditor.view.coordsAtPos = () => ({
+      top: 100,
+      bottom: 120,
+      left: 50,
+      right: 150,
+    });
+    useEditorInstance.getState().setEditor(fakeEditor);
+    return fakeEditor;
+  }
+
+  async function openReadme() {
+    const user = userEvent.setup();
+    renderPage();
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
+    );
+    await user.click(screen.getByTestId("sidebar-file-README.md"));
+    await waitFor(() =>
+      expect(screen.getByTestId("editor-active-path")).toHaveTextContent("README.md")
+    );
+    return user;
+  }
+
+  it("選択すると右クリックなしでバブルが出て、解除すると消える", async () => {
+    await openReadme();
+    const ed = installEditor("<p>SLA遵守率 98%</p>");
+
+    expect(screen.queryByTestId("selection-bubble")).not.toBeInTheDocument();
+
+    await act(async () => {
+      ed.commands.setTextSelection({ from: 1, to: 5 });
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("selection-bubble")).toBeInTheDocument()
+    );
+
+    await act(async () => {
+      ed.commands.setTextSelection({ from: 1, to: 1 });
+    });
+    await waitFor(() =>
+      expect(screen.queryByTestId("selection-bubble")).not.toBeInTheDocument()
+    );
+  });
+
+  it("バブルからコメント追加ダイアログを開ける", async () => {
+    const user = await openReadme();
+    const ed = installEditor("<p>SLA遵守率 98%</p>");
+
+    await act(async () => {
+      ed.commands.setTextSelection({ from: 1, to: 5 });
+    });
+    await user.click(await screen.findByTestId("selection-bubble-add-comment"));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("comment-body-input")).toBeInTheDocument()
+    );
+  });
+});
+
 describe("EditorPage jump to comment (#167)", () => {
   let fakeEditor: Editor | null = null;
 
@@ -1182,7 +1372,12 @@ describe("EditorPage jump to comment (#167)", () => {
     // Mirrors the extension set EditorPage's other effects rely on
     // (DiffGutter's setDiffGutter command) on top of CommentHighlight.
     fakeEditor = new Editor({
-      extensions: [StarterKit.configure({ link: false }), CommentHighlight, DiffGutter],
+      extensions: [
+        StarterKit.configure({ link: false }),
+        CommentHighlight,
+        DiffGutter,
+        LineNumberGutter,
+      ],
       content: html,
     });
     useEditorInstance.getState().setEditor(fakeEditor);

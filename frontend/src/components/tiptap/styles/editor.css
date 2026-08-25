@@ -548,3 +548,31 @@
 .ProseMirror > h3.diff-gutter-del-above::after {
   left: -22px; /* -19px - 3px border-left, matches h3 dot */
 }
+
+/* Line numbers (#234). Rendered in the left margin from the decoration's
+   data-line-number, one per top-level block (the block's first source line).
+   Sits further left than the diff-gutter dot (-20px) so the two can show at
+   once; the wrapper widens the editor's left padding to make room. */
+.with-line-numbers .ProseMirror {
+  padding-left: 88px;
+}
+
+.ProseMirror > .line-number-gutter {
+  position: relative;
+}
+
+.ProseMirror > .line-number-gutter::before {
+  content: attr(data-line-number);
+  position: absolute;
+  left: -68px;
+  width: 36px;
+  text-align: right;
+  color: #9aa0a6;
+  font-size: 0.75rem;
+  /* Align the number with the first text line of the block regardless of the
+     block's own font size (h1 vs p). */
+  line-height: inherit;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+  pointer-events: none;
+}

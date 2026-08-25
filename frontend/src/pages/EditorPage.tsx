@@ -3,6 +3,10 @@ import { useSearchParams } from "react-router-dom";
 import { HTTPError } from "ky";
 import Box from "@mui/material/Box";
 import IconButton from "@mui/material/IconButton";
+import Divider from "@mui/material/Divider";
+import Popper from "@mui/material/Popper";
+import Paper from "@mui/material/Paper";
+import Button from "@mui/material/Button";
 import Menu from "@mui/material/Menu";
 import MenuItem from "@mui/material/MenuItem";
 import Tabs from "@mui/material/Tabs";
@@ -24,6 +28,7 @@ import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import CommentIcon from "@mui/icons-material/Comment";
 import FormatAlignCenterIcon from "@mui/icons-material/FormatAlignCenter";
+import FormatListNumberedIcon from "@mui/icons-material/FormatListNumbered";
 import UnfoldMoreIcon from "@mui/icons-material/UnfoldMore";
 import CompareArrowsIcon from "@mui/icons-material/CompareArrows";
 import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
@@ -48,10 +53,11 @@ import { useServerEvents } from "@/hooks/useServerEvents";
 import { useServerConnection } from "@/hooks/useServerConnection";
 import { useConfirm } from "@/hooks/useConfirm";
 import { useToast } from "@/hooks/useToast";
+import { useEditorPrefs } from "@/hooks/useEditorPrefs";
+import { computeLineNumbers } from "@/utils/lineNumbers";
 import { useUIStore } from "@/hooks/useUIStore";
 import { useHoverPanel } from "@/hooks/useHoverPanel";
 import { useEditorInstance } from "@/hooks/useEditorInstance";
-import { useEditorPrefs } from "@/hooks/useEditorPrefs";
 import { useCommentAuthor } from "@/hooks/useCommentAuthor";
 import { useActiveRoot } from "@/hooks/useActiveRoot";
 import { useQueryClient } from "@tanstack/react-query";
@@ -180,7 +186,7 @@ export function EditorPage() {
     window.addEventListener("mouseup", onMouseUp);
   };
 
-  const { active: activeRoot, roots } = useActiveRoot();
+  const { active: activeRoot, roots, activePath: activeRootPath } = useActiveRoot();
   const allFiles = useOpenFiles((s) => s.files);
   const activeIdByRoot = useOpenFiles((s) => s.activeIdByRoot);
   // Editor-tab list = open files belonging to the currently selected root.
@@ -227,6 +233,8 @@ export function EditorPage() {
   const writeFile = useWriteFile();
   const confirm = useConfirm((s) => s.confirm);
   const showToast = useToast((s) => s.show);
+  const showLineNumbers = useEditorPrefs((s) => s.showLineNumbers);
+  const toggleLineNumbers = useEditorPrefs((s) => s.toggleLineNumbers);
   // Passive "unread change" tracking (#178) — replaces the old toast-based
   // dir-change notifications with sidebar dots. markChanged is the primary
   // path (SSE `tree` events, see onTree below — round 3); clearChanged runs
@@ -356,6 +364,25 @@ export function EditorPage() {
     })();
     closeToRightRaw(id);
     for (const f of closed) missingStatFilesRef.current.delete(keyOf(f.root, f.path));
+  };
+
+  // Absolute path of a tab's file, mirroring the sidebar's context menu so
+  // both places hand out the same string (#232).
+  const fullPathOf = (path: string): string => {
+    if (!activeRootPath) return path;
+    return `${activeRootPath.replace(/\/+$/, "")}/${path}`;
+  };
+
+  const copyToClipboard = async (text: string, label: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast(`${label}をコピーしました: ${text}`, "success");
+    } catch (err) {
+      showToast(
+        `クリップボードへのコピーに失敗しました: ${(err as Error).message ?? "unknown"}`,
+        "error"
+      );
+    }
   };
 
   // --- Server-push events (#112) --------------------------------------------
@@ -827,6 +854,22 @@ export function EditorPage() {
     editor.commands.setDiffGutter(diffGutterPayload);
   }, [editor, diffGutterPayload]);
 
+  // Line numbers for the left gutter (#234). Computed from the file as saved
+  // (not the in-flight buffer) for the same reason the diff gutter is: the
+  // numbers should match what a reviewer reads out of the file on disk, and
+  // recomputing on every keystroke would churn the whole decoration set.
+  const lineNumberPayload = useMemo(() => {
+    if (!showLineNumbers || !activeFile) return { lines: [], blockCount: 0 };
+    const raw = activeFile.savedMarkdown;
+    const body = splitPreamble(stripHint(raw)).body;
+    return computeLineNumbers(raw, body);
+  }, [showLineNumbers, activeFile]);
+
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) return;
+    editor.commands.setLineNumbers(lineNumberPayload);
+  }, [editor, lineNumberPayload]);
+
   const loadRevision = async (id: string) => {
     if (!activePath) return;
     try {
@@ -1054,6 +1097,14 @@ export function EditorPage() {
   const pointerIsDown = useRef(false);
   const pointerUpAt = useRef(Number.NEGATIVE_INFINITY);
 
+  // Viewport position of the floating "コメント追加" bubble shown while a
+  // non-empty selection sits in the editor (#233). Null = hidden. Kept in
+  // viewport coordinates so it can anchor a Popper without a real element.
+  const [selectionBubble, setSelectionBubble] = useState<{
+    top: number;
+    left: number;
+  } | null>(null);
+
   // Re-render the toolbar Add-Comment button when selection / doc changes.
   const [, setSelectionTick] = useState(0);
   useEffect(() => {
@@ -1064,6 +1115,70 @@ export function EditorPage() {
     return () => {
       editor.off("selectionUpdate", tick);
       editor.off("transaction", tick);
+    };
+  }, [editor]);
+
+  // Selection → floating "コメント追加" bubble (#233), so adding a comment no
+  // longer requires knowing about the right-click menu. Deliberately does not
+  // open the dialog itself: selecting text while reading is common, and a
+  // dialog that steals focus every time would be worse than the old flow.
+  //
+  // Position is recomputed on every selection/scroll change and while the
+  // pointer is down the bubble stays hidden — otherwise it would chase the
+  // cursor mid-drag.
+  useEffect(() => {
+    // No editor (or a destroyed one) means there is no selection to anchor to.
+    // The bubble is gated on `canAddComment` at render time, which is false
+    // without an editor, so there is nothing to clear here.
+    if (!editor || editor.isDestroyed) return;
+
+    const update = () => {
+      if (pointerIsDown.current) {
+        setSelectionBubble(null);
+        return;
+      }
+      const { from, to, empty } = editor.state.selection;
+      if (empty || from === to) {
+        setSelectionBubble(null);
+        return;
+      }
+      try {
+        const start = editor.view.coordsAtPos(from);
+        const end = editor.view.coordsAtPos(to);
+        setSelectionBubble({
+          top: Math.min(start.top, end.top),
+          left: (start.left + end.left) / 2,
+        });
+      } catch {
+        // View not mounted (or the position is not laid out yet) — no anchor
+        // to place the bubble against, so leave it hidden rather than guess.
+        setSelectionBubble(null);
+      }
+    };
+
+    // Clear the gesture flag here rather than relying on the contextmenu
+    // effect's own pointerup listener: both are capture-phase listeners on
+    // window, so whichever registered first runs first, and reading a flag
+    // the *other* handler is responsible for clearing left the bubble hidden
+    // after every drag-select (found in the browser; jsdom drives selection
+    // through the editor API and never exercises the ordering).
+    const onPointerUp = () => {
+      pointerIsDown.current = false;
+      update();
+    };
+
+    update();
+    editor.on("selectionUpdate", update);
+    editor.on("transaction", update);
+    window.addEventListener("pointerup", onPointerUp, true);
+    window.addEventListener("scroll", update, true);
+    window.addEventListener("resize", update);
+    return () => {
+      editor.off("selectionUpdate", update);
+      editor.off("transaction", update);
+      window.removeEventListener("pointerup", onPointerUp, true);
+      window.removeEventListener("scroll", update, true);
+      window.removeEventListener("resize", update);
     };
   }, [editor]);
 
@@ -2037,6 +2152,17 @@ export function EditorPage() {
               )}
             </IconButton>
           </Tooltip>
+          <Tooltip title={showLineNumbers ? "行番号を非表示" : "行番号を表示"}>
+            <IconButton
+              size="small"
+              onClick={toggleLineNumbers}
+              aria-label="toggle line numbers"
+              color={showLineNumbers ? "primary" : "default"}
+              data-testid="editor-toggle-line-numbers"
+            >
+              <FormatListNumberedIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
           <Tooltip title="AI にコメント確認させる mr コマンドをコピー（mr comments <path>）">
             <span>
               <IconButton
@@ -2265,6 +2391,27 @@ export function EditorPage() {
           anchorPosition={tabMenu ? { top: tabMenu.y, left: tabMenu.x } : undefined}
         >
           <MenuItem
+            onClick={() => {
+              const target = files.find((f) => f.id === tabMenu?.id);
+              setTabMenu(null);
+              if (target) void copyToClipboard(target.name, "名前");
+            }}
+            data-testid="tab-ctx-copy-name"
+          >
+            名前をクリップボードにコピー
+          </MenuItem>
+          <MenuItem
+            onClick={() => {
+              const target = files.find((f) => f.id === tabMenu?.id);
+              setTabMenu(null);
+              if (target) void copyToClipboard(fullPathOf(target.path), "フルパス");
+            }}
+            data-testid="tab-ctx-copy-path"
+          >
+            フルパスをコピー
+          </MenuItem>
+          <Divider />
+          <MenuItem
             disabled={
               !tabMenu || files.findIndex((f) => f.id === tabMenu.id) >= files.length - 1
             }
@@ -2374,6 +2521,37 @@ export function EditorPage() {
             </IconButton>
           </Tooltip>
         </Box>
+      )}
+
+      {selectionBubble && canAddComment && (
+        <Popper
+          open
+          placement="top"
+          // The bubble anchors to the selection rectangle, which is not a DOM
+          // element — a virtual anchor keeps Popper's flip/shift behavior
+          // (staying on screen near a viewport edge) without one.
+          anchorEl={{
+            getBoundingClientRect: () =>
+              new DOMRect(selectionBubble.left, selectionBubble.top, 0, 0),
+          }}
+          modifiers={[{ name: "offset", options: { offset: [0, 8] } }]}
+          sx={{ zIndex: (theme) => theme.zIndex.tooltip }}
+          data-testid="selection-bubble"
+        >
+          <Paper elevation={4} sx={{ px: 0.5, py: 0.25 }}>
+            <Button
+              size="small"
+              startIcon={<CommentIcon fontSize="small" />}
+              // Keep the selection alive: focusing the button would collapse
+              // it in some browsers before the handler reads from/to.
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={handleAddCommentClick}
+              data-testid="selection-bubble-add-comment"
+            >
+              コメント追加
+            </Button>
+          </Paper>
+        </Popper>
       )}
 
       <Menu

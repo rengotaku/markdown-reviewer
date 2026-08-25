@@ -27,6 +27,7 @@ import { createCodeLowlight } from "./extensions/codeHighlight";
 import { MarkdownPaste } from "./extensions/MarkdownPaste";
 import { CommentHighlight } from "./extensions/CommentHighlight";
 import { DiffGutter } from "./extensions/DiffGutter";
+import { LineNumberGutter } from "./extensions/LineNumberGutter";
 import { ExternalLinkDecoration } from "./extensions/ExternalLinkDecoration";
 import { LinkPreviewCard } from "../LinkPreviewCard";
 import { LinkHoverGuard } from "./linkHoverGuard";
@@ -51,6 +52,7 @@ function getEditorMarkdown(editor: { storage: unknown }): string {
 
 export function TiptapEditor() {
   const centered = useEditorPrefs((s) => s.centered);
+  const showLineNumbers = useEditorPrefs((s) => s.showLineNumbers);
   const { active: activeRoot } = useActiveRoot();
   const activeId = useOpenFiles((s) =>
     activeRoot ? (s.activeIdByRoot[activeRoot] ?? null) : null
@@ -130,6 +132,7 @@ export function TiptapEditor() {
       MarkdownPaste,
       CommentHighlight,
       DiffGutter,
+      LineNumberGutter,
       ExternalLinkDecoration,
     ],
     content: "",
@@ -294,7 +297,11 @@ export function TiptapEditor() {
   return (
     <Box
       ref={containerRef}
-      className={centered ? "editor-centered" : undefined}
+      className={
+        [centered ? "editor-centered" : "", showLineNumbers ? "with-line-numbers" : ""]
+          .filter(Boolean)
+          .join(" ") || undefined
+      }
       sx={{
         height: "100%",
         overflow: "auto",
