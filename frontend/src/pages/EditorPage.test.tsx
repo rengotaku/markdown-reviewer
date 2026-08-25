@@ -990,6 +990,14 @@ describe("EditorPage", () => {
     await user.click(screen.getByTestId("sidebar-file-docs/intro.md"));
     await waitFor(() => expect(useOpenFiles.getState().files).toHaveLength(2));
 
+    // The click above left the pointer on the sidebar row, whose NameTooltip
+    // is still open — without moving off it first, findByRole("tooltip")
+    // resolves to that one ("intro.md") instead of the tab's (#230).
+    await user.unhover(screen.getByTestId("sidebar-file-docs/intro.md"));
+    await waitFor(() =>
+      expect(screen.queryByRole("tooltip")).not.toBeInTheDocument()
+    );
+
     await user.hover(screen.getByTestId("editor-tab-label-README.md"));
     const tooltip = await screen.findByRole("tooltip", {}, { timeout: 3000 });
     expect(tooltip).toHaveTextContent("README.md");
