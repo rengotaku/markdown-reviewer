@@ -28,6 +28,7 @@ import { useActiveRoot } from "@/hooks/useActiveRoot";
 import { useChangedPaths } from "@/hooks/useChangedPaths";
 import { useToast } from "@/hooks/useToast";
 import { useUIStore } from "@/hooks/useUIStore";
+import { useRecentOpened, RECENT_OPENED_LIMIT } from "@/hooks/useRecentOpened";
 import { formatLocalTimestamp } from "@/utils/formatTimestamp";
 import type { DirEntryApi, FileEntry } from "@/api";
 import { BAR_HEIGHT } from "@/theme/dimensions";
@@ -191,6 +192,15 @@ export function Sidebar({ activePath, onSelect }: SidebarProps) {
       </Box>
 
       <Box sx={{ flex: 1, overflow: "auto" }}>
+        {viewMode === "tree" && (
+          <RecentlyOpenedSection
+            filter={filter}
+            root={root}
+            activePath={activePath}
+            onSelect={onSelect}
+            onContextMenu={openContextMenu}
+          />
+        )}
         {viewMode === "recent" ? (
           <RecentList
             filter={filter}
@@ -475,6 +485,139 @@ function DirChildren({
         />
       ))}
     </>
+  );
+}
+
+interface RecentlyOpenedSectionProps {
+  filter: string;
+  root: string;
+  activePath?: string;
+  onSelect: (path: string) => void;
+  onContextMenu: (e: React.MouseEvent, entry: DirEntryApi) => void;
+}
+
+/**
+ * "Recently" (#248): the files opened most recently in this root, newest
+ * first, capped at RECENT_OPENED_LIMIT. Open tabs are no longer restored on
+ * reload — the editor starts empty and shows only what the user picks here or
+ * in the tree — so this history is what makes getting back to yesterday's file
+ * one click instead of a walk down the tree.
+ *
+ * Deliberately distinct from the "更新順" view above, which lists *every* file
+ * under the root by mtime regardless of whether it was ever opened.
+ */
+function RecentlyOpenedSection({
+  filter,
+  root,
+  activePath,
+  onSelect,
+  onContextMenu,
+}: RecentlyOpenedSectionProps) {
+  const [open, setOpen] = useState(true);
+  const entries = useRecentOpened((s) => s.entries);
+
+  const filterLower = filter.toLowerCase();
+  const visible = entries
+    .filter((e) => e.root === root)
+    .slice(0, RECENT_OPENED_LIMIT)
+    .filter((e) => !filterLower || e.path.toLowerCase().includes(filterLower));
+
+  if (root === "" || visible.length === 0) return null;
+
+  return (
+    <Box
+      data-testid="sidebar-recently-opened"
+      sx={{ borderBottom: "1px solid", borderColor: "divider" }}
+    >
+      <ListItemButton
+        onClick={() => setOpen((v) => !v)}
+        sx={{ px: 1, py: 0.25 }}
+        data-testid="sidebar-recently-opened-toggle"
+      >
+        <ListItemIcon sx={{ minWidth: 24 }}>
+          {open ? <ExpandMore fontSize="small" /> : <ChevronRight fontSize="small" />}
+        </ListItemIcon>
+        <ListItemText
+          primary="Recently"
+          primaryTypographyProps={{
+            variant: "caption",
+            color: "text.secondary",
+            sx: { letterSpacing: "0.06em", textTransform: "uppercase" },
+          }}
+        />
+      </ListItemButton>
+      {open && (
+        <List dense disablePadding>
+          {visible.map((entry) => (
+            <RecentlyOpenedRow
+              key={entry.path}
+              path={entry.path}
+              name={entry.name}
+              root={root}
+              activePath={activePath}
+              onSelect={onSelect}
+              onContextMenu={onContextMenu}
+            />
+          ))}
+        </List>
+      )}
+    </Box>
+  );
+}
+
+interface RecentlyOpenedRowProps {
+  path: string;
+  name: string;
+  root: string;
+  activePath?: string;
+  onSelect: (path: string) => void;
+  onContextMenu: (e: React.MouseEvent, entry: DirEntryApi) => void;
+}
+
+// One row per remembered file. Single-line (name + folder hint) so the section
+// stays compact above the tree; the changed-dot lookup is one hook call per row.
+function RecentlyOpenedRow({
+  path,
+  name,
+  root,
+  activePath,
+  onSelect,
+  onContextMenu,
+}: RecentlyOpenedRowProps) {
+  const isChanged = useChangedPaths((s) => s.isChanged(root, path));
+  // Root-level files get no folder hint at all — unlike the two-line "更新順"
+  // rows there is no blank line to fill here, so a bare "/" would just be noise.
+  const dir = path.includes("/") ? dirLabel(path) : "";
+
+  return (
+    <NameTooltip name={path}>
+      <ListItemButton
+        onClick={() => onSelect(path)}
+        onContextMenu={(e) =>
+          onContextMenu(e, { name, path, type: "file", modified: "" })
+        }
+        selected={path === activePath}
+        sx={{ px: 1.5, py: 0.25 }}
+        data-testid={`sidebar-recently-opened-file-${path}`}
+      >
+        <Box sx={{ display: "flex", alignItems: "baseline", gap: 1, minWidth: 0, width: "100%" }}>
+          <Box sx={{ display: "flex", alignItems: "center", minWidth: 0 }}>
+            <Typography variant="body2" noWrap sx={{ minWidth: 0 }}>
+              {name}
+            </Typography>
+            {isChanged && <ChangedDot path={path} />}
+          </Box>
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            noWrap
+            sx={{ minWidth: 0, flex: 1, textAlign: "right" }}
+          >
+            {dir}
+          </Typography>
+        </Box>
+      </ListItemButton>
+    </NameTooltip>
   );
 }
 

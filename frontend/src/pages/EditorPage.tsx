@@ -38,7 +38,8 @@ import {
   DiffView,
   NameTooltip,
 } from "@/components";
-import { useOpenFiles, reattachLegacyFilesToRoot } from "@/hooks/useOpenFiles";
+import { useOpenFiles } from "@/hooks/useOpenFiles";
+import { useRecentOpened } from "@/hooks/useRecentOpened";
 import { useReadFile, useWriteFile } from "@/hooks/useFileContent";
 import { useFileWatcher } from "@/hooks/useFileWatcher";
 import { useDirChangeWatcher } from "@/hooks/useDirChangeWatcher";
@@ -202,6 +203,10 @@ export function EditorPage() {
   const closeOthersRaw = useOpenFiles((s) => s.closeOthers);
   const closeToRightRaw = useOpenFiles((s) => s.closeToRight);
   const reorderFiles = useOpenFiles((s) => s.reorderFiles);
+  // "Recently" history for the sidebar (#248): the open-tab list itself is no
+  // longer restored across reloads, so this is the only thing that carries
+  // "what was I looking at last session" over.
+  const recordRecentOpened = useRecentOpened((s) => s.record);
 
   // Right-click tab menu: anchor position + the tab the menu was opened on.
   const [tabMenu, setTabMenu] = useState<{ x: number; y: number; id: string } | null>(
@@ -966,13 +971,6 @@ export function EditorPage() {
   // file was closed underneath it).
   const canToggleDiff = diffMode || diffDisabledReason === null;
 
-  // Migrate any persisted legacy single-root files onto the default root
-  // the first time we learn which root that is. Idempotent — subsequent
-  // renders with the same root are no-ops.
-  useEffect(() => {
-    if (roots.length > 0) reattachLegacyFilesToRoot(roots[0].name);
-  }, [roots]);
-
   // Fallback poll is disabled while SSE is connected; the onFile callback
   // above bumps fileEventTrigger to drive the same reconcile logic instead.
   //
@@ -1174,6 +1172,7 @@ export function EditorPage() {
 
     if (target) {
       setActive(activeRoot, target.id);
+      recordRecentOpened(activeRoot, target.path, target.name);
       // Re-activating an already-open tab (#119 case 6) can be stale if it
       // changed on disk while some other tab was active — the file watcher
       // was only checking whichever tab was active at the time. Bump the
@@ -1196,6 +1195,7 @@ export function EditorPage() {
         created: res.created,
         sha: res.sha,
       });
+      recordRecentOpened(activeRoot, res.path, basename(res.path));
       // The read succeeded and the tab is now open — only now clear the
       // mark (#178 round 2: a failed readFile below must leave it in place,
       // since the user still hasn't actually seen the file).
