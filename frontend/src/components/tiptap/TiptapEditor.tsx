@@ -52,7 +52,6 @@ function getEditorMarkdown(editor: { storage: unknown }): string {
 
 export function TiptapEditor() {
   const centered = useEditorPrefs((s) => s.centered);
-  const showLineNumbers = useEditorPrefs((s) => s.showLineNumbers);
   const { active: activeRoot } = useActiveRoot();
   const activeId = useOpenFiles((s) =>
     activeRoot ? (s.activeIdByRoot[activeRoot] ?? null) : null
@@ -297,11 +296,7 @@ export function TiptapEditor() {
   return (
     <Box
       ref={containerRef}
-      className={
-        [centered ? "editor-centered" : "", showLineNumbers ? "with-line-numbers" : ""]
-          .filter(Boolean)
-          .join(" ") || undefined
-      }
+      className={centered ? "editor-centered" : undefined}
       sx={{
         height: "100%",
         overflow: "auto",

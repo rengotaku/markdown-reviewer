@@ -2,8 +2,11 @@
   min-height: 100%;
   width: 100%;
   /* Top padding halved (was 40px) to tighten the gap below the Frontmatter
-     panel / above the body (#94). */
-  padding: 20px 48px 40px;
+     panel / above the body (#94). The left side is wider than the right so
+     the line-number gutter (#234) always fits — including 5-digit numbers —
+     without the text shifting when the numbers are toggled. Reserving it
+     unconditionally is what keeps that toggle from moving the text at all. */
+  padding: 20px 48px 40px 60px;
   box-sizing: border-box;
   outline: none;
   font-size: 1rem;
@@ -551,28 +554,54 @@
 
 /* Line numbers (#234). Rendered in the left margin from the decoration's
    data-line-number, one per top-level block (the block's first source line).
-   Sits further left than the diff-gutter dot (-20px) so the two can show at
-   once; the wrapper widens the editor's left padding to make room. */
-.with-line-numbers .ProseMirror {
-  padding-left: 88px;
+
+   Two things this deliberately does NOT do:
+
+   - It does not widen the editor's padding when switched on. Toggling the
+     numbers must not shift the text sideways, so .ProseMirror reserves the
+     room permanently (60px left padding) and the numbers sit inside it, to
+     the left of the diff-gutter dot, growing leftwards from a fixed
+     distance to the text (`right: 100%` + margin).
+   - It does not place the number at a fixed offset from the block's top.
+     A number sized for body text sits visibly high against an <h1> whose
+     first line is twice as tall. `--line-number-line-height` is registered
+     as a <length> so `1.6em` resolves against the *block's* font size, and
+     the number is centered in that first-line box whatever the block is. */
+@property --line-number-line-height {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 0px;
 }
 
 .ProseMirror > .line-number-gutter {
   position: relative;
+  /* Matches .ProseMirror's line-height (1.6); resolved against this block's
+     own font-size because the property is registered as a <length>. */
+  --line-number-line-height: 1.6em;
 }
 
 .ProseMirror > .line-number-gutter::before {
   content: attr(data-line-number);
   position: absolute;
-  left: -68px;
-  width: 36px;
-  text-align: right;
+  top: 0;
+  /* 26px clears the diff-gutter dot (left: -20px, 9px wide); the number
+     itself grows leftwards into the remaining padding. */
+  right: 100%;
+  margin-right: 26px;
+  height: var(--line-number-line-height);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
   color: #9aa0a6;
   font-size: 0.75rem;
-  /* Align the number with the first text line of the block regardless of the
-     block's own font size (h1 vs p). */
-  line-height: inherit;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
   user-select: none;
   pointer-events: none;
+}
+
+/* Code blocks set their own tighter line-height (1.55); keep the number
+   centered against that instead of the body's 1.6. */
+.ProseMirror > pre.line-number-gutter {
+  --line-number-line-height: 1.55em;
 }
