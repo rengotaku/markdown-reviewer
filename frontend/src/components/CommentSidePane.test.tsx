@@ -711,8 +711,7 @@ describe("CommentSidePane", () => {
 
     expect(writeTextMock).toHaveBeenCalledTimes(1);
     const copiedUrl = writeTextMock.mock.calls[0][0];
-    expect(copiedUrl).toContain("root=code");
-    expect(copiedUrl).toContain("select_file=foo.md");
+    expect(copiedUrl).toContain("/code/foo.md");
     expect(copiedUrl).toContain("comment_id=c-001");
 
     vi.unstubAllGlobals();
@@ -743,8 +742,7 @@ describe("CommentSidePane", () => {
 
     expect(writeTextMock).toHaveBeenCalledTimes(1);
     const copiedUrl = writeTextMock.mock.calls[0][0];
-    expect(copiedUrl).toContain("root=code");
-    expect(copiedUrl).toContain("select_file=foo.md");
+    expect(copiedUrl).toContain("/code/foo.md");
     expect(copiedUrl).toContain("comment_id=c-001");
 
     vi.unstubAllGlobals();

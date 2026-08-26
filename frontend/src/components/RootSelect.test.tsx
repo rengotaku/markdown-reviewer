@@ -2,16 +2,17 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { MemoryRouter, useSearchParams } from "react-router-dom";
+import { MemoryRouter, Routes, Route, useLocation } from "react-router-dom";
 import { RootSelect } from "./RootSelect";
 import { useOpenFiles } from "@/hooks/useOpenFiles";
 
 // Mirrors the RootTabs test harness (pre-#158): /api/config is pre-seeded
 // into the query cache so RootSelect renders synchronously, and MemoryRouter
-// carries the ?root= state that useActiveRoot reads/writes.
+// carries the `/:root` path segment that useActiveRoot reads/writes.
 function LocationProbe() {
-  const [params] = useSearchParams();
-  return <span data-testid="location-probe">{params.get("root") ?? ""}</span>;
+  const loc = useLocation();
+  // First path segment after the leading "/" is the active root.
+  return <span data-testid="location-probe">{loc.pathname.split("/")[1] ?? ""}</span>;
 }
 
 function renderSelect(opts: { roots?: Array<{ name: string; path: string }> } = {}) {
@@ -30,9 +31,18 @@ function renderSelect(opts: { roots?: Array<{ name: string; path: string }> } = 
   });
   return render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={["/"]}>
-        <RootSelect />
-        <LocationProbe />
+      <MemoryRouter initialEntries={[`/${roots[0]?.name ?? ""}`]}>
+        <Routes>
+          <Route
+            path="/:root/*"
+            element={
+              <>
+                <RootSelect />
+                <LocationProbe />
+              </>
+            }
+          />
+        </Routes>
       </MemoryRouter>
     </QueryClientProvider>
   );

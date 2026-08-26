@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { MemoryRouter, useLocation } from "react-router-dom";
+import { MemoryRouter, Routes, Route, useLocation } from "react-router-dom";
 import { Editor } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
 import { EditorPage } from "./EditorPage";
@@ -19,21 +19,39 @@ vi.mock("@/components/tiptap/TiptapEditor", () => ({
   TiptapEditor: () => <div data-testid="tiptap-editor" />,
 }));
 
-/** Renders the URL search string so tests can assert URL state via the DOM. */
+// Matches the /api/config mock handler's review_roots[0].name.
+const DEFAULT_ROOT = "mock-root";
+
+/** Renders the URL pathname + search string so tests can assert URL state
+ *  via the DOM. */
 function LocationProbe() {
   const loc = useLocation();
-  return <span data-testid="loc-search">{loc.search}</span>;
+  return (
+    <>
+      <span data-testid="loc-pathname">{loc.pathname}</span>
+      <span data-testid="loc-search">{loc.search}</span>
+    </>
+  );
 }
 
-function renderPage(initialPath = "/") {
+function renderPage(initialPath = `/${DEFAULT_ROOT}`) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   return render(
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={[initialPath]}>
-        <EditorPage />
-        <LocationProbe />
+        <Routes>
+          <Route
+            path="/:root/*"
+            element={
+              <>
+                <EditorPage />
+                <LocationProbe />
+              </>
+            }
+          />
+        </Routes>
       </MemoryRouter>
     </QueryClientProvider>
   );
@@ -91,8 +109,8 @@ describe("EditorPage", () => {
     expect(screen.queryByTestId("editor-empty-state")).not.toBeInTheDocument();
   });
 
-  it("opens the file specified by ?select_file=... on mount", async () => {
-    renderPage("/?select_file=docs/intro.md");
+  it("opens the file specified by the URL path (/{root}/{path}) on mount", async () => {
+    renderPage(`/${DEFAULT_ROOT}/docs/intro.md`);
 
     await waitFor(() => {
       expect(screen.getByTestId("editor-active-path")).toHaveTextContent(
@@ -105,20 +123,104 @@ describe("EditorPage", () => {
     expect(opened).toBeDefined();
   });
 
-  it("syncs the active tab path to the URL's select_file param", async () => {
+  it("opens the file specified by an encoded splat (%2F) the same as a raw-slash path", async () => {
+    renderPage(`/${DEFAULT_ROOT}/${encodeURIComponent("docs/intro.md")}`);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("editor-active-path")).toHaveTextContent(
+        "docs/intro.md"
+      );
+    });
+    const opened = useOpenFiles
+      .getState()
+      .files.find((f) => f.path === "docs/intro.md");
+    expect(opened).toBeDefined();
+  });
+
+  it("opens a file whose name contains a literal % without throwing (codex review: no double-decode)", async () => {
+    // react-router's useParams already percent-decodes the splat segment;
+    // re-decoding that already-decoded value with decodeURIComponent throws
+    // URIError: URI malformed ("% d" isn't a valid escape) and used to crash
+    // the whole render. Regression test for the double-decode bug.
+    const { http, HttpResponse } = await import("msw");
+    const { server } = await import("@/test/mocks/server");
+    server.use(
+      http.get("http://localhost:8080/api/files/*", () =>
+        HttpResponse.json({
+          path: "100% done.md",
+          content: "# 100% done",
+          modified: "2026-01-01T00:00:00Z",
+          created: "2026-01-01T00:00:00Z",
+          sha: "abc",
+        })
+      )
+    );
+
+    renderPage(`/${DEFAULT_ROOT}/${encodeURIComponent("100% done.md")}`);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("editor-active-path")).toHaveTextContent(
+        "100% done.md"
+      );
+    });
+    const opened = useOpenFiles
+      .getState()
+      .files.find((f) => f.path === "100% done.md");
+    expect(opened).toBeDefined();
+  });
+
+  it("opens a file whose name contains a literal %xx-looking sequence (report%20final.md) without corruption (#236 codex review round 2: fact-locking, not a fix)", async () => {
+    // codex round 2 claimed react-router double-decodes params, so a file
+    // literally named "report%20final.md" (the 5 chars '%','2','0' are part
+    // of the name, not an escaped space) would come out wrong. Round 1's
+    // empirical test of useParams() (and the "100% done.md" case above)
+    // already showed the hook decodes exactly once — this test locks that
+    // fact against the *actual* URL a real caller produces: the same
+    // encodeURIComponent used by buildCommentDeepLink / the tab-sync effect
+    // (encodeURIComponent("report%20final.md") -> "report%2520final.md").
+    // If this ever goes red, react-router's decode behavior changed and the
+    // double-decode claim needs to be revisited — see the coordinator
+    // instruction for round 2.
+    const { http, HttpResponse } = await import("msw");
+    const { server } = await import("@/test/mocks/server");
+    server.use(
+      http.get("http://localhost:8080/api/files/*", () =>
+        HttpResponse.json({
+          path: "report%20final.md",
+          content: "# report",
+          modified: "2026-01-01T00:00:00Z",
+          created: "2026-01-01T00:00:00Z",
+          sha: "abc",
+        })
+      )
+    );
+
+    renderPage(`/${DEFAULT_ROOT}/${encodeURIComponent("report%20final.md")}`);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("editor-active-path")).toHaveTextContent(
+        "report%20final.md"
+      );
+    });
+    const opened = useOpenFiles
+      .getState()
+      .files.find((f) => f.path === "report%20final.md");
+    expect(opened).toBeDefined();
+  });
+
+  it("syncs the active tab path to the URL", async () => {
     const user = userEvent.setup();
     renderPage();
 
-    // Open README.md — URL should pick it up as select_file.
+    // Open README.md — URL should pick it up as the path.
     await waitFor(() =>
       expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
     );
     await user.click(screen.getByTestId("sidebar-file-README.md"));
     await waitFor(() => {
-      const params = new URLSearchParams(
-        screen.getByTestId("loc-search").textContent ?? ""
+      expect(screen.getByTestId("loc-pathname")).toHaveTextContent(
+        `/${DEFAULT_ROOT}/README.md`
       );
-      expect(params.get("select_file")).toBe("README.md");
     });
 
     // Open a second file via the sidebar and ensure the URL switches to it.
@@ -128,15 +230,15 @@ describe("EditorPage", () => {
     );
     await user.click(screen.getByTestId("sidebar-file-docs/intro.md"));
     await waitFor(() => {
-      const search = screen.getByTestId("loc-search").textContent ?? "";
-      const params = new URLSearchParams(search);
-      expect(params.get("select_file")).toBe("docs/intro.md");
+      expect(screen.getByTestId("loc-pathname").textContent).toBe(
+        `/${DEFAULT_ROOT}/${encodeURIComponent("docs/intro.md")}`
+      );
     });
   });
 
-  it("preserves an unrelated query param (filter) while syncing select_file", async () => {
+  it("preserves an unrelated query param (filter) while syncing the path", async () => {
     const user = userEvent.setup();
-    renderPage("/?filter=docs");
+    renderPage(`/${DEFAULT_ROOT}?filter=docs`);
 
     await waitFor(() =>
       expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
@@ -144,11 +246,10 @@ describe("EditorPage", () => {
     await user.click(screen.getByTestId("sidebar-file-README.md"));
 
     await waitFor(() => {
-      const params = new URLSearchParams(
-        screen.getByTestId("loc-search").textContent ?? ""
+      expect(screen.getByTestId("loc-pathname")).toHaveTextContent(
+        `/${DEFAULT_ROOT}/README.md`
       );
-      expect(params.get("filter")).toBe("docs");
-      expect(params.get("select_file")).toBe("README.md");
+      expect(screen.getByTestId("loc-search")).toHaveTextContent("filter=docs");
     });
   });
 
@@ -1115,7 +1216,7 @@ describe("EditorPage", () => {
     expect(Object.values(useOpenFiles.getState().activeIdByRoot).filter(Boolean)).toEqual([]);
   });
 
-  it("shows an error toast and stays on the empty state when select_file points to a missing path", async () => {
+  it("shows an error toast and stays on the empty state when the URL path points to a missing file", async () => {
     const { http, HttpResponse } = await import("msw");
     const { server } = await import("@/test/mocks/server");
     server.use(
@@ -1124,7 +1225,7 @@ describe("EditorPage", () => {
       )
     );
 
-    renderPage("/?select_file=missing.md");
+    renderPage(`/${DEFAULT_ROOT}/missing.md`);
 
     await waitFor(() => {
       const toasts = useToast.getState().toasts;
@@ -1414,7 +1515,7 @@ describe("EditorPage jump to comment (#167)", () => {
       await useComments([comment])();
 
       const scrollSpy = vi.mocked(Element.prototype.scrollIntoView);
-      renderPage("/?select_file=README.md&comment_id=c-001");
+      renderPage(`/${DEFAULT_ROOT}/README.md?comment_id=c-001`);
       installFakeEditor("<h2>Title</h2><p>hello world</p>");
 
       await waitFor(() => {
@@ -1437,7 +1538,7 @@ describe("EditorPage jump to comment (#167)", () => {
       await useComments([comment])();
 
       const scrollSpy = vi.mocked(Element.prototype.scrollIntoView);
-      renderPage("/?select_file=README.md&comment_id=does-not-exist");
+      renderPage(`/${DEFAULT_ROOT}/README.md?comment_id=does-not-exist`);
       installFakeEditor("<h2>Title</h2><p>hello world</p>");
 
       await waitFor(() => {
@@ -1459,7 +1560,7 @@ describe("EditorPage jump to comment (#167)", () => {
       await useComments([comment])();
 
       const scrollSpy = vi.mocked(Element.prototype.scrollIntoView);
-      renderPage("/?select_file=README.md&comment_id=c-001");
+      renderPage(`/${DEFAULT_ROOT}/README.md?comment_id=c-001`);
       installFakeEditor("<h2>Title</h2><p>hello world</p>");
 
       await waitFor(() => {
@@ -1481,7 +1582,7 @@ describe("EditorPage jump to comment (#167)", () => {
       await useComments([comment])();
 
       const scrollSpy = vi.mocked(Element.prototype.scrollIntoView);
-      renderPage("/?select_file=README.md");
+      renderPage(`/${DEFAULT_ROOT}/README.md`);
       installFakeEditor("<h2>Title</h2><p>hello world</p>");
 
       await waitFor(() => {
@@ -1503,7 +1604,7 @@ describe("EditorPage jump to comment (#167)", () => {
       await useComments([comment])();
 
       const scrollSpy = vi.mocked(Element.prototype.scrollIntoView);
-      renderPage("/?select_file=README.md&comment_id=c-001");
+      renderPage(`/${DEFAULT_ROOT}/README.md?comment_id=c-001`);
       installFakeEditor("<h2>Title</h2><p>hello world</p>");
 
       await waitFor(() => {

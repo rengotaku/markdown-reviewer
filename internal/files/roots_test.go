@@ -59,6 +59,32 @@ func TestNewRoots_NameWithSeparator(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestNewRoots_ReservedName(t *testing.T) {
+	root := setupRoot(t)
+	for _, name := range []string{
+		"api", "health", "assets", "index.html", "logo.png", "favicon.svg",
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := files.NewRoots([]files.RootSpec{
+				{Name: name, Path: root},
+			})
+			require.Error(t, err, "root name %q must be rejected as reserved", name)
+		})
+	}
+}
+
+func TestNewRoots_ReservedName_CaseInsensitive(t *testing.T) {
+	root := setupRoot(t)
+	for _, name := range []string{"API", "Health", "ASSETS", "Index.HTML"} {
+		t.Run(name, func(t *testing.T) {
+			_, err := files.NewRoots([]files.RootSpec{
+				{Name: name, Path: root},
+			})
+			require.Error(t, err, "root name %q must be rejected as reserved (case-insensitive)", name)
+		})
+	}
+}
+
 func TestNewRoots_NameEmpty(t *testing.T) {
 	root := setupRoot(t)
 	_, err := files.NewRoots([]files.RootSpec{

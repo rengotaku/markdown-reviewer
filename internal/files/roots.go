@@ -5,7 +5,27 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 )
+
+// reservedRootNames are top-level URL path segments the server already owns
+// — the Gin route groups in internal/handler/handler.go (`/health`, `/api/*`)
+// and the static SPA bundle's own top-level entries (internal/static/dist/).
+// A root sharing one of these names would make the Web UI's `/{root}/{path}`
+// deeplinks (see EditorPage's `/:root/*` route) collide with those routes:
+// e.g. a root named "api" turns `/api/foo.md` into a request the `/api`
+// group swallows before it ever reaches the SPA, returning JSON instead of
+// rendering the editor. Comparison is case-insensitive since HTTP routing
+// on this server (and most reverse proxies in front of it) doesn't
+// distinguish case in the path.
+var reservedRootNames = map[string]bool{
+	"api":         true,
+	"health":      true,
+	"assets":      true,
+	"index.html":  true,
+	"logo.png":    true,
+	"favicon.svg": true,
+}
 
 // RootSpec is one entry parsed out of the REVIEW_ROOTS env var. Name is the
 // user-facing label (tab title); Path is the directory the resolver will be
@@ -48,6 +68,9 @@ func NewRoots(specs []RootSpec) (*Roots, error) {
 		}
 		if spec.Name != filepath.Base(spec.Name) || spec.Name == "." || spec.Name == ".." {
 			return nil, fmt.Errorf("root name %q must not contain path separators", spec.Name)
+		}
+		if reservedRootNames[strings.ToLower(spec.Name)] {
+			return nil, fmt.Errorf("root name %q is reserved by the server (conflicts with a built-in route or static asset); choose a different name", spec.Name)
 		}
 		if _, dup := r.byName[spec.Name]; dup {
 			return nil, fmt.Errorf("duplicate root name %q", spec.Name)

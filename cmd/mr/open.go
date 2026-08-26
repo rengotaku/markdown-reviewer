@@ -18,10 +18,9 @@ import (
 const baseURLEnv = "MARKDOWN_REVIEWER_BASE_URL"
 
 // cmdOpen turns a file path into the web UI deeplink for that file and hands
-// it to the browser. Callers only know filesystem paths; the `?root=` /
-// `?select_file=` pair the UI needs is derived here through the same
-// resolvePath the other subcommands use, so the CLI and the UI address the
-// same file.
+// it to the browser. Callers only know filesystem paths; the `/{root}/{rel}`
+// path the UI needs is derived here through the same resolvePath the other
+// subcommands use, so the CLI and the UI address the same file.
 func cmdOpen(args []string) error {
 	pos, flags := parseArgs(args)
 	if len(pos) != 1 {
@@ -79,15 +78,28 @@ func browserCommandFor(goos string) (string, error) {
 	}
 }
 
-// deeplink builds the URL that opens rel in root: the `root` + `select_file`
-// pair EditorPage reads on mount. Both values are query-escaped so paths with
-// spaces or multibyte segments survive the round trip.
+// pathEscape mimics JS's `encodeURIComponent` (space -> %20, `/` -> %2F) so
+// the URL round-trips through EditorPage's `decodeURIComponent`.
+// `url.QueryEscape` already turns "/" into "%2F" like encodeURIComponent
+// does — its one divergence is space -> "+" instead of "%20", fixed up here
+// (a raw "+" would decode back to a literal "+", not a space, breaking file
+// names with spaces).
+func pathEscape(s string) string {
+	return strings.ReplaceAll(url.QueryEscape(s), "+", "%20")
+}
+
+// deeplink builds the URL that opens rel in root: the `/{root}/{rel}` path
+// EditorPage's `/:root/*` route reads on mount, with rel encoded as a single
+// path segment (its own `/` separators become `%2F`) so multi-directory
+// paths, spaces and multibyte segments all survive the round trip.
+// `comment_id` stays a query param — it targets something within the opened
+// file, not the file itself.
 func deeplink(base, root, rel, commentID string) string {
 	link := strings.TrimSuffix(base, "/") +
-		"/?root=" + url.QueryEscape(root) +
-		"&select_file=" + url.QueryEscape(rel)
+		"/" + pathEscape(root) +
+		"/" + pathEscape(rel)
 	if commentID != "" {
-		link += "&comment_id=" + url.QueryEscape(commentID)
+		link += "?comment_id=" + url.QueryEscape(commentID)
 	}
 	return link
 }

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -67,5 +68,28 @@ func TestBuildRoots_ReviewRootsPointsToMissingDir(t *testing.T) {
 	_, err := buildRoots(Config{
 		ReviewRoots: `[{"name":"x","path":"` + missing + `"}]`,
 	})
+	require.Error(t, err)
+}
+
+// #236 codex review: a root named after a server-owned top-level route
+// (/api, /health) or a static SPA asset would make /{root}/{path} deeplinks
+// collide with those routes instead of reaching the SPA.
+func TestBuildRoots_ReviewRootsWithReservedName(t *testing.T) {
+	a := tempRoot(t)
+	_, err := buildRoots(Config{
+		ReviewRoots: `[{"name":"api","path":"` + a + `"}]`,
+	})
+	require.Error(t, err)
+}
+
+func TestBuildRoots_LegacyReviewRootWithReservedBasename(t *testing.T) {
+	// The legacy REVIEW_ROOT path funnels through the same files.NewRoots
+	// validation via its basename — a directory literally named "api" must
+	// be rejected the same way an explicit REVIEW_ROOTS name would be.
+	parent := t.TempDir()
+	reserved := filepath.Join(parent, "api")
+	require.NoError(t, os.MkdirAll(reserved, 0o755))
+
+	_, err := buildRoots(Config{ReviewRoot: reserved})
 	require.Error(t, err)
 }
