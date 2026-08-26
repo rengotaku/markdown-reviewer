@@ -49,6 +49,7 @@ function Probe({ targetRoot }: { targetRoot?: string }) {
       data-active={active}
       data-path={activePath}
       data-pathname={loc.pathname}
+      data-search={loc.search}
       onClick={() => targetRoot && setActive(targetRoot)}
     />
   );
@@ -84,6 +85,21 @@ describe("useActiveRoot", () => {
     expect(result.current.activePath).toBe("/tmp/100%done");
   });
 
+  it("selects a root named with a literal %xx-looking sequence (docs%20archive) without corruption (#236 codex review round 2: fact-locking, not a fix)", () => {
+    // Same fact-lock as the "100%done" case above, using the specific name
+    // codex round 2 called out (a "%20"-looking literal, not an escaped
+    // space) and the same encodeURIComponent a real caller would use.
+    // encodeURIComponent("docs%20archive") -> "docs%2520archive"; useParams
+    // must decode that exactly once back to "docs%20archive".
+    const wrapper = makeWrapper({
+      roots: [{ name: "docs%20archive", path: "/tmp/docs%20archive" }],
+      initialEntries: [`/${encodeURIComponent("docs%20archive")}`],
+    });
+    const { result } = renderHook(() => useActiveRoot(), { wrapper });
+    expect(result.current.active).toBe("docs%20archive");
+    expect(result.current.activePath).toBe("/tmp/docs%20archive");
+  });
+
   it("falls back to the default root and redirects the URL when the root segment is unknown", async () => {
     const Wrapper = makeWrapper({ initialEntries: ["/phantom"] });
     const { getByTestId } = render(
@@ -94,6 +110,20 @@ describe("useActiveRoot", () => {
     await waitFor(() => {
       expect(getByTestId("probe").dataset.active).toBe("works");
       expect(getByTestId("probe").dataset.pathname).toBe("/works");
+    });
+  });
+
+  it("preserves the query string when redirecting an unknown root to the default", async () => {
+    const Wrapper = makeWrapper({ initialEntries: ["/phantom?filter=docs"] });
+    const { getByTestId } = render(
+      <Wrapper>
+        <Probe />
+      </Wrapper>
+    );
+    await waitFor(() => {
+      expect(getByTestId("probe").dataset.active).toBe("works");
+      expect(getByTestId("probe").dataset.pathname).toBe("/works");
+      expect(getByTestId("probe").dataset.search).toBe("?filter=docs");
     });
   });
 
@@ -109,6 +139,21 @@ describe("useActiveRoot", () => {
     act(() => probe.click());
     expect(probe.dataset.active).toBe("rooms");
     expect(probe.dataset.pathname).toBe("/rooms");
+  });
+
+  it("setActive preserves the current query string (#236 codex review round 2)", () => {
+    const Wrapper = makeWrapper({ initialEntries: ["/works?filter=docs"] });
+    const { getByTestId } = render(
+      <Wrapper>
+        <Probe targetRoot="rooms" />
+      </Wrapper>
+    );
+    const probe = getByTestId("probe");
+    expect(probe.dataset.search).toBe("?filter=docs");
+    act(() => probe.click());
+    expect(probe.dataset.active).toBe("rooms");
+    expect(probe.dataset.pathname).toBe("/rooms");
+    expect(probe.dataset.search).toBe("?filter=docs");
   });
 
   it("setActive produces a plain /{root} URL for the default root too (no special-casing)", () => {

@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { useConfig } from "@/hooks/useConfig";
 import type { ReviewRootEntry } from "@/api";
 
@@ -29,6 +29,7 @@ interface UseActiveRootResult {
 export function useActiveRoot(): UseActiveRootResult {
   const { root: routeRoot } = useParams<{ root?: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const { data: config } = useConfig();
 
   const roots = useMemo<ReviewRootEntry[]>(
@@ -56,16 +57,23 @@ export function useActiveRoot(): UseActiveRootResult {
   useEffect(() => {
     if (roots.length === 0) return;
     if (requested && !validRequested) {
-      navigate(`/${encodeURIComponent(roots[0]?.name ?? "")}`, { replace: true });
+      navigate(
+        { pathname: `/${encodeURIComponent(roots[0]?.name ?? "")}`, search: location.search },
+        { replace: true }
+      );
     }
-  }, [requested, validRequested, roots, navigate]);
+  }, [requested, validRequested, roots, navigate, location.search]);
 
   const setActive = (name: string) => {
     if (!name || name === active) return;
     if (!roots.some((r) => r.name === name)) return;
     // The open file path belongs to the *previous* root; there is nothing
-    // meaningful to carry over, so this is a plain root-only URL.
-    navigate(`/${encodeURIComponent(name)}`);
+    // meaningful to carry over, so this is a plain root-only URL. The query
+    // string (e.g. the sidebar's `?filter=`) isn't root-specific though —
+    // EditorPage's own path-sync effect already preserves it across file
+    // switches, so root switches must match (#236 codex review round 2: a
+    // bare string `navigate` here silently dropped it).
+    navigate({ pathname: `/${encodeURIComponent(name)}`, search: location.search });
   };
 
   const activePath = roots.find((r) => r.name === active)?.path ?? "";

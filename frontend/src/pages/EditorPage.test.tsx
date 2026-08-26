@@ -169,6 +169,45 @@ describe("EditorPage", () => {
     expect(opened).toBeDefined();
   });
 
+  it("opens a file whose name contains a literal %xx-looking sequence (report%20final.md) without corruption (#236 codex review round 2: fact-locking, not a fix)", async () => {
+    // codex round 2 claimed react-router double-decodes params, so a file
+    // literally named "report%20final.md" (the 5 chars '%','2','0' are part
+    // of the name, not an escaped space) would come out wrong. Round 1's
+    // empirical test of useParams() (and the "100% done.md" case above)
+    // already showed the hook decodes exactly once — this test locks that
+    // fact against the *actual* URL a real caller produces: the same
+    // encodeURIComponent used by buildCommentDeepLink / the tab-sync effect
+    // (encodeURIComponent("report%20final.md") -> "report%2520final.md").
+    // If this ever goes red, react-router's decode behavior changed and the
+    // double-decode claim needs to be revisited — see the coordinator
+    // instruction for round 2.
+    const { http, HttpResponse } = await import("msw");
+    const { server } = await import("@/test/mocks/server");
+    server.use(
+      http.get("http://localhost:8080/api/files/*", () =>
+        HttpResponse.json({
+          path: "report%20final.md",
+          content: "# report",
+          modified: "2026-01-01T00:00:00Z",
+          created: "2026-01-01T00:00:00Z",
+          sha: "abc",
+        })
+      )
+    );
+
+    renderPage(`/${DEFAULT_ROOT}/${encodeURIComponent("report%20final.md")}`);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("editor-active-path")).toHaveTextContent(
+        "report%20final.md"
+      );
+    });
+    const opened = useOpenFiles
+      .getState()
+      .files.find((f) => f.path === "report%20final.md");
+    expect(opened).toBeDefined();
+  });
+
   it("syncs the active tab path to the URL", async () => {
     const user = userEvent.setup();
     renderPage();
