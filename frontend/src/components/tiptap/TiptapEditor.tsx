@@ -27,6 +27,7 @@ import { createCodeLowlight } from "./extensions/codeHighlight";
 import { MarkdownPaste } from "./extensions/MarkdownPaste";
 import { CommentHighlight } from "./extensions/CommentHighlight";
 import { DiffGutter } from "./extensions/DiffGutter";
+import { LineNumberGutter } from "./extensions/LineNumberGutter";
 import { ExternalLinkDecoration } from "./extensions/ExternalLinkDecoration";
 import { LinkPreviewCard } from "../LinkPreviewCard";
 import { LinkHoverGuard } from "./linkHoverGuard";
@@ -130,6 +131,7 @@ export function TiptapEditor() {
       MarkdownPaste,
       CommentHighlight,
       DiffGutter,
+      LineNumberGutter,
       ExternalLinkDecoration,
     ],
     content: "",
