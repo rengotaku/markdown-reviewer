@@ -137,6 +137,38 @@ describe("EditorPage", () => {
     expect(opened).toBeDefined();
   });
 
+  it("opens a file whose name contains a literal % without throwing (codex review: no double-decode)", async () => {
+    // react-router's useParams already percent-decodes the splat segment;
+    // re-decoding that already-decoded value with decodeURIComponent throws
+    // URIError: URI malformed ("% d" isn't a valid escape) and used to crash
+    // the whole render. Regression test for the double-decode bug.
+    const { http, HttpResponse } = await import("msw");
+    const { server } = await import("@/test/mocks/server");
+    server.use(
+      http.get("http://localhost:8080/api/files/*", () =>
+        HttpResponse.json({
+          path: "100% done.md",
+          content: "# 100% done",
+          modified: "2026-01-01T00:00:00Z",
+          created: "2026-01-01T00:00:00Z",
+          sha: "abc",
+        })
+      )
+    );
+
+    renderPage(`/${DEFAULT_ROOT}/${encodeURIComponent("100% done.md")}`);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("editor-active-path")).toHaveTextContent(
+        "100% done.md"
+      );
+    });
+    const opened = useOpenFiles
+      .getState()
+      .files.find((f) => f.path === "100% done.md");
+    expect(opened).toBeDefined();
+  });
+
   it("syncs the active tab path to the URL", async () => {
     const user = userEvent.setup();
     renderPage();

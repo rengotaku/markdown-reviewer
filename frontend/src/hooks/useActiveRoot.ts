@@ -36,10 +36,13 @@ export function useActiveRoot(): UseActiveRootResult {
     [config]
   );
 
-  // useParams doesn't percent-decode segment values on its own (only the
-  // splat's embedded `%2F` gets special-cased by react-router's matcher), so
-  // decode explicitly to cover root names with reserved/multibyte chars.
-  const requested = routeRoot ? decodeURIComponent(routeRoot) : "";
+  // react-router's `useParams` already percent-decodes segment values (its
+  // `matchRoutes` normalizes them before this hook ever sees them) — do NOT
+  // decode again here. A root name containing a literal `%` (e.g. the URL
+  // segment `100%25done`) round-trips to `useParams` as `100%done`, and
+  // re-running `decodeURIComponent` on that throws `URIError: URI
+  // malformed` (`%do` isn't a valid escape), crashing the whole page.
+  const requested = routeRoot ?? "";
   // Reject URL values that don't match a known root so the rest of the UI
   // doesn't have to handle a phantom selection.
   const validRequested = roots.some((r) => r.name === requested)

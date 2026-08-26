@@ -1002,14 +1002,14 @@ export function EditorPage() {
   const location = useLocation();
   const routeParams = useParams<{ root?: string; "*"?: string }>();
   // The splat only carries a path once react-router has actually matched
-  // `/:root/*` — a bare `/:root` match leaves it undefined. `%2F`-encoded
-  // segments are already un-escaped to real `/` by react-router's matcher
-  // (see useActiveRoot's decode comment); a single decodeURIComponent here
-  // then resolves any other escaped chars (spaces, multibyte, a literal `%`)
-  // without double-decoding the slashes react-router already restored.
-  const initialFilePathRef = useRef(
-    routeParams["*"] ? decodeURIComponent(routeParams["*"]) : null
-  );
+  // `/:root/*` — a bare `/:root` match leaves it undefined. react-router's
+  // `useParams` already percent-decodes the value (`%2F` segments come back
+  // as real `/`, escaped spaces/multibyte/a literal `%` are already
+  // resolved) — do NOT decode it again: a file named e.g. `100% done.md`
+  // round-trips to `useParams` as `"100% done.md"`, and re-running
+  // `decodeURIComponent` on that throws `URIError: URI malformed`
+  // (`% d` isn't a valid escape), crashing the whole page.
+  const initialFilePathRef = useRef(routeParams["*"] || null);
   const initialCommentIdRef = useRef(searchParams.get(COMMENT_ID_PARAM));
 
   // Keep the URL path in sync with the active tab so the current view is

@@ -70,6 +70,20 @@ describe("useActiveRoot", () => {
     expect(result.current.activePath).toBe("/tmp/rooms");
   });
 
+  it("resolves a root name containing a literal % without throwing (codex review: no double-decode)", () => {
+    // useParams already percent-decodes the segment; re-decoding "100%done"
+    // (the router's already-decoded value) with decodeURIComponent throws
+    // URIError: URI malformed ("%do" isn't a valid escape) and crashes the
+    // whole page. Regression test for the double-decode bug.
+    const wrapper = makeWrapper({
+      roots: [{ name: "100%done", path: "/tmp/100%done" }],
+      initialEntries: [`/${encodeURIComponent("100%done")}`],
+    });
+    const { result } = renderHook(() => useActiveRoot(), { wrapper });
+    expect(result.current.active).toBe("100%done");
+    expect(result.current.activePath).toBe("/tmp/100%done");
+  });
+
   it("falls back to the default root and redirects the URL when the root segment is unknown", async () => {
     const Wrapper = makeWrapper({ initialEntries: ["/phantom"] });
     const { getByTestId } = render(
