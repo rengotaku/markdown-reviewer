@@ -19,7 +19,7 @@ func noPlist() (string, error) { return "", errors.New("no plist") }
 
 func TestDeeplink(t *testing.T) {
 	got := deeplink("http://localhost:15174", "works", "2608041155/phases/phase0/draft.md", "")
-	want := "http://localhost:15174/?root=works&select_file=2608041155%2Fphases%2Fphase0%2Fdraft.md"
+	want := "http://localhost:15174/works/2608041155%2Fphases%2Fphase0%2Fdraft.md"
 	if got != want {
 		t.Errorf("deeplink() = %q, want %q", got, want)
 	}
@@ -27,17 +27,16 @@ func TestDeeplink(t *testing.T) {
 
 func TestDeeplink_EscapesMultibyteAndSpaces(t *testing.T) {
 	got := deeplink("http://localhost:15174", "レビュー", "日本語/note v2.md", "")
-	// A raw space or '/' in select_file would break the query the UI parses.
+	// A raw space or the rel path's own '/' would break the single path
+	// segment EditorPage's splat decoding expects.
 	for _, bad := range []string{" ", "日本語/note"} {
 		if strings.Contains(got, bad) {
 			t.Errorf("deeplink() = %q, left %q unescaped", got, bad)
 		}
 	}
-	if !strings.Contains(got, "select_file=%E6%97%A5%E6%9C%AC%E8%AA%9E%2Fnote+v2.md") {
-		t.Errorf("deeplink() = %q, missing escaped select_file", got)
-	}
-	if !strings.Contains(got, "root=%E3%83%AC%E3%83%93%E3%83%A5%E3%83%BC") {
-		t.Errorf("deeplink() = %q, missing escaped root", got)
+	want := "http://localhost:15174/%E3%83%AC%E3%83%93%E3%83%A5%E3%83%BC/%E6%97%A5%E6%9C%AC%E8%AA%9E%2Fnote%20v2.md"
+	if got != want {
+		t.Errorf("deeplink() = %q, want %q", got, want)
 	}
 }
 
@@ -244,14 +243,14 @@ func TestCmdOpen_Case9_WithoutCommentRegression(t *testing.T) {
 	if strings.Contains(out, "comment_id=") {
 		t.Errorf("stdout = %q, should not contain comment_id=", out)
 	}
-	if !strings.Contains(out, "?root=works") || !strings.Contains(out, "select_file=foo.md") {
-		t.Errorf("stdout = %q, missing expected root/select_file params", out)
+	if !strings.Contains(out, "/works/foo.md") {
+		t.Errorf("stdout = %q, missing expected /{root}/{path}", out)
 	}
 }
 
 func TestDeeplink_WithComment(t *testing.T) {
 	got := deeplink("http://localhost:15174", "works", "draft.md", "c-001")
-	want := "http://localhost:15174/?root=works&select_file=draft.md&comment_id=c-001"
+	want := "http://localhost:15174/works/draft.md?comment_id=c-001"
 	if got != want {
 		t.Errorf("deeplink() = %q, want %q", got, want)
 	}

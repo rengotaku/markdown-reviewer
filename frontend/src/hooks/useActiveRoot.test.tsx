@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { render, renderHook, act, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { MemoryRouter, useLocation } from "react-router-dom";
+import { MemoryRouter, Routes, Route, useLocation } from "react-router-dom";
 import { type ReactNode } from "react";
 import { useActiveRoot } from "./useActiveRoot";
 
@@ -24,8 +24,14 @@ function makeWrapper(opts: {
   return function Wrapper({ children }: { children: ReactNode }) {
     return (
       <QueryClientProvider client={client}>
-        <MemoryRouter initialEntries={opts.initialEntries ?? ["/"]}>
-          {children}
+        <MemoryRouter initialEntries={opts.initialEntries ?? ["/works"]}>
+          {/* Both routes render the same children: "/" covers a bare root-less
+              URL (nothing has been resolved yet), "/:root/*" covers the normal
+              case once a root segment is present. */}
+          <Routes>
+            <Route path="/" element={children} />
+            <Route path="/:root/*" element={children} />
+          </Routes>
         </MemoryRouter>
       </QueryClientProvider>
     );
@@ -42,30 +48,30 @@ function Probe({ targetRoot }: { targetRoot?: string }) {
       data-testid="probe"
       data-active={active}
       data-path={activePath}
-      data-search={loc.search}
+      data-pathname={loc.pathname}
       onClick={() => targetRoot && setActive(targetRoot)}
     />
   );
 }
 
 describe("useActiveRoot", () => {
-  it("defaults to the first configured root when no ?root= is set", () => {
-    const wrapper = makeWrapper({});
+  it("defaults to the first configured root when no root is in the URL", () => {
+    const wrapper = makeWrapper({ initialEntries: ["/"] });
     const { result } = renderHook(() => useActiveRoot(), { wrapper });
     expect(result.current.active).toBe("works");
     expect(result.current.activePath).toBe("/tmp/works");
     expect(result.current.roots).toHaveLength(2);
   });
 
-  it("honors ?root=<name> when the name matches a configured root", () => {
-    const wrapper = makeWrapper({ initialEntries: ["/?root=rooms"] });
+  it("honors the root path segment when it matches a configured root", () => {
+    const wrapper = makeWrapper({ initialEntries: ["/rooms"] });
     const { result } = renderHook(() => useActiveRoot(), { wrapper });
     expect(result.current.active).toBe("rooms");
     expect(result.current.activePath).toBe("/tmp/rooms");
   });
 
-  it("falls back to the default root and scrubs the URL when ?root= is unknown", async () => {
-    const Wrapper = makeWrapper({ initialEntries: ["/?root=phantom"] });
+  it("falls back to the default root and redirects the URL when the root segment is unknown", async () => {
+    const Wrapper = makeWrapper({ initialEntries: ["/phantom"] });
     const { getByTestId } = render(
       <Wrapper>
         <Probe />
@@ -73,7 +79,7 @@ describe("useActiveRoot", () => {
     );
     await waitFor(() => {
       expect(getByTestId("probe").dataset.active).toBe("works");
-      expect(getByTestId("probe").dataset.search).toBe("");
+      expect(getByTestId("probe").dataset.pathname).toBe("/works");
     });
   });
 
@@ -88,11 +94,11 @@ describe("useActiveRoot", () => {
     expect(probe.dataset.active).toBe("works");
     act(() => probe.click());
     expect(probe.dataset.active).toBe("rooms");
-    expect(probe.dataset.search).toBe("?root=rooms");
+    expect(probe.dataset.pathname).toBe("/rooms");
   });
 
-  it("setActive on the default root removes ?root= from the URL", () => {
-    const Wrapper = makeWrapper({ initialEntries: ["/?root=rooms"] });
+  it("setActive produces a plain /{root} URL for the default root too (no special-casing)", () => {
+    const Wrapper = makeWrapper({ initialEntries: ["/rooms"] });
     const { getByTestId } = render(
       <Wrapper>
         <Probe targetRoot="works" />
@@ -100,10 +106,10 @@ describe("useActiveRoot", () => {
     );
     const probe = getByTestId("probe");
     expect(probe.dataset.active).toBe("rooms");
-    expect(probe.dataset.search).toBe("?root=rooms");
+    expect(probe.dataset.pathname).toBe("/rooms");
     act(() => probe.click());
     expect(probe.dataset.active).toBe("works");
-    expect(probe.dataset.search).toBe("");
+    expect(probe.dataset.pathname).toBe("/works");
   });
 
   it("setActive is a no-op for unknown names", () => {

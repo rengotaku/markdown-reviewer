@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { HTTPError } from "ky";
 import Box from "@mui/material/Box";
 import IconButton from "@mui/material/IconButton";
@@ -90,7 +90,6 @@ function basename(path: string): string {
 }
 
 const TARGET_SNIPPET_LENGTH = 60;
-const SELECT_FILE_PARAM = "select_file";
 const COMMENT_ID_PARAM = "comment_id";
 // How often to re-poll the active review file's comments for out-of-band
 // changes (mr CLI / API / other viewers). Matches the file-tree cadence.
@@ -998,30 +997,35 @@ export function EditorPage() {
 
   useDirChangeWatcher();
 
-  const [searchParams, setSearchParams] = useSearchParams();
-  const initialSelectFileRef = useRef(searchParams.get(SELECT_FILE_PARAM));
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const routeParams = useParams<{ root?: string; "*"?: string }>();
+  // The splat only carries a path once react-router has actually matched
+  // `/:root/*` — a bare `/:root` match leaves it undefined. `%2F`-encoded
+  // segments are already un-escaped to real `/` by react-router's matcher
+  // (see useActiveRoot's decode comment); a single decodeURIComponent here
+  // then resolves any other escaped chars (spaces, multibyte, a literal `%`)
+  // without double-decoding the slashes react-router already restored.
+  const initialFilePathRef = useRef(
+    routeParams["*"] ? decodeURIComponent(routeParams["*"]) : null
+  );
   const initialCommentIdRef = useRef(searchParams.get(COMMENT_ID_PARAM));
 
-  // Keep the URL's `select_file` param in sync with the active tab so the
-  // current view is bookmarkable / shareable. Runs on every active-file
-  // change (tab click, sidebar open, close-last-tab → undefined).
+  // Keep the URL path in sync with the active tab so the current view is
+  // bookmarkable / shareable. Runs on every active-file change (tab click,
+  // sidebar open, close-last-tab → undefined). The query string (comment_id,
+  // the sidebar's filter) is carried over unchanged — only the path segment
+  // that names the open file changes here.
   useEffect(() => {
-    setSearchParams(
-      (prev) => {
-        const current = prev.get(SELECT_FILE_PARAM);
-        const next = new URLSearchParams(prev);
-        if (activeFile?.path) {
-          if (current === activeFile.path) return prev;
-          next.set(SELECT_FILE_PARAM, activeFile.path);
-        } else {
-          if (current === null) return prev;
-          next.delete(SELECT_FILE_PARAM);
-        }
-        return next;
-      },
-      { replace: true }
-    );
-  }, [activeFile?.path, setSearchParams]);
+    if (!activeRoot) return;
+    const base = `/${encodeURIComponent(activeRoot)}`;
+    const next = activeFile?.path
+      ? `${base}/${encodeURIComponent(activeFile.path)}`
+      : base;
+    if (location.pathname === next) return;
+    navigate({ pathname: next, search: location.search }, { replace: true });
+  }, [activeRoot, activeFile?.path, location.pathname, location.search, navigate]);
 
   const [commentDialog, setCommentDialog] = useState<{
     open: boolean;
@@ -1228,16 +1232,17 @@ export function EditorPage() {
     }
   };
 
-  // Deeplink: `?select_file=<path>` opens that file on first mount. Held in
-  // a ref so subsequent URL changes (e.g. user editing the sidebar filter)
-  // don't re-trigger the open, and StrictMode's double-invoke is a no-op
-  // the second time. We wait until activeRoot is non-empty so the read is
-  // scoped to the correct root from the start.
+  // Deeplink: `/{root}/{path}` opens that file on first mount. Held in a ref
+  // so subsequent URL changes (e.g. user editing the sidebar filter, or the
+  // tab-sync effect above rewriting the path) don't re-trigger the open, and
+  // StrictMode's double-invoke is a no-op the second time. We wait until
+  // activeRoot is non-empty so the read is scoped to the correct root from
+  // the start.
   useEffect(() => {
-    const path = initialSelectFileRef.current;
+    const path = initialFilePathRef.current;
     if (!path) return;
     if (!activeRoot) return;
-    initialSelectFileRef.current = null;
+    initialFilePathRef.current = null;
     void handleSelect(path);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeRoot]);

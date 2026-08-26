@@ -90,7 +90,7 @@ mr open     <path> [--print]                             # Web UI で開く（--
 
 パスは絶対 / cwd 相対のどちらでもよい（設定ルート配下であること）。ルートは `REVIEW_ROOTS` 環境変数、無ければ launchd plist から自動解決する。
 
-`mr open` は渡されたパスから `?root=` / `?select_file=` を組み立てるので、deeplink を手で作る必要はない。接続先は `MARKDOWN_REVIEWER_BASE_URL` → `PORT` → launchd plist の `PORT` → サーバ既定ポート（`8080`）の順に解決する。
+`mr open` は渡されたパスから Web UI の `/{root}/{path}` deeplink を組み立てるので、手で作る必要はない。接続先は `MARKDOWN_REVIEWER_BASE_URL` → `PORT` → launchd plist の `PORT` → サーバ既定ポート（`8080`）の順に解決する。
 
 ## コメントモデル（sidecar）
 
