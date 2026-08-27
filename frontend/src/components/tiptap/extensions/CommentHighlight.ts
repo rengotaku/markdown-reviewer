@@ -2,6 +2,7 @@ import { Extension } from "@tiptap/core";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
+import type { EditorState } from "@tiptap/pm/state";
 import {
   extractAnchorBlocks,
   resolveAnchorInBlocks,
@@ -71,10 +72,16 @@ function buildDeco(
       const range = resolveAnchorInBlocks(blocks, a);
       if (!range || range.from >= range.to) continue;
       decos.push(
-        Decoration.inline(range.from, range.to, {
-          class: "comment-mark",
-          "data-comment-id": c.id,
-        })
+        Decoration.inline(
+          range.from,
+          range.to,
+          { class: "comment-mark", "data-comment-id": c.id },
+          // Kept in the (public) spec as well as the DOM attrs so a lookup by
+          // document range — what the selection bubble needs — does not have
+          // to go through the rendered DOM the way the old right-click menu
+          // did with `closest("[data-comment-id]")`.
+          { commentId: c.id }
+        )
       );
     }
   }
@@ -92,6 +99,41 @@ function buildFlashDeco(
       Decoration.inline(r.from, r.to, { class: "comment-flash is-flash" })
     );
   return DecorationSet.create(doc, decos);
+}
+
+/**
+ * Ids of the comment highlights overlapping `[from, to]`, innermost first
+ * (the shortest range wins). The selection bubble uses the first entry to
+ * offer 編集 / 削除 for the comment the selection sits inside; ordering by
+ * range length reproduces what right-clicking used to resolve through the
+ * innermost DOM element.
+ *
+ * Only persistent comment marks are considered — the transient flash
+ * decorations live in a separate set (see PluginState.flashDeco).
+ */
+export function commentIdsInRange(
+  state: EditorState,
+  from: number,
+  to: number
+): string[] {
+  const pState = key.getState(state);
+  if (!pState) return [];
+  const seen = new Set<string>();
+  return pState.deco
+    .find(from, to)
+    // `find` also returns decorations that merely touch the range (a
+    // decoration ending exactly at `from`, or starting exactly at `to`).
+    // Both are half-open ranges, so touching is not overlapping: without this
+    // filter, selecting the text right after a comment would offer 編集 / 削除
+    // for that comment — and 削除 asks for no confirmation.
+    .filter((d) => d.from < to && d.to > from)
+    .sort((a, b) => a.to - a.from - (b.to - b.from))
+    .map((d) => (d.spec as { commentId?: string } | null)?.commentId)
+    .filter((id): id is string => {
+      if (!id || seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
 }
 
 declare module "@tiptap/core" {

@@ -1,5 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, screen, waitFor, fireEvent, act } from "@testing-library/react";
+import {
+  render,
+  screen,
+  waitFor,
+  fireEvent,
+  act,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Routes, Route, useLocation } from "react-router-dom";
@@ -1377,8 +1384,11 @@ describe("EditorPage line numbers toggle (#234)", () => {
   });
 });
 
-describe("EditorPage selection bubble (#233)", () => {
+describe("EditorPage selection menu (#233)", () => {
   let fakeEditor: Editor | null = null;
+  // jsdom has no layout, so posAtCoords is stubbed with the document position
+  // the pointer is standing in for.
+  let pointerPos: number | null = null;
 
   beforeEach(() => {
     localStorage.clear();
@@ -1413,8 +1423,16 @@ describe("EditorPage selection bubble (#233)", () => {
       left: 50,
       right: 150,
     });
+    fakeEditor.view.posAtCoords = () =>
+      pointerPos === null ? null : { pos: pointerPos, inside: -1 };
     useEditorInstance.getState().setEditor(fakeEditor);
     return fakeEditor;
+  }
+
+  /** Rests the pointer on the given document position inside the editor. */
+  async function hoverAt(ed: Editor, pos: number) {
+    pointerPos = pos;
+    fireEvent.mouseMove(ed.view.dom, { clientX: 10, clientY: 10 });
   }
 
   async function openReadme() {
@@ -1430,39 +1448,305 @@ describe("EditorPage selection bubble (#233)", () => {
     return user;
   }
 
-  it("選択すると右クリックなしでバブルが出て、解除すると消える", async () => {
+  it("選択の上にポインタを置くとコメント追加が出る", async () => {
     await openReadme();
     const ed = installEditor("<p>SLA遵守率 98%</p>");
 
-    expect(screen.queryByTestId("selection-bubble")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("editor-comment-menu")).not.toBeInTheDocument();
 
     await act(async () => {
       ed.commands.setTextSelection({ from: 1, to: 5 });
     });
-    await waitFor(() =>
-      expect(screen.getByTestId("selection-bubble")).toBeInTheDocument()
-    );
+    // Selecting alone does not open it — hover is the only trigger.
+    expect(screen.queryByTestId("editor-comment-menu")).not.toBeInTheDocument();
 
-    await act(async () => {
-      ed.commands.setTextSelection({ from: 1, to: 1 });
-    });
+    await hoverAt(ed, 3);
     await waitFor(() =>
-      expect(screen.queryByTestId("selection-bubble")).not.toBeInTheDocument()
+      expect(screen.getByTestId("editor-menu-add-comment")).toBeInTheDocument()
     );
   });
 
-  it("バブルからコメント追加ダイアログを開ける", async () => {
+  it("選択の外にポインタがあるとメニューは出ない", async () => {
+    await openReadme();
+    const ed = installEditor("<p>SLA遵守率 98%</p>");
+
+    await act(async () => {
+      ed.commands.setTextSelection({ from: 1, to: 5 });
+    });
+    await hoverAt(ed, 8);
+
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 300));
+    });
+    expect(screen.queryByTestId("editor-comment-menu")).not.toBeInTheDocument();
+  });
+
+  it("メニューからコメント追加ダイアログを開ける", async () => {
     const user = await openReadme();
     const ed = installEditor("<p>SLA遵守率 98%</p>");
 
     await act(async () => {
       ed.commands.setTextSelection({ from: 1, to: 5 });
     });
-    await user.click(await screen.findByTestId("selection-bubble-add-comment"));
+    await hoverAt(ed, 3);
+    await user.click(await screen.findByTestId("editor-menu-add-comment"));
 
     await waitFor(() =>
       expect(screen.getByTestId("comment-body-input")).toBeInTheDocument()
     );
+  });
+});
+
+describe("EditorPage comment menu (#238)", () => {
+  // The 編集 / 削除 items used to live in the editor's right-click menu. They
+  // now open by hovering the comment's highlight — adding a comment is what
+  // the selection bubble is for, and an already-commented span should not
+  // have to be re-selected to act on it.
+  let fakeEditor: Editor | null = null;
+
+  function installEditor(html: string): Editor {
+    fakeEditor = new Editor({
+      extensions: [
+        StarterKit.configure({ link: false }),
+        CommentHighlight,
+        DiffGutter,
+        LineNumberGutter,
+      ],
+      content: html,
+    });
+    // jsdom has no layout, so coordsAtPos would throw — feed it a fixed rect.
+    fakeEditor.view.coordsAtPos = () => ({
+      top: 100,
+      bottom: 120,
+      left: 50,
+      right: 150,
+    });
+    fakeEditor.view.posAtCoords = () => null;
+    useEditorInstance.getState().setEditor(fakeEditor);
+    return fakeEditor;
+  }
+
+  async function openWithComment(comment: CommentJSON) {
+    const user = userEvent.setup();
+    const { http, HttpResponse } = await import("msw");
+    const { server } = await import("@/test/mocks/server");
+    server.use(
+      http.get("http://localhost:8080/api/stat/*", () =>
+        HttpResponse.json({
+          path: "README.md",
+          root: "mock-root",
+          modified: "2026-05-20T00:00:00Z",
+          created: "2026-05-19T00:00:00Z",
+          state: "review",
+          hasOpenComments: comment.status === "open",
+        })
+      ),
+      http.get("http://localhost:8080/api/comments/*", () =>
+        HttpResponse.json({
+          file: "README.md",
+          root: "mock-root",
+          summary: { total: 1, by_scope: {}, by_status: {} },
+          comments: [comment],
+        })
+      )
+    );
+    renderPage();
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
+    );
+    await user.click(screen.getByTestId("sidebar-file-README.md"));
+    await waitFor(() =>
+      expect(screen.getByTestId(`comment-context-${comment.id}`)).toBeInTheDocument()
+    );
+    const ed = installEditor("<h2>実績</h2><p>SLA遵守率 98%</p>");
+    // Wait for the page to push the comment into the editor as a decoration —
+    // the bubble reads its target from that decoration set.
+    await waitFor(() =>
+      expect(ed.view.dom.querySelectorAll(".comment-mark").length).toBeGreaterThan(0)
+    );
+    return { user, ed };
+  }
+
+  /** Rests the pointer on the comment's highlight and waits for the menu. */
+  async function hoverHighlight(ed: Editor) {
+    // jsdom has no layout, so posAtCoords returns null (stubbed in
+    // installEditor) and the handler falls back to the mark's
+    // data-comment-id — the path this exercises.
+    //
+    // Re-queried and re-fired on every retry: pointer samples are throttled
+    // (a single move can land inside the previous sample's window), and the
+    // decorations are rebuilt on every doc/comment change, which detaches the
+    // element a move would otherwise be dispatched to.
+    await waitFor(() => {
+      const el = ed.view.dom.querySelector(".comment-mark") as HTMLElement;
+      fireEvent.mouseMove(el, { clientX: 10, clientY: 10 });
+      expect(screen.getByTestId("editor-menu-edit-comment")).toBeInTheDocument();
+    });
+    return ed.view.dom.querySelector(".comment-mark") as HTMLElement;
+  }
+
+  const openComment: CommentJSON = {
+    id: "c-300",
+    scope: "inline",
+    body: "ここ直して",
+    status: "open",
+    author: "human",
+    anchor: { heading_path: ["## 実績"], snippet: "SLA遵守率 98%", occurrence: 0 },
+    context: { heading_path: ["実績"], line_range: [74, 74] },
+    orphan: false,
+  };
+
+  beforeEach(() => {
+    localStorage.clear();
+    useOpenFiles.setState({ files: [], activeIdByRoot: {} });
+    useToast.setState({ toasts: [] });
+    useConfirm.setState({ pending: null, queue: [] });
+    useEditorInstance.setState({ editor: null });
+    Element.prototype.scrollIntoView = vi.fn();
+  });
+
+  afterEach(() => {
+    fakeEditor?.destroy();
+    fakeEditor = null;
+    useEditorInstance.setState({ editor: null });
+  });
+
+  it("ハイライトにホバーするだけで編集・削除が出る", async () => {
+    const { ed } = await openWithComment(openComment);
+
+    await hoverHighlight(ed);
+
+    expect(screen.getByTestId("editor-menu-edit-comment")).toBeEnabled();
+    expect(screen.getByTestId("editor-menu-delete-comment")).toBeEnabled();
+    // The menu names the comment it acts on.
+    expect(screen.getByTestId("editor-comment-menu-target")).toHaveTextContent(
+      "ここ直して"
+    );
+
+    // Leaving the editor closes it again.
+    fireEvent.mouseLeave(ed.view.dom);
+    await waitFor(() =>
+      expect(screen.queryByTestId("editor-comment-menu")).not.toBeInTheDocument()
+    );
+  });
+
+  it("コメント外にホバーしてもメニューは出ない", async () => {
+    const { ed } = await openWithComment(openComment);
+
+    // The "実績" heading sits before the highlighted paragraph.
+    const heading = ed.view.dom.querySelector("h2") as HTMLElement;
+    fireEvent.mouseMove(heading, { clientX: 10, clientY: 10 });
+
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 300));
+    });
+    expect(screen.queryByTestId("editor-comment-menu")).not.toBeInTheDocument();
+  });
+
+  it("選択が残っていてもハイライトのホバーで開く", async () => {
+    // Right after commenting the commented range is still selected; hovering
+    // the highlight must still bring up the same menu.
+    const { ed } = await openWithComment(openComment);
+    await act(async () => {
+      ed.commands.setTextSelection({ from: 1, to: 3 });
+    });
+
+    await hoverHighlight(ed);
+
+    expect(screen.getByTestId("editor-menu-edit-comment")).toBeEnabled();
+  });
+
+  it("編集は本文入りのダイアログを開く", async () => {
+    const { user, ed } = await openWithComment(openComment);
+    await hoverHighlight(ed);
+
+    await user.click(await screen.findByTestId("editor-menu-edit-comment"));
+
+    const input = await screen.findByTestId("comment-body-input");
+    expect(input).toHaveValue("ここ直して");
+  });
+
+  it("削除は DELETE を投げる", async () => {
+    const { user, ed } = await openWithComment(openComment);
+    const { http, HttpResponse } = await import("msw");
+    const { server } = await import("@/test/mocks/server");
+    let deleted: string | null = null;
+    server.use(
+      http.delete("http://localhost:8080/api/comments/*", ({ request }) => {
+        deleted = new URL(request.url).searchParams.get("id");
+        return HttpResponse.json({ ok: true });
+      })
+    );
+    await hoverHighlight(ed);
+
+    await user.click(await screen.findByTestId("editor-menu-delete-comment"));
+    // Deleting asks first, naming the comment it is about to drop.
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent("ここ直して");
+    await user.click(within(dialog).getByRole("button", { name: "削除" }));
+
+    await waitFor(() => expect(deleted).toBe("c-300"));
+  });
+
+  it("連打しても DELETE は1回しか飛ばない", async () => {
+    const { user, ed } = await openWithComment(openComment);
+    const { http, HttpResponse } = await import("msw");
+    const { server } = await import("@/test/mocks/server");
+    let calls = 0;
+    server.use(
+      http.delete("http://localhost:8080/api/comments/*", async () => {
+        calls += 1;
+        // Hold the request open so the second click lands mid-flight.
+        await new Promise((r) => setTimeout(r, 300));
+        return HttpResponse.json({ ok: true });
+      })
+    );
+    await hoverHighlight(ed);
+
+    const btn = await screen.findByTestId("editor-menu-delete-comment");
+    await user.click(btn);
+    await user.click(await screen.findByRole("button", { name: "削除" }));
+
+    // The button is disabled while the request is in flight, and a click that
+    // gets through anyway (fireEvent ignores pointer-events) is a no-op.
+    await waitFor(() => expect(btn).toBeDisabled());
+    fireEvent.click(btn);
+
+    await waitFor(() => expect(calls).toBe(1));
+    expect(calls).toBe(1);
+  });
+
+  it("削除の確認をキャンセルするとコメントは残る", async () => {
+    const { user, ed } = await openWithComment(openComment);
+    const { http, HttpResponse } = await import("msw");
+    const { server } = await import("@/test/mocks/server");
+    let calls = 0;
+    server.use(
+      http.delete("http://localhost:8080/api/comments/*", () => {
+        calls += 1;
+        return HttpResponse.json({ ok: true });
+      })
+    );
+    await hoverHighlight(ed);
+
+    await user.click(await screen.findByTestId("editor-menu-delete-comment"));
+    await user.click(await screen.findByRole("button", { name: "キャンセル" }));
+
+    expect(calls).toBe(0);
+    expect(ed.view.dom.querySelectorAll(".comment-mark").length).toBeGreaterThan(0);
+    // Hovering again offers the action once more (no stuck in-flight state).
+    await hoverHighlight(ed);
+    expect(screen.getByTestId("editor-menu-delete-comment")).toBeEnabled();
+  });
+
+  it("AI のコメントは編集・削除とも無効になる", async () => {
+    const { ed } = await openWithComment({ ...openComment, author: "ai" });
+    await hoverHighlight(ed);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("editor-menu-edit-comment")).toBeDisabled()
+    );
+    expect(screen.getByTestId("editor-menu-delete-comment")).toBeDisabled();
   });
 });
 
