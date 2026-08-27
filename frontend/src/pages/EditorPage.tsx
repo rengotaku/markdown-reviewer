@@ -13,8 +13,6 @@ import Tabs from "@mui/material/Tabs";
 import Tab from "@mui/material/Tab";
 import Chip from "@mui/material/Chip";
 import CloseIcon from "@mui/icons-material/Close";
-import ListItemIcon from "@mui/material/ListItemIcon";
-import ListItemText from "@mui/material/ListItemText";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import SaveIcon from "@mui/icons-material/Save";
@@ -23,7 +21,6 @@ import RateReviewOutlinedIcon from "@mui/icons-material/RateReviewOutlined";
 import MenuOpenIcon from "@mui/icons-material/MenuOpen";
 import MenuIcon from "@mui/icons-material/Menu";
 import RefreshIcon from "@mui/icons-material/Refresh";
-import AddCommentIcon from "@mui/icons-material/AddComment";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import CommentIcon from "@mui/icons-material/Comment";
@@ -87,7 +84,10 @@ import { dirOf } from "@/utils/dirOf";
 import { splitPreamble } from "@/utils/frontmatter";
 import { computeDiffGutterMarks } from "@/utils/diffGutterMarks";
 import { computeDisplayVersion } from "@/utils/revisionVersion";
-import type { HighlightComment } from "@/components/tiptap/extensions/CommentHighlight";
+import {
+  commentIdsInRange,
+  type HighlightComment,
+} from "@/components/tiptap/extensions/CommentHighlight";
 import { BAR_HEIGHT, TAB_CONTENT_HEIGHT } from "@/theme/dimensions";
 
 function basename(path: string): string {
@@ -100,11 +100,6 @@ const COMMENT_ID_PARAM = "comment_id";
 // How often to re-poll the active review file's comments for out-of-band
 // changes (mr CLI / API / other viewers). Matches the file-tree cadence.
 const COMMENTS_POLL_MS = 30_000;
-/** Grace period after the pointer comes back up in which a `contextmenu` still
- *  counts as pointer-driven — for browsers that fire it on release rather than
- *  on press. Short on purpose: the gesture itself is covered by the pointer
- *  still being down, so this only has to bridge one event. */
-const POINTER_CONTEXTMENU_WINDOW_MS = 300;
 
 function todayISO(): string {
   const d = new Date();
@@ -1085,21 +1080,9 @@ export function EditorPage() {
     /** Set in "edit" mode: the body the dialog opens with. */
     defaultBody?: string;
   }>({ open: false, mode: "anchored", snippet: "" });
-  // Editor context menu. Without commentId → "コメント追加" for the current
-  // selection; with commentId → "このコメントを編集 / 削除" for the highlight
-  // that was right-clicked.
-  const [contextMenu, setContextMenu] = useState<{
-    x: number;
-    y: number;
-    commentId?: string;
-    /** Opened by a pointer gesture rather than the keyboard's context-menu key. */
-    viaPointer?: boolean;
-  } | null>(null);
-  // Whether a pointer gesture in the editor is still in progress, and when the
-  // last one ended. Together they tell a pointer-driven context menu from a
-  // keyboard-driven one (see the contextmenu handler).
+  // Whether a pointer gesture in the editor is still in progress — the
+  // selection bubble stays hidden until the drag ends.
   const pointerIsDown = useRef(false);
-  const pointerUpAt = useRef(Number.NEGATIVE_INFINITY);
 
   // Viewport position of the floating "コメント追加" bubble shown while a
   // non-empty selection sits in the editor (#233). Null = hidden. Kept in
@@ -1107,6 +1090,11 @@ export function EditorPage() {
   const [selectionBubble, setSelectionBubble] = useState<{
     top: number;
     left: number;
+    /**
+     * Innermost comment highlight the selection overlaps, if any. Drives the
+     * 編集 / 削除 buttons that used to live in the editor's right-click menu.
+     */
+    commentId?: string;
   } | null>(null);
 
   // Re-render the toolbar Add-Comment button when selection / doc changes.
@@ -1149,9 +1137,13 @@ export function EditorPage() {
       try {
         const start = editor.view.coordsAtPos(from);
         const end = editor.view.coordsAtPos(to);
+        // Anchor on the selection's end, not its middle: a drag runs left to
+        // right, so the pointer/caret is already at the end and the bubble
+        // lands under the hand instead of back at the center of the range.
         setSelectionBubble({
           top: Math.min(start.top, end.top),
-          left: (start.left + end.left) / 2,
+          left: end.left,
+          commentId: commentIdsInRange(editor.state, from, to)[0],
         });
       } catch {
         // View not mounted (or the position is not laid out yet) — no anchor
@@ -1170,97 +1162,43 @@ export function EditorPage() {
       pointerIsDown.current = false;
       update();
     };
-
-    update();
-    editor.on("selectionUpdate", update);
-    editor.on("transaction", update);
-    window.addEventListener("pointerup", onPointerUp, true);
-    window.addEventListener("scroll", update, true);
-    window.addEventListener("resize", update);
-    return () => {
-      editor.off("selectionUpdate", update);
-      editor.off("transaction", update);
-      window.removeEventListener("pointerup", onPointerUp, true);
-      window.removeEventListener("scroll", update, true);
-      window.removeEventListener("resize", update);
+    const onPointerDown = () => {
+      pointerIsDown.current = true;
     };
-  }, [editor]);
 
-  // Right-click on a non-empty selection → コメント追加 menu (contextMenu state).
-  // The editor `view` may not be mounted at the moment the editor object lands
-  // in the store, so we attach lazily and retry on the "create" event.
-  useEffect(() => {
-    if (!editor || editor.isDestroyed) return;
-
-    let detach: (() => void) | undefined;
-
-    const tryAttach = () => {
-      if (detach) return;
-      let dom: HTMLElement;
+    // Capture phase: ProseMirror handles pointerdown itself, so the flag has
+    // to be set before it runs. The view may not be mounted yet at the moment
+    // the editor object lands in the store, so attach lazily and retry on
+    // "create".
+    let dom: HTMLElement | undefined;
+    const attachPointerDown = () => {
+      if (dom) return;
       try {
         dom = editor.view.dom as HTMLElement;
       } catch {
         return; // view not ready yet
       }
-      const onPointerDown = () => {
-        pointerIsDown.current = true;
-      };
-      // On window, so a release outside the editor still ends the gesture.
-      const onPointerUp = () => {
-        if (!pointerIsDown.current) return;
-        pointerIsDown.current = false;
-        pointerUpAt.current = performance.now();
-      };
-      const handler = (e: Event) => {
-        const ev = e as MouseEvent;
-        // Right-click on a comment highlight → offer to delete that comment,
-        // taking priority over the selection-based "コメント追加" path.
-        const target = ev.target as HTMLElement | null;
-        const markEl = target?.closest?.("[data-comment-id]") as HTMLElement | null;
-        const commentId = markEl?.getAttribute("data-comment-id") ?? undefined;
-        // Pointer- and keyboard-invoked menus need opposite focus handling on
-        // close (see the Menu's restoreFocus prop). `button` alone does not
-        // separate them: a plain right-click reports 2, but macOS Ctrl+click
-        // and a touch long-press report 0 — the same as Shift+F10. What does
-        // separate them is the gesture: a pointer-driven menu fires while the
-        // pointer is still down (or, in browsers that fire on release, just
-        // after it lifts). Shift+F10 has no gesture around it at all — and
-        // keying it shortly after an unrelated click must not be mistaken for
-        // one, which is why an idle "clicked recently" stamp is not enough.
-        const viaPointer =
-          ev.button === 2 ||
-          pointerIsDown.current ||
-          performance.now() - pointerUpAt.current < POINTER_CONTEXTMENU_WINDOW_MS;
-        if (commentId) {
-          ev.preventDefault();
-          setContextMenu({ x: ev.clientX, y: ev.clientY, commentId, viaPointer });
-          return;
-        }
-        const sel = editor.state.selection;
-        if (sel.empty || sel.from === sel.to) return;
-        ev.preventDefault();
-        setContextMenu({ x: ev.clientX, y: ev.clientY, viaPointer });
-      };
-      // Capture phase: ProseMirror handles pointerdown itself and the stamp
-      // must land before the contextmenu that follows it.
       dom.addEventListener("pointerdown", onPointerDown, true);
-      window.addEventListener("pointerup", onPointerUp, true);
-      window.addEventListener("pointercancel", onPointerUp, true);
-      dom.addEventListener("contextmenu", handler);
-      detach = () => {
-        dom.removeEventListener("pointerdown", onPointerDown, true);
-        window.removeEventListener("pointerup", onPointerUp, true);
-        window.removeEventListener("pointercancel", onPointerUp, true);
-        dom.removeEventListener("contextmenu", handler);
-      };
     };
+    attachPointerDown();
+    editor.on("create", attachPointerDown);
 
-    tryAttach();
-    editor.on("create", tryAttach);
-
+    update();
+    editor.on("selectionUpdate", update);
+    editor.on("transaction", update);
+    window.addEventListener("pointerup", onPointerUp, true);
+    window.addEventListener("pointercancel", onPointerUp, true);
+    window.addEventListener("scroll", update, true);
+    window.addEventListener("resize", update);
     return () => {
-      editor.off("create", tryAttach);
-      if (detach) detach();
+      editor.off("create", attachPointerDown);
+      dom?.removeEventListener("pointerdown", onPointerDown, true);
+      editor.off("selectionUpdate", update);
+      editor.off("transaction", update);
+      window.removeEventListener("pointerup", onPointerUp, true);
+      window.removeEventListener("pointercancel", onPointerUp, true);
+      window.removeEventListener("scroll", update, true);
+      window.removeEventListener("resize", update);
     };
   }, [editor]);
 
@@ -1633,39 +1571,35 @@ export function EditorPage() {
     openGlobalCommentDialog();
   };
 
-  const closeContextMenu = () => setContextMenu(null);
-
-  const handleContextAddComment = () => {
-    closeContextMenu();
-    handleAddCommentClick();
-  };
-
-  const contextMenuComment = comments.find((c) => c.id === contextMenu?.commentId);
-  // AI-authored comments are read-only to the human reviewer (they can't be
-  // deleted from the right-click menu either); see CommentSidePane's
-  // isAiAuthored for the same "ai" author marker.
-  const contextMenuCommentIsAiAuthored = contextMenuComment?.author === "ai";
+  // The comment the selection sits inside, if any — the selection bubble's
+  // 編集 / 削除 act on it. Looked up from the live list rather than cached with
+  // the bubble so a delete elsewhere makes the buttons disappear.
+  const bubbleComment = comments.find((c) => c.id === selectionBubble?.commentId);
+  // AI-authored comments are read-only to the human reviewer; see
+  // CommentSidePane's isAiAuthored for the same "ai" author marker.
+  const bubbleCommentIsAiAuthored = bubbleComment?.author === "ai";
   // Resolved comments are read-only until reopened — the backend rejects a
-  // body edit with 409, so the menu mirrors the side pane and disables it.
-  const contextMenuCommentIsResolved = contextMenuComment?.status === "resolved";
-  const contextEditDisabledReason = contextMenuCommentIsAiAuthored
+  // body edit with 409, so the bubble mirrors the side pane and disables it.
+  const bubbleCommentIsResolved = bubbleComment?.status === "resolved";
+  const bubbleEditDisabledReason = bubbleCommentIsAiAuthored
     ? "AI のコメントは編集できません"
-    : contextMenuCommentIsResolved
+    : bubbleCommentIsResolved
       ? "解決済みのため編集できません"
       : null;
+  const bubbleDeleteDisabledReason = bubbleCommentIsAiAuthored
+    ? "AI のコメントは削除できません"
+    : null;
 
-  const handleContextDeleteComment = () => {
-    const id = contextMenu?.commentId;
-    closeContextMenu();
-    if (id && !contextMenuCommentIsAiAuthored) void handleDeleteComment(id);
+  const handleBubbleDeleteComment = () => {
+    const id = bubbleComment?.id;
+    if (id && !bubbleDeleteDisabledReason) void handleDeleteComment(id);
   };
 
-  // Edit the right-clicked comment without leaving the editor: the same dialog
-  // used to add a comment, seeded with the stored body and switched to "edit".
-  const handleContextEditComment = () => {
-    const target = contextMenuComment;
-    closeContextMenu();
-    if (!target || contextEditDisabledReason) return;
+  // Edit the selected comment without leaving the editor: the same dialog used
+  // to add a comment, seeded with the stored body and switched to "edit".
+  const handleBubbleEditComment = () => {
+    const target = bubbleComment;
+    if (!target || bubbleEditDisabledReason) return;
     setCommentDialog({
       open: true,
       mode: "edit",
@@ -2531,7 +2465,7 @@ export function EditorPage() {
       {selectionBubble && canAddComment && (
         <Popper
           open
-          placement="top"
+          placement="top-start"
           // The bubble anchors to the selection rectangle, which is not a DOM
           // element — a virtual anchor keeps Popper's flip/shift behavior
           // (staying on screen near a viewport edge) without one.
@@ -2555,72 +2489,44 @@ export function EditorPage() {
             >
               コメント追加
             </Button>
+            {bubbleComment && (
+              <>
+                <Tooltip title={bubbleEditDisabledReason ?? ""}>
+                  {/* A disabled MUI Button swallows hover events, so the
+                      tooltip carrying the reason needs a live wrapper. */}
+                  <span>
+                    <Button
+                      size="small"
+                      startIcon={<EditOutlinedIcon fontSize="small" />}
+                      disabled={!!bubbleEditDisabledReason}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={handleBubbleEditComment}
+                      data-testid="selection-bubble-edit-comment"
+                    >
+                      コメント編集
+                    </Button>
+                  </span>
+                </Tooltip>
+                <Tooltip title={bubbleDeleteDisabledReason ?? ""}>
+                  <span>
+                    <Button
+                      size="small"
+                      color="error"
+                      startIcon={<DeleteOutlineIcon fontSize="small" />}
+                      disabled={!!bubbleDeleteDisabledReason}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={handleBubbleDeleteComment}
+                      data-testid="selection-bubble-delete-comment"
+                    >
+                      コメント削除
+                    </Button>
+                  </span>
+                </Tooltip>
+              </>
+            )}
           </Paper>
         </Popper>
       )}
-
-      <Menu
-        open={!!contextMenu}
-        onClose={closeContextMenu}
-        // MUI restores focus to whatever was focused when the menu opened —
-        // the editor's contenteditable. Focusing it hands control to
-        // ProseMirror, which scrolls its own selection into view, yanking the
-        // document by however far the caret sits from the marker that was
-        // right-clicked (measured: +5004px, marker off-screen). `preventScroll`
-        // does not help: the scroll comes from PM's selection sync, not the
-        // browser's focus behavior, so the only fix is not to refocus. Same
-        // failure mode AddCommentDialog documents for the comment dialog.
-        //
-        // Keyboard invocation is the opposite case: the menu acted at the
-        // caret, so scrolling back to it is where the user already is, and
-        // dropping focus to <body> would strand them. Restore it there.
-        disableRestoreFocus={contextMenu?.viaPointer ?? true}
-        anchorReference="anchorPosition"
-        anchorPosition={
-          contextMenu ? { top: contextMenu.y, left: contextMenu.x } : undefined
-        }
-        slotProps={{
-          root: { "data-testid": "editor-context-menu" } as Record<string, unknown>,
-        }}
-      >
-        {contextMenu?.commentId ? (
-          [
-            <MenuItem
-              key="edit"
-              onClick={handleContextEditComment}
-              disabled={!!contextEditDisabledReason}
-              data-testid="ctx-edit-comment"
-            >
-              <ListItemIcon>
-                <EditOutlinedIcon fontSize="small" />
-              </ListItemIcon>
-              <ListItemText>
-                {contextEditDisabledReason ?? "このコメントを編集"}
-              </ListItemText>
-            </MenuItem>,
-            <MenuItem
-              key="delete"
-              onClick={handleContextDeleteComment}
-              disabled={contextMenuCommentIsAiAuthored}
-              data-testid="ctx-delete-comment"
-            >
-              <ListItemIcon>
-                <DeleteOutlineIcon fontSize="small" />
-              </ListItemIcon>
-              <ListItemText>
-                {contextMenuCommentIsAiAuthored ? "AI のコメントは削除できません" : "このコメントを削除"}
-              </ListItemText>
-            </MenuItem>,
-          ]
-        ) : (
-          <MenuItem onClick={handleContextAddComment} data-testid="ctx-add-comment">
-            <ListItemIcon>
-              <AddCommentIcon fontSize="small" />
-            </ListItemIcon>
-            <ListItemText>コメント追加</ListItemText>
-          </MenuItem>
-        )}
-      </Menu>
 
       <AddCommentDialog
         open={commentDialog.open}

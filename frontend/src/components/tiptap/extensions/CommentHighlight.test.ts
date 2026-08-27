@@ -1,7 +1,11 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { Editor } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
-import { CommentHighlight, type HighlightComment } from "./CommentHighlight";
+import {
+  CommentHighlight,
+  commentIdsInRange,
+  type HighlightComment,
+} from "./CommentHighlight";
 import { resolveAnchorInDoc } from "@/utils/pmAnchor";
 
 // Exercises the decoration plugin against a real (headless) editor: comments
@@ -250,5 +254,76 @@ describe("CommentHighlight flash decorations (#167)", () => {
     expect(r2).not.toBeNull();
     ed.commands.flashCommentRanges([r1!, r2!]);
     expect(flashMarks(ed)).toHaveLength(2);
+  });
+});
+
+describe("commentIdsInRange (#238)", () => {
+  it("returns the ids whose highlight overlaps the range", () => {
+    const ed = makeEditor("<h2>認証</h2><p>アクセストークン: 24 時間</p>");
+    ed.commands.setCommentHighlights([
+      {
+        id: "c1",
+        status: "open",
+        anchor: { heading_path: ["## 認証"], snippet: "24 時間", occurrence: 0 },
+      },
+    ]);
+    const mark = marks(ed)[0];
+    const pos = ed.view.posAtDOM(mark, 0);
+
+    expect(commentIdsInRange(ed.state, pos, pos + 2)).toEqual(["c1"]);
+    // The heading sits before the highlighted paragraph — no overlap there.
+    expect(commentIdsInRange(ed.state, 1, 2)).toEqual([]);
+  });
+
+  it("orders overlapping comments innermost first", () => {
+    const ed = makeEditor("<p>アクセストークンは 24 時間で失効する</p>");
+    ed.commands.setCommentHighlights([
+      {
+        id: "outer",
+        status: "open",
+        anchor: {
+          heading_path: [],
+          snippet: "アクセストークンは 24 時間で失効する",
+          occurrence: 0,
+        },
+      },
+      {
+        id: "inner",
+        status: "open",
+        anchor: { heading_path: [], snippet: "24 時間", occurrence: 0 },
+      },
+    ]);
+    // Overlapping decorations are rendered as split spans whose merged
+    // attributes keep only one id, so the position is taken from the doc
+    // rather than the DOM: "24 時間" starts at 11 in "アクセストークンは 24 時間で失効する".
+    expect(commentIdsInRange(ed.state, 11, 13)).toEqual(["inner", "outer"]);
+  });
+
+  it("lists a multi-anchor comment once", () => {
+    const ed = makeEditor("<h2>A</h2><p>target</p><h2>B</h2><p>target</p>");
+    ed.commands.setCommentHighlights([
+      {
+        id: "c-multi",
+        status: "open",
+        anchor: { heading_path: ["## A"], snippet: "target", occurrence: 0 },
+        anchors: [{ heading_path: ["## B"], snippet: "target", occurrence: 0 }],
+      },
+    ]);
+    expect(marks(ed)).toHaveLength(2);
+    expect(commentIdsInRange(ed.state, 0, ed.state.doc.content.size)).toEqual([
+      "c-multi",
+    ]);
+  });
+
+  it("ignores resolved comments (they paint no highlight)", () => {
+    const ed = makeEditor("<p>some target text</p>");
+    ed.commands.setCommentHighlights([
+      {
+        id: "c1",
+        status: "resolved",
+        anchor: { heading_path: [], snippet: "target", occurrence: 0 },
+      },
+    ]);
+    expect(commentIdsInRange(ed.state, 0, ed.state.doc.content.size)).toEqual([]);
   });
 });

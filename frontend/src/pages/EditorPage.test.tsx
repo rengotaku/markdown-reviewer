@@ -1466,6 +1466,179 @@ describe("EditorPage selection bubble (#233)", () => {
   });
 });
 
+describe("EditorPage selection bubble comment actions (#238)", () => {
+  // The 編集 / 削除 items used to live in the editor's right-click menu, which
+  // resolved its target through the DOM (`closest("[data-comment-id]")`).
+  // They now hang off the selection bubble and resolve the target from the
+  // selection's document range instead.
+  let fakeEditor: Editor | null = null;
+
+  function installEditor(html: string): Editor {
+    fakeEditor = new Editor({
+      extensions: [
+        StarterKit.configure({ link: false }),
+        CommentHighlight,
+        DiffGutter,
+        LineNumberGutter,
+      ],
+      content: html,
+    });
+    // jsdom has no layout, so coordsAtPos would throw — feed it a fixed rect.
+    fakeEditor.view.coordsAtPos = () => ({
+      top: 100,
+      bottom: 120,
+      left: 50,
+      right: 150,
+    });
+    useEditorInstance.getState().setEditor(fakeEditor);
+    return fakeEditor;
+  }
+
+  async function openWithComment(comment: CommentJSON) {
+    const user = userEvent.setup();
+    const { http, HttpResponse } = await import("msw");
+    const { server } = await import("@/test/mocks/server");
+    server.use(
+      http.get("http://localhost:8080/api/stat/*", () =>
+        HttpResponse.json({
+          path: "README.md",
+          root: "mock-root",
+          modified: "2026-05-20T00:00:00Z",
+          created: "2026-05-19T00:00:00Z",
+          state: "review",
+          hasOpenComments: comment.status === "open",
+        })
+      ),
+      http.get("http://localhost:8080/api/comments/*", () =>
+        HttpResponse.json({
+          file: "README.md",
+          root: "mock-root",
+          summary: { total: 1, by_scope: {}, by_status: {} },
+          comments: [comment],
+        })
+      )
+    );
+    renderPage();
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
+    );
+    await user.click(screen.getByTestId("sidebar-file-README.md"));
+    await waitFor(() =>
+      expect(screen.getByTestId(`comment-context-${comment.id}`)).toBeInTheDocument()
+    );
+    const ed = installEditor("<h2>実績</h2><p>SLA遵守率 98%</p>");
+    // Wait for the page to push the comment into the editor as a decoration —
+    // the bubble reads its target from that decoration set.
+    await waitFor(() =>
+      expect(ed.view.dom.querySelectorAll(".comment-mark").length).toBeGreaterThan(0)
+    );
+    return { user, ed };
+  }
+
+  /** Selects the range the comment's highlight covers. */
+  async function selectHighlight(ed: Editor) {
+    const mark = ed.view.dom.querySelector(".comment-mark") as HTMLElement;
+    const from = ed.view.posAtDOM(mark, 0);
+    await act(async () => {
+      ed.commands.setTextSelection({ from, to: from + 2 });
+    });
+  }
+
+  const openComment: CommentJSON = {
+    id: "c-300",
+    scope: "inline",
+    body: "ここ直して",
+    status: "open",
+    author: "human",
+    anchor: { heading_path: ["## 実績"], snippet: "SLA遵守率 98%", occurrence: 0 },
+    context: { heading_path: ["実績"], line_range: [74, 74] },
+    orphan: false,
+  };
+
+  beforeEach(() => {
+    localStorage.clear();
+    useOpenFiles.setState({ files: [], activeIdByRoot: {} });
+    useToast.setState({ toasts: [] });
+    useConfirm.setState({ pending: null, queue: [] });
+    useEditorInstance.setState({ editor: null });
+    Element.prototype.scrollIntoView = vi.fn();
+  });
+
+  afterEach(() => {
+    fakeEditor?.destroy();
+    fakeEditor = null;
+    useEditorInstance.setState({ editor: null });
+  });
+
+  it("コメント上を選択すると編集・削除がバブルに出る", async () => {
+    const { ed } = await openWithComment(openComment);
+
+    await selectHighlight(ed);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("selection-bubble-edit-comment")).toBeEnabled()
+    );
+    expect(screen.getByTestId("selection-bubble-delete-comment")).toBeEnabled();
+  });
+
+  it("コメントに掛からない選択では編集・削除は出ない", async () => {
+    const { ed } = await openWithComment(openComment);
+
+    // The "実績" heading sits before the highlighted paragraph.
+    await act(async () => {
+      ed.commands.setTextSelection({ from: 1, to: 3 });
+    });
+
+    await waitFor(() =>
+      expect(screen.getByTestId("selection-bubble")).toBeInTheDocument()
+    );
+    expect(
+      screen.queryByTestId("selection-bubble-edit-comment")
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("selection-bubble-delete-comment")
+    ).not.toBeInTheDocument();
+  });
+
+  it("編集は本文入りのダイアログを開く", async () => {
+    const { user, ed } = await openWithComment(openComment);
+    await selectHighlight(ed);
+
+    await user.click(await screen.findByTestId("selection-bubble-edit-comment"));
+
+    const input = await screen.findByTestId("comment-body-input");
+    expect(input).toHaveValue("ここ直して");
+  });
+
+  it("削除は DELETE を投げる", async () => {
+    const { user, ed } = await openWithComment(openComment);
+    const { http, HttpResponse } = await import("msw");
+    const { server } = await import("@/test/mocks/server");
+    let deleted: string | null = null;
+    server.use(
+      http.delete("http://localhost:8080/api/comments/*", ({ request }) => {
+        deleted = new URL(request.url).searchParams.get("id");
+        return HttpResponse.json({ ok: true });
+      })
+    );
+    await selectHighlight(ed);
+
+    await user.click(await screen.findByTestId("selection-bubble-delete-comment"));
+
+    await waitFor(() => expect(deleted).toBe("c-300"));
+  });
+
+  it("AI のコメントは編集・削除とも無効になる", async () => {
+    const { ed } = await openWithComment({ ...openComment, author: "ai" });
+    await selectHighlight(ed);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("selection-bubble-edit-comment")).toBeDisabled()
+    );
+    expect(screen.getByTestId("selection-bubble-delete-comment")).toBeDisabled();
+  });
+});
+
 describe("EditorPage jump to comment (#167)", () => {
   let fakeEditor: Editor | null = null;
 
