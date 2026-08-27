@@ -121,7 +121,12 @@ export function commentIdsInRange(
   const seen = new Set<string>();
   return pState.deco
     .find(from, to)
-    .slice()
+    // `find` also returns decorations that merely touch the range (a
+    // decoration ending exactly at `from`, or starting exactly at `to`).
+    // Both are half-open ranges, so touching is not overlapping: without this
+    // filter, selecting the text right after a comment would offer 編集 / 削除
+    // for that comment — and 削除 asks for no confirmation.
+    .filter((d) => d.from < to && d.to > from)
     .sort((a, b) => a.to - a.from - (b.to - b.from))
     .map((d) => (d.spec as { commentId?: string } | null)?.commentId)
     .filter((id): id is string => {

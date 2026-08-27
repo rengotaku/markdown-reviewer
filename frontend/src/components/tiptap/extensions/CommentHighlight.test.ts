@@ -299,6 +299,23 @@ describe("commentIdsInRange (#238)", () => {
     expect(commentIdsInRange(ed.state, 11, 13)).toEqual(["inner", "outer"]);
   });
 
+  it("excludes a comment the selection only touches", () => {
+    const ed = makeEditor("<p>アクセストークンは 24 時間で失効する</p>");
+    ed.commands.setCommentHighlights([
+      {
+        id: "c1",
+        status: "open",
+        anchor: { heading_path: [], snippet: "24 時間", occurrence: 0 },
+      },
+    ]);
+    // "24 時間" occupies [11, 16) in the paragraph.
+    expect(commentIdsInRange(ed.state, 11, 13)).toEqual(["c1"]);
+    // Selecting from the highlight's end onwards touches it but does not
+    // overlap — the same for a selection ending where it starts.
+    expect(commentIdsInRange(ed.state, 16, 18)).toEqual([]);
+    expect(commentIdsInRange(ed.state, 9, 11)).toEqual([]);
+  });
+
   it("lists a multi-anchor comment once", () => {
     const ed = makeEditor("<h2>A</h2><p>target</p><h2>B</h2><p>target</p>");
     ed.commands.setCommentHighlights([
