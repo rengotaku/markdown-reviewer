@@ -1106,6 +1106,8 @@ export function EditorPage() {
   const [selectionBubble, setSelectionBubble] = useState<{
     top: number;
     left: number;
+    /** Innermost comment the selection overlaps, if any. */
+    commentId?: string;
   } | null>(null);
   // Comment highlight the pointer is resting on, with the mark's viewport
   // rect. Hovering an existing highlight is how 編集 / 削除 are reached — the
@@ -1168,6 +1170,7 @@ export function EditorPage() {
         setSelectionBubble({
           top: Math.min(start.top, end.top),
           left: end.left,
+          commentId: commentIdsInRange(editor.state, from, to)[0],
         });
       } catch {
         // View not mounted (or the position is not laid out yet) — no anchor
@@ -1675,9 +1678,31 @@ export function EditorPage() {
     openGlobalCommentDialog();
   };
 
-  // The hovered comment, looked up from the live list rather than cached with
-  // the hover state so a delete elsewhere makes the menu disappear.
-  const bubbleComment = comments.find((c) => c.id === hoverComment?.commentId);
+  // One menu for both triggers: hovering a comment highlight and selecting a
+  // range open the same vertical menu, which lists whichever actions apply
+  // (追加 needs a selection, 編集 / 削除 need a comment). Hover wins the anchor
+  // when both are live, since the pointer is what the user is aiming with.
+  const menuAnchor = hoverComment
+    ? {
+        rect: new DOMRect(
+          hoverComment.left,
+          hoverComment.top,
+          hoverComment.right - hoverComment.left,
+          hoverComment.bottom - hoverComment.top
+        ),
+        placement: "bottom-start" as const,
+      }
+    : selectionBubble
+      ? {
+          rect: new DOMRect(selectionBubble.left, selectionBubble.top, 0, 0),
+          placement: "top-start" as const,
+        }
+      : null;
+  // Looked up from the live list rather than cached with the trigger, so a
+  // delete elsewhere makes the entries disappear.
+  const menuCommentId = hoverComment?.commentId ?? selectionBubble?.commentId;
+  const bubbleComment = comments.find((c) => c.id === menuCommentId);
+  const menuOpen = !!menuAnchor && (canAddComment || !!bubbleComment);
   // AI-authored comments are read-only to the human reviewer; see
   // CommentSidePane's isAiAuthored for the same "ai" author marker.
   const bubbleCommentIsAiAuthored = bubbleComment?.author === "ai";
@@ -2592,59 +2617,17 @@ export function EditorPage() {
         </Box>
       )}
 
-      {selectionBubble && canAddComment && (
+      {menuOpen && menuAnchor && (
         <Popper
           open
-          placement="top-start"
-          // The bubble anchors to the selection rectangle, which is not a DOM
-          // element — a virtual anchor keeps Popper's flip/shift behavior
-          // (staying on screen near a viewport edge) without one.
-          anchorEl={{
-            getBoundingClientRect: () =>
-              new DOMRect(selectionBubble.left, selectionBubble.top, 0, 0),
-          }}
-          modifiers={[{ name: "offset", options: { offset: [0, 8] } }]}
+          placement={menuAnchor.placement}
+          // Anchored to a rect (a selection range, or the hovered mark) rather
+          // than an element — a virtual anchor keeps Popper's flip/shift
+          // behavior near a viewport edge without one.
+          anchorEl={{ getBoundingClientRect: () => menuAnchor.rect }}
+          modifiers={[{ name: "offset", options: { offset: [0, 6] } }]}
           sx={{ zIndex: (theme) => theme.zIndex.tooltip }}
-          data-testid="selection-bubble"
-        >
-          <Paper elevation={4} sx={{ p: 0.5 }}>
-            <Button
-              size="small"
-              fullWidth
-              startIcon={<CommentIcon fontSize="small" />}
-              sx={{ justifyContent: "flex-start" }}
-              // Keep the selection alive: focusing the button would collapse
-              // it in some browsers before the handler reads from/to.
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={handleAddCommentClick}
-              data-testid="selection-bubble-add-comment"
-            >
-              コメント追加
-            </Button>
-          </Paper>
-        </Popper>
-      )}
-
-      {/* Can coexist with the selection bubble: that one sits above the
-          selection and this one below the highlight. Suppressing it while a
-          selection is live would make hover dead right after commenting,
-          when the commented range is still selected. */}
-      {hoverComment && bubbleComment && (
-        <Popper
-          open
-          placement="bottom-start"
-          anchorEl={{
-            getBoundingClientRect: () =>
-              new DOMRect(
-                hoverComment.left,
-                hoverComment.top,
-                hoverComment.right - hoverComment.left,
-                hoverComment.bottom - hoverComment.top
-              ),
-          }}
-          modifiers={[{ name: "offset", options: { offset: [0, 4] } }]}
-          sx={{ zIndex: (theme) => theme.zIndex.tooltip }}
-          data-testid="comment-hover-menu"
+          data-testid="editor-comment-menu"
           // The pointer has to cross the gap between the highlight and the
           // menu, so the menu itself keeps the hover alive.
           onMouseEnter={() => {
@@ -2656,50 +2639,73 @@ export function EditorPage() {
           }}
         >
           <Paper elevation={4} sx={{ p: 0.5, minWidth: 180 }}>
-            <Typography
-              variant="caption"
-              color="text.secondary"
-              sx={{ display: "block", px: 1, pt: 0.25, pb: 0.5 }}
-              data-testid="comment-hover-menu-target"
-            >
-              {commentSummary(bubbleComment.body)}
-            </Typography>
-            <Tooltip title={bubbleEditDisabledReason ?? ""} placement="right">
-              {/* A disabled MUI Button swallows hover events, so the tooltip
-                  carrying the reason needs a live wrapper. */}
-              <span>
-                <Button
-                  size="small"
-                  fullWidth
-                  startIcon={<EditOutlinedIcon fontSize="small" />}
-                  sx={{ justifyContent: "flex-start" }}
-                  disabled={!!bubbleEditDisabledReason}
-                  onClick={handleBubbleEditComment}
-                  data-testid="comment-hover-edit"
-                >
-                  コメント編集
-                </Button>
-              </span>
-            </Tooltip>
-            <Tooltip title={bubbleDeleteDisabledReason ?? ""} placement="right">
-              <span>
-                <Button
-                  size="small"
-                  fullWidth
-                  color="error"
-                  startIcon={<DeleteOutlineIcon fontSize="small" />}
-                  sx={{ justifyContent: "flex-start" }}
-                  disabled={
-                    !!bubbleDeleteDisabledReason ||
-                    deletingCommentId === bubbleComment.id
-                  }
-                  onClick={handleBubbleDeleteComment}
-                  data-testid="comment-hover-delete"
-                >
-                  コメント削除
-                </Button>
-              </span>
-            </Tooltip>
+            {bubbleComment && (
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ display: "block", px: 1, pt: 0.25, pb: 0.5 }}
+                data-testid="editor-comment-menu-target"
+              >
+                {commentSummary(bubbleComment.body)}
+              </Typography>
+            )}
+            {canAddComment && (
+              <Button
+                size="small"
+                fullWidth
+                startIcon={<CommentIcon fontSize="small" />}
+                sx={{ justifyContent: "flex-start" }}
+                // Keep the selection alive: focusing the button would collapse
+                // it in some browsers before the handler reads from/to.
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={handleAddCommentClick}
+                data-testid="editor-menu-add-comment"
+              >
+                コメント追加
+              </Button>
+            )}
+            {bubbleComment && (
+              <>
+                <Tooltip title={bubbleEditDisabledReason ?? ""} placement="right">
+                  {/* A disabled MUI Button swallows hover events, so the
+                      tooltip carrying the reason needs a live wrapper. */}
+                  <span>
+                    <Button
+                      size="small"
+                      fullWidth
+                      startIcon={<EditOutlinedIcon fontSize="small" />}
+                      sx={{ justifyContent: "flex-start" }}
+                      disabled={!!bubbleEditDisabledReason}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={handleBubbleEditComment}
+                      data-testid="editor-menu-edit-comment"
+                    >
+                      コメント編集
+                    </Button>
+                  </span>
+                </Tooltip>
+                <Tooltip title={bubbleDeleteDisabledReason ?? ""} placement="right">
+                  <span>
+                    <Button
+                      size="small"
+                      fullWidth
+                      color="error"
+                      startIcon={<DeleteOutlineIcon fontSize="small" />}
+                      sx={{ justifyContent: "flex-start" }}
+                      disabled={
+                        !!bubbleDeleteDisabledReason ||
+                        deletingCommentId === bubbleComment.id
+                      }
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={handleBubbleDeleteComment}
+                      data-testid="editor-menu-delete-comment"
+                    >
+                      コメント削除
+                    </Button>
+                  </span>
+                </Tooltip>
+              </>
+            )}
           </Paper>
         </Popper>
       )}
