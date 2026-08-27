@@ -1386,6 +1386,9 @@ describe("EditorPage line numbers toggle (#234)", () => {
 
 describe("EditorPage selection menu (#233)", () => {
   let fakeEditor: Editor | null = null;
+  // jsdom has no layout, so posAtCoords is stubbed with the document position
+  // the pointer is standing in for.
+  let pointerPos: number | null = null;
 
   beforeEach(() => {
     localStorage.clear();
@@ -1420,8 +1423,16 @@ describe("EditorPage selection menu (#233)", () => {
       left: 50,
       right: 150,
     });
+    fakeEditor.view.posAtCoords = () =>
+      pointerPos === null ? null : { pos: pointerPos, inside: -1 };
     useEditorInstance.getState().setEditor(fakeEditor);
     return fakeEditor;
+  }
+
+  /** Rests the pointer on the given document position inside the editor. */
+  async function hoverAt(ed: Editor, pos: number) {
+    pointerPos = pos;
+    fireEvent.mouseMove(ed.view.dom, { clientX: 10, clientY: 10 });
   }
 
   async function openReadme() {
@@ -1437,7 +1448,7 @@ describe("EditorPage selection menu (#233)", () => {
     return user;
   }
 
-  it("選択すると右クリックなしでバブルが出て、解除すると消える", async () => {
+  it("選択の上にポインタを置くとコメント追加が出る", async () => {
     await openReadme();
     const ed = installEditor("<p>SLA遵守率 98%</p>");
 
@@ -1446,25 +1457,38 @@ describe("EditorPage selection menu (#233)", () => {
     await act(async () => {
       ed.commands.setTextSelection({ from: 1, to: 5 });
     });
-    await waitFor(() =>
-      expect(screen.getByTestId("editor-comment-menu")).toBeInTheDocument()
-    );
+    // Selecting alone does not open it — hover is the only trigger.
+    expect(screen.queryByTestId("editor-comment-menu")).not.toBeInTheDocument();
 
-    await act(async () => {
-      ed.commands.setTextSelection({ from: 1, to: 1 });
-    });
+    await hoverAt(ed, 3);
     await waitFor(() =>
-      expect(screen.queryByTestId("editor-comment-menu")).not.toBeInTheDocument()
+      expect(screen.getByTestId("editor-menu-add-comment")).toBeInTheDocument()
     );
   });
 
-  it("バブルからコメント追加ダイアログを開ける", async () => {
+  it("選択の外にポインタがあるとメニューは出ない", async () => {
+    await openReadme();
+    const ed = installEditor("<p>SLA遵守率 98%</p>");
+
+    await act(async () => {
+      ed.commands.setTextSelection({ from: 1, to: 5 });
+    });
+    await hoverAt(ed, 8);
+
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 300));
+    });
+    expect(screen.queryByTestId("editor-comment-menu")).not.toBeInTheDocument();
+  });
+
+  it("メニューからコメント追加ダイアログを開ける", async () => {
     const user = await openReadme();
     const ed = installEditor("<p>SLA遵守率 98%</p>");
 
     await act(async () => {
       ed.commands.setTextSelection({ from: 1, to: 5 });
     });
+    await hoverAt(ed, 3);
     await user.click(await screen.findByTestId("editor-menu-add-comment"));
 
     await waitFor(() =>
@@ -1497,6 +1521,7 @@ describe("EditorPage comment menu (#238)", () => {
       left: 50,
       right: 150,
     });
+    fakeEditor.view.posAtCoords = () => null;
     useEditorInstance.getState().setEditor(fakeEditor);
     return fakeEditor;
   }
@@ -1542,18 +1567,22 @@ describe("EditorPage comment menu (#238)", () => {
     return { user, ed };
   }
 
-  /** Hovers the comment's highlight and waits for the menu to open. */
+  /** Rests the pointer on the comment's highlight and waits for the menu. */
   async function hoverHighlight(ed: Editor) {
-    const mark = ed.view.dom.querySelector(".comment-mark") as HTMLElement;
-    // jsdom has no layout, so posAtCoords cannot resolve — the handler then
-    // falls back to the mark's data-comment-id, which is what we exercise.
-    fireEvent.mouseOver(mark);
-    // Wait for the comment entries specifically: with a live selection the
-    // menu itself may already be on screen with only 追加 in it.
-    await waitFor(() =>
-      expect(screen.getByTestId("editor-menu-edit-comment")).toBeInTheDocument()
-    );
-    return mark;
+    // jsdom has no layout, so posAtCoords returns null (stubbed in
+    // installEditor) and the handler falls back to the mark's
+    // data-comment-id — the path this exercises.
+    //
+    // Re-queried and re-fired on every retry: pointer samples are throttled
+    // (a single move can land inside the previous sample's window), and the
+    // decorations are rebuilt on every doc/comment change, which detaches the
+    // element a move would otherwise be dispatched to.
+    await waitFor(() => {
+      const el = ed.view.dom.querySelector(".comment-mark") as HTMLElement;
+      fireEvent.mouseMove(el, { clientX: 10, clientY: 10 });
+      expect(screen.getByTestId("editor-menu-edit-comment")).toBeInTheDocument();
+    });
+    return ed.view.dom.querySelector(".comment-mark") as HTMLElement;
   }
 
   const openComment: CommentJSON = {
@@ -1585,7 +1614,7 @@ describe("EditorPage comment menu (#238)", () => {
   it("ハイライトにホバーするだけで編集・削除が出る", async () => {
     const { ed } = await openWithComment(openComment);
 
-    const mark = await hoverHighlight(ed);
+    await hoverHighlight(ed);
 
     expect(screen.getByTestId("editor-menu-edit-comment")).toBeEnabled();
     expect(screen.getByTestId("editor-menu-delete-comment")).toBeEnabled();
@@ -1594,8 +1623,8 @@ describe("EditorPage comment menu (#238)", () => {
       "ここ直して"
     );
 
-    // Leaving the highlight closes it again.
-    fireEvent.mouseOut(mark, { relatedTarget: document.body });
+    // Leaving the editor closes it again.
+    fireEvent.mouseLeave(ed.view.dom);
     await waitFor(() =>
       expect(screen.queryByTestId("editor-comment-menu")).not.toBeInTheDocument()
     );
@@ -1606,7 +1635,7 @@ describe("EditorPage comment menu (#238)", () => {
 
     // The "実績" heading sits before the highlighted paragraph.
     const heading = ed.view.dom.querySelector("h2") as HTMLElement;
-    fireEvent.mouseOver(heading);
+    fireEvent.mouseMove(heading, { clientX: 10, clientY: 10 });
 
     await act(async () => {
       await new Promise((r) => setTimeout(r, 300));
@@ -1614,16 +1643,13 @@ describe("EditorPage comment menu (#238)", () => {
     expect(screen.queryByTestId("editor-comment-menu")).not.toBeInTheDocument();
   });
 
-  it("選択が残っていてもホバーで開き直せる", async () => {
+  it("選択が残っていてもハイライトのホバーで開く", async () => {
     // Right after commenting the commented range is still selected; hovering
     // the highlight must still bring up the same menu.
     const { ed } = await openWithComment(openComment);
     await act(async () => {
       ed.commands.setTextSelection({ from: 1, to: 3 });
     });
-    await waitFor(() =>
-      expect(screen.getByTestId("editor-comment-menu")).toBeInTheDocument()
-    );
 
     await hoverHighlight(ed);
 

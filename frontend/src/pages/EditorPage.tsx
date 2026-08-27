@@ -98,8 +98,10 @@ function basename(path: string): string {
 const TARGET_SNIPPET_LENGTH = 60;
 /** Pointer dwell before a comment highlight opens its 編集 / 削除 menu. */
 const COMMENT_HOVER_OPEN_MS = 150;
-/** Grace period after the pointer leaves the highlight or its menu. */
+/** Grace period after the pointer leaves the text or the menu. */
 const COMMENT_HOVER_CLOSE_MS = 250;
+/** Minimum gap between pointer samples — posAtCoords per mousemove is wasteful. */
+const HOVER_SAMPLE_MS = 60;
 /** How much of a comment body to quote when naming the delete target. */
 const COMMENT_SUMMARY_LENGTH = 40;
 const COMMENT_ID_PARAM = "comment_id";
@@ -1100,24 +1102,23 @@ export function EditorPage() {
   // Comment whose DELETE is in flight, if any (see handleBubbleDeleteComment).
   const [deletingCommentId, setDeletingCommentId] = useState<string | null>(null);
 
-  // Viewport position of the floating "コメント追加" bubble shown while a
-  // non-empty selection sits in the editor (#233). Null = hidden. Kept in
-  // viewport coordinates so it can anchor a Popper without a real element.
-  const [selectionBubble, setSelectionBubble] = useState<{
-    top: number;
-    left: number;
-    /** Innermost comment the selection overlaps, if any. */
-    commentId?: string;
-  } | null>(null);
-  // Comment highlight the pointer is resting on, with the mark's viewport
-  // rect. Hovering an existing highlight is how 編集 / 削除 are reached — the
-  // selection bubble is for adding a comment to a fresh range, and an
-  // already-commented span should not have to be re-selected to act on it.
-  // Set while the pointer rests on the hover menu itself, so the grace timer
-  // armed when it left the highlight does not close it out from under them.
+  // Set while the pointer rests on the menu itself, so the grace timer armed
+  // when it left the text does not close it out from under them.
   const hoverMenuHeld = useRef(false);
-  const [hoverComment, setHoverComment] = useState<{
-    commentId: string;
+  // What the pointer was last resting on, so repeated samples over the same
+  // thing do not re-arm the timers. A component-level ref rather than an
+  // effect-local variable because every path that closes the menu has to
+  // clear it too — otherwise returning to the same spot is deduped away and
+  // the menu never reopens.
+  const hoverKey = useRef<string | null>(null);
+  // What the pointer is resting on in the editor, with the rect to anchor the
+  // menu to. Hover is the *only* trigger: resting on a comment highlight
+  // offers 編集 / 削除, resting inside the current selection offers コメント追加,
+  // and a selection inside a comment offers all three from the one menu.
+  const [hoverTarget, setHoverTarget] = useState<{
+    commentId?: string;
+    /** Pointer is inside the live (non-empty) selection. */
+    canAdd: boolean;
     top: number;
     left: number;
     bottom: number;
@@ -1137,108 +1138,18 @@ export function EditorPage() {
     };
   }, [editor]);
 
-  // Selection → floating "コメント追加" bubble (#233), so adding a comment no
-  // longer requires knowing about the right-click menu. Deliberately does not
-  // open the dialog itself: selecting text while reading is common, and a
-  // dialog that steals focus every time would be worse than the old flow.
-  //
-  // Position is recomputed on every selection/scroll change and while the
-  // pointer is down the bubble stays hidden — otherwise it would chase the
-  // cursor mid-drag.
-  useEffect(() => {
-    // No editor (or a destroyed one) means there is no selection to anchor to.
-    // The bubble is gated on `canAddComment` at render time, which is false
-    // without an editor, so there is nothing to clear here.
-    if (!editor || editor.isDestroyed) return;
-
-    const update = () => {
-      if (pointerIsDown.current) {
-        setSelectionBubble(null);
-        return;
-      }
-      const { from, to, empty } = editor.state.selection;
-      if (empty || from === to) {
-        setSelectionBubble(null);
-        return;
-      }
-      try {
-        const start = editor.view.coordsAtPos(from);
-        const end = editor.view.coordsAtPos(to);
-        // Anchor on the selection's end, not its middle: a drag runs left to
-        // right, so the pointer/caret is already at the end and the bubble
-        // lands under the hand instead of back at the center of the range.
-        setSelectionBubble({
-          top: Math.min(start.top, end.top),
-          left: end.left,
-          commentId: commentIdsInRange(editor.state, from, to)[0],
-        });
-      } catch {
-        // View not mounted (or the position is not laid out yet) — no anchor
-        // to place the bubble against, so leave it hidden rather than guess.
-        setSelectionBubble(null);
-      }
-    };
-
-    // Clear the gesture flag here rather than relying on the contextmenu
-    // effect's own pointerup listener: both are capture-phase listeners on
-    // window, so whichever registered first runs first, and reading a flag
-    // the *other* handler is responsible for clearing left the bubble hidden
-    // after every drag-select (found in the browser; jsdom drives selection
-    // through the editor API and never exercises the ordering).
-    const onPointerUp = () => {
-      pointerIsDown.current = false;
-      update();
-    };
-    const onPointerDown = () => {
-      pointerIsDown.current = true;
-    };
-
-    // Capture phase: ProseMirror handles pointerdown itself, so the flag has
-    // to be set before it runs. The view may not be mounted yet at the moment
-    // the editor object lands in the store, so attach lazily and retry on
-    // "create".
-    let dom: HTMLElement | undefined;
-    const attachPointerDown = () => {
-      if (dom) return;
-      try {
-        dom = editor.view.dom as HTMLElement;
-      } catch {
-        return; // view not ready yet
-      }
-      dom.addEventListener("pointerdown", onPointerDown, true);
-    };
-    attachPointerDown();
-    editor.on("create", attachPointerDown);
-
-    update();
-    editor.on("selectionUpdate", update);
-    editor.on("transaction", update);
-    window.addEventListener("pointerup", onPointerUp, true);
-    window.addEventListener("pointercancel", onPointerUp, true);
-    window.addEventListener("scroll", update, true);
-    window.addEventListener("resize", update);
-    return () => {
-      editor.off("create", attachPointerDown);
-      dom?.removeEventListener("pointerdown", onPointerDown, true);
-      editor.off("selectionUpdate", update);
-      editor.off("transaction", update);
-      window.removeEventListener("pointerup", onPointerUp, true);
-      window.removeEventListener("pointercancel", onPointerUp, true);
-      window.removeEventListener("scroll", update, true);
-      window.removeEventListener("resize", update);
-    };
-  }, [editor]);
-
-  // Hover a comment highlight → its 編集 / 削除 menu. Decorations are not React
-  // elements, so the listeners go on the editor's DOM and the menu is anchored
-  // to the hovered mark's rect. A dwell before opening and a grace period
-  // after leaving keep the menu from flickering while the pointer crosses the
-  // text, and the grace also covers the gap between the mark and the menu.
+  // Pointer position → the comment menu. Decorations are not React elements,
+  // so the listeners live on the editor's DOM and the menu is anchored to a
+  // rect. A dwell before opening and a grace period after leaving keep it from
+  // flickering as the pointer crosses text; the grace also covers the gap the
+  // pointer has to travel to reach the menu.
   useEffect(() => {
     if (!editor || editor.isDestroyed) return;
 
     let openTimer: ReturnType<typeof setTimeout> | undefined;
     let closeTimer: ReturnType<typeof setTimeout> | undefined;
+    let lastAt = 0;
+    let lastEvent: MouseEvent | null = null;
     const clearTimers = () => {
       if (openTimer) clearTimeout(openTimer);
       if (closeTimer) clearTimeout(closeTimer);
@@ -1246,66 +1157,125 @@ export function EditorPage() {
       closeTimer = undefined;
     };
 
-    const commentIdAt = (markEl: HTMLElement, ev: MouseEvent): string | undefined => {
-      // Overlapping highlights render as split spans whose merged attributes
-      // keep only one id, so ask the decoration set which comment actually
-      // sits under the pointer (innermost first) and fall back to the DOM.
-      try {
-        const pos = editor.view.posAtCoords({ left: ev.clientX, top: ev.clientY });
-        if (pos) {
-          const id = commentIdsInRange(editor.state, pos.pos, pos.pos + 1)[0];
-          if (id) return id;
-        }
-      } catch {
-        // No layout (or the coords fall outside the doc) — use the attribute.
-      }
-      return markEl.getAttribute("data-comment-id") ?? undefined;
-    };
-
-    const onOver = (e: Event) => {
-      const ev = e as MouseEvent;
+    type Target = NonNullable<typeof hoverTarget>;
+    const targetAt = (ev: MouseEvent): Target | null => {
       const markEl = (ev.target as HTMLElement | null)?.closest?.(
         "[data-comment-id]"
       ) as HTMLElement | null;
-      if (!markEl) return;
-      const commentId = commentIdAt(markEl, ev);
-      if (!commentId) return;
-      clearTimers();
-      const r = markEl.getBoundingClientRect();
-      openTimer = setTimeout(() => {
-        setHoverComment({
-          commentId,
-          top: r.top,
-          left: r.left,
-          bottom: r.bottom,
-          right: r.right,
-        });
-      }, COMMENT_HOVER_OPEN_MS);
+      let pos: { pos: number } | null = null;
+      try {
+        pos = editor.view.posAtCoords({ left: ev.clientX, top: ev.clientY });
+      } catch {
+        pos = null; // no layout (jsdom) — fall back to the DOM below
+      }
+      // Overlapping highlights render as split spans whose merged attributes
+      // keep only one id, so ask the decoration set which comment sits under
+      // the pointer (innermost first) and fall back to the attribute.
+      const commentId =
+        (pos ? commentIdsInRange(editor.state, pos.pos, pos.pos + 1)[0] : undefined) ??
+        markEl?.getAttribute("data-comment-id") ??
+        undefined;
+      const { from, to, empty } = editor.state.selection;
+      const canAdd =
+        !empty && from !== to && !!pos && pos.pos >= from && pos.pos <= to;
+      if (!commentId && !canAdd) return null;
+      const r = markEl
+        ? markEl.getBoundingClientRect()
+        : new DOMRect(ev.clientX, ev.clientY, 0, 0);
+      return {
+        commentId,
+        canAdd,
+        top: r.top,
+        left: r.left,
+        bottom: r.bottom,
+        right: r.right,
+      };
     };
 
-    const onOut = (e: Event) => {
+    const update = (ev: MouseEvent) => {
+      const next = targetAt(ev);
+      const key = next ? `${next.commentId ?? ""}|${next.canAdd}` : null;
+      if (key === hoverKey.current) return;
+      hoverKey.current = key;
+      clearTimers();
+      if (!next) {
+        closeTimer = setTimeout(() => {
+          if (!hoverMenuHeld.current) {
+            setHoverTarget(null);
+            hoverKey.current = null;
+          }
+        }, COMMENT_HOVER_CLOSE_MS);
+        return;
+      }
+      openTimer = setTimeout(() => setHoverTarget(next), COMMENT_HOVER_OPEN_MS);
+    };
+
+    const onMove = (e: Event) => {
       const ev = e as MouseEvent;
-      const from = (ev.target as HTMLElement | null)?.closest?.("[data-comment-id]");
-      if (!from) return;
-      // Moving within the same highlight (across its split spans) is not a
-      // leave — only schedule the close when the pointer lands elsewhere.
-      const to = (ev.relatedTarget as HTMLElement | null)?.closest?.(
-        "[data-comment-id]"
-      );
-      if (to === from) return;
+      lastEvent = ev;
+      // Mid-drag the selection is still being made and the menu would chase
+      // the cursor, so wait for the release (handled in onPointerUp).
+      if (pointerIsDown.current) return;
+      const now = performance.now();
+      if (now - lastAt < HOVER_SAMPLE_MS) return;
+      lastAt = now;
+      update(ev);
+    };
+
+    const onLeave = () => {
       clearTimers();
       closeTimer = setTimeout(() => {
-        if (!hoverMenuHeld.current) setHoverComment(null);
+        if (!hoverMenuHeld.current) {
+          setHoverTarget(null);
+          // Forget what was last under the pointer, or coming back to the
+          // same highlight would be deduped away and never reopen.
+          hoverKey.current = null;
+        }
       }, COMMENT_HOVER_CLOSE_MS);
     };
 
-    const dom = editor.view.dom as HTMLElement;
-    dom.addEventListener("mouseover", onOver);
-    dom.addEventListener("mouseout", onOut);
+    const onPointerDown = () => {
+      pointerIsDown.current = true;
+      clearTimers();
+      hoverKey.current = null;
+      setHoverTarget(null);
+    };
+    // A drag-select ends with the pointer sitting on the new selection and no
+    // further mousemove, so re-evaluate from the last known position.
+    const onPointerUp = () => {
+      if (!pointerIsDown.current) return;
+      pointerIsDown.current = false;
+      if (lastEvent) update(lastEvent);
+    };
+
+    let dom: HTMLElement | undefined;
+    const attach = () => {
+      if (dom) return;
+      try {
+        dom = editor.view.dom as HTMLElement;
+      } catch {
+        return; // view not ready yet
+      }
+      // Capture phase for pointerdown: ProseMirror handles it itself, so the
+      // flag has to be set before it runs.
+      dom.addEventListener("pointerdown", onPointerDown, true);
+      dom.addEventListener("mousemove", onMove);
+      dom.addEventListener("mouseleave", onLeave);
+    };
+    attach();
+    editor.on("create", attach);
+    // On window, so a release outside the editor still ends the gesture.
+    window.addEventListener("pointerup", onPointerUp, true);
+    window.addEventListener("pointercancel", onPointerUp, true);
+
     return () => {
       clearTimers();
-      dom.removeEventListener("mouseover", onOver);
-      dom.removeEventListener("mouseout", onOut);
+      editor.off("create", attach);
+      window.removeEventListener("pointerup", onPointerUp, true);
+      window.removeEventListener("pointercancel", onPointerUp, true);
+      dom?.removeEventListener("pointerdown", onPointerDown, true);
+      dom?.removeEventListener("mousemove", onMove);
+      dom?.removeEventListener("mouseleave", onLeave);
     };
   }, [editor]);
 
@@ -1678,33 +1648,25 @@ export function EditorPage() {
     openGlobalCommentDialog();
   };
 
-  // One menu for both triggers: hovering a comment highlight and selecting a
-  // range open the same vertical menu, which lists whichever actions apply
-  // (追加 needs a selection, 編集 / 削除 need a comment). Hover wins the anchor
-  // when both are live, since the pointer is what the user is aiming with.
-  const menuAnchor = hoverComment
+  // One menu, one trigger: whatever the pointer is resting on decides which
+  // entries it carries. Anchored under the hovered highlight when there is
+  // one, otherwise at the pointer inside the selection.
+  const menuAnchor = hoverTarget
     ? {
         rect: new DOMRect(
-          hoverComment.left,
-          hoverComment.top,
-          hoverComment.right - hoverComment.left,
-          hoverComment.bottom - hoverComment.top
+          hoverTarget.left,
+          hoverTarget.top,
+          hoverTarget.right - hoverTarget.left,
+          hoverTarget.bottom - hoverTarget.top
         ),
         placement: "bottom-start" as const,
       }
-    : selectionBubble
-      ? {
-          rect: new DOMRect(selectionBubble.left, selectionBubble.top, 0, 0),
-          placement: "top-start" as const,
-        }
-      : null;
+    : null;
   // Looked up from the live list rather than cached with the trigger, so a
   // delete elsewhere makes the entries disappear.
-  const menuCommentId = hoverComment?.commentId ?? selectionBubble?.commentId;
-  const bubbleComment = comments.find((c) => c.id === menuCommentId);
-  const menuOpen = !!menuAnchor && (canAddComment || !!bubbleComment);
-  // AI-authored comments are read-only to the human reviewer; see
-  // CommentSidePane's isAiAuthored for the same "ai" author marker.
+  const bubbleComment = comments.find((c) => c.id === hoverTarget?.commentId);
+  const menuCanAdd = !!hoverTarget?.canAdd && canAddComment;
+  const menuOpen = !!menuAnchor && (menuCanAdd || !!bubbleComment);
   const bubbleCommentIsAiAuthored = bubbleComment?.author === "ai";
   // Resolved comments are read-only until reopened — the backend rejects a
   // body edit with 409, so the bubble mirrors the side pane and disables it.
@@ -1741,7 +1703,8 @@ export function EditorPage() {
         });
         if (ok) {
         await handleDeleteComment(target.id);
-        setHoverComment(null);
+        setHoverTarget(null);
+        hoverKey.current = null;
       }
       } finally {
         setDeletingCommentId(null);
@@ -1754,7 +1717,8 @@ export function EditorPage() {
   const handleBubbleEditComment = () => {
     const target = bubbleComment;
     if (!target || bubbleEditDisabledReason) return;
-    setHoverComment(null);
+    setHoverTarget(null);
+    hoverKey.current = null;
     setCommentDialog({
       open: true,
       mode: "edit",
@@ -2635,7 +2599,8 @@ export function EditorPage() {
           }}
           onMouseLeave={() => {
             hoverMenuHeld.current = false;
-            setHoverComment(null);
+            setHoverTarget(null);
+            hoverKey.current = null;
           }}
         >
           <Paper elevation={4} sx={{ p: 0.5, minWidth: 180 }}>
@@ -2649,7 +2614,7 @@ export function EditorPage() {
                 {commentSummary(bubbleComment.body)}
               </Typography>
             )}
-            {canAddComment && (
+            {menuCanAdd && (
               <Button
                 size="small"
                 fullWidth
