@@ -88,9 +88,23 @@ mr reopen   <path> <id>                                  # resolved を open に
 mr open     <path> [--print]                             # Web UI で開く（--print: URL のみ出力）
 ```
 
-パスは絶対 / cwd 相対のどちらでもよい（設定ルート配下であること）。ルートは `REVIEW_ROOTS` 環境変数、無ければ launchd plist から自動解決する。
+パスは絶対 / cwd 相対のどちらでもよい。ルートは `REVIEW_ROOTS` 環境変数、無ければ launchd plist から自動解決する。
 
 `mr open` は渡されたパスから Web UI の `/{root}/{path}` deeplink を組み立てるので、手で作る必要はない。接続先は `MARKDOWN_REVIEWER_BASE_URL` → `PORT` → launchd plist の `PORT` → サーバ既定ポート（`8080`）の順に解決する。
+
+### ルート外のファイルを単発でレビューする
+
+設定ルートのどこにも属さないパスを `mr open` に渡すと、サーバの一時ルート `anonymous` に登録して開く。`REVIEW_ROOTS` を書き換える必要はない。
+
+```zsh
+mr open ~/some-other-repo/draft.md      # → http://localhost:8080/anonymous/draft.md
+```
+
+枠は1つだけで、別のファイルを開くと前のファイルは枠から降りる（そのとき前のファイルの sidecar も消える）。同じファイルを開き直す間はコメントは残る。登録はどこにも永続化しないので、サーバを再起動すれば枠は空になる。
+
+読み書きできるのは渡した1ファイルだけ。同じディレクトリの他のファイルは `anonymous` からは触れない。`anonymous` を開いている間はファイルツリーも出ない（1本しかないため）。
+
+サーバが起動していないと登録できないので、この経路は `mr open` が URL だけ出して終わることができない。
 
 ## コメントモデル（sidecar）
 

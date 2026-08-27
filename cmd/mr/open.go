@@ -26,9 +26,17 @@ func cmdOpen(args []string) error {
 	if len(pos) != 1 {
 		return fmt.Errorf("usage: mr open <path> [--comment ID] [--print]")
 	}
+	base := baseURL(launchdPort)
 	root, rel, _, err := resolvePath(pos[0])
 	if err != nil {
-		return err
+		// Outside every configured root: hand it to the server's ad-hoc
+		// slot instead of refusing (issue #240). The original error is
+		// dropped on purpose — registerAdhoc's failure says more about what
+		// to do next than "not under any configured root" does.
+		root, rel, err = registerAdhoc(base, pos[0])
+		if err != nil {
+			return err
+		}
 	}
 	commentID := flags["comment"]
 	if commentID != "" {
@@ -47,7 +55,7 @@ func cmdOpen(args []string) error {
 			return fmt.Errorf("comment %q not found in %s", commentID, rel)
 		}
 	}
-	link := deeplink(baseURL(launchdPort), root, rel, commentID)
+	link := deeplink(base, root, rel, commentID)
 	// Printed before the launch so a launcher failure still leaves the caller
 	// with a usable URL.
 	fmt.Println(link)

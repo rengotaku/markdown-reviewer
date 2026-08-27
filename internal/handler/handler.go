@@ -24,6 +24,10 @@ type Handler struct {
 	// PUTs targeting the same file can't both pass the If-Match check before
 	// either has written (see lockPath in files.go). Zero value is ready to
 	// use — no constructor wiring needed.
+	// onAdhocDir, when set, is called after the ad-hoc root is re-pointed so
+	// the file watcher can follow it (prev is "" the first time). See
+	// SetAdhocDirHook.
+	onAdhocDir func(prev, dir string)
 	writeLocks sync.Map
 }
 
@@ -46,6 +50,14 @@ func NewHandler(userService *service.UserService, roots *files.Roots, hub *event
 // channel (or never calling this) disables the gate.
 func (h *Handler) SetWatcherReady(ready <-chan struct{}) {
 	h.ready = ready
+}
+
+// SetAdhocDirHook wires the file watcher's SetAdhocDir into the handler, so
+// registering an ad-hoc file also starts watching its directory. Optional:
+// without it the ad-hoc root still works, it just falls back to the
+// frontend's polling rather than SSE push.
+func (h *Handler) SetAdhocDirHook(fn func(prev, dir string)) {
+	h.onAdhocDir = fn
 }
 
 func (h *Handler) Routes(staticHandler http.Handler) http.Handler {
@@ -86,6 +98,7 @@ func (h *Handler) Routes(staticHandler http.Handler) http.Handler {
 		api.GET("/review/*path", h.ReviewMarkdown)
 		api.POST("/ingest/*path", h.IngestFile)
 		api.GET("/revisions/*path", h.Revisions)
+		api.POST("/adhoc", h.Adhoc)
 		api.GET("/events", h.Events)
 	}
 
@@ -104,6 +117,9 @@ func (h *Handler) Health(c *gin.Context) {
 type ReviewRootJSON struct {
 	Name string `json:"name"`
 	Path string `json:"path"`
+	// Ephemeral marks the ad-hoc slot so the UI can render it without a
+	// file tree (there is only ever one file in it).
+	Ephemeral bool `json:"ephemeral,omitempty"`
 }
 
 // Config exposes the configured roots so the UI can render the root-tab bar.
@@ -121,7 +137,7 @@ func (h *Handler) Config(c *gin.Context) {
 	list := h.roots.List()
 	out := make([]ReviewRootJSON, len(list))
 	for i, root := range list {
-		out[i] = ReviewRootJSON{Name: root.Name, Path: root.Resolver.Root()}
+		out[i] = ReviewRootJSON{Name: root.Name, Path: root.Resolver.Root(), Ephemeral: root.Ephemeral}
 	}
 	def, defName := h.roots.Default()
 	defPath := ""

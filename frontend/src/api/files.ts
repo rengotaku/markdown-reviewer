@@ -87,6 +87,12 @@ function rootQuery(root: string | undefined, prefix: "?" | "&"): string {
 export interface ReviewRootEntry {
   name: string;
   path: string;
+  /**
+   * The ad-hoc slot (issue #240): one out-of-root file, registered at
+   * runtime and gone when the server restarts. It holds a single file, so
+   * the UI shows no file tree for it.
+   */
+  ephemeral?: boolean;
 }
 
 export interface ConfigResponse {

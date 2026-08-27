@@ -23,6 +23,12 @@ var (
 // Options tunes Resolver behavior. Zero value keeps the strict default:
 // any symlink whose target lands outside root is rejected.
 type Options struct {
+	// OnlyBase, when non-empty, narrows the resolver to a single file: the
+	// only relative path it will resolve is exactly this basename. The
+	// ad-hoc ("anonymous") root uses it so opening one out-of-root file
+	// doesn't hand out read/write access to every sibling in its directory.
+	OnlyBase string
+
 	// AllowSymlinkHub trusts symlinks that appear as *direct children* of
 	// root, treating each such link's target as an implicit sub-root.
 	// Deeper symlinks (or a hub-child that isn't itself a symlink) still
@@ -96,6 +102,9 @@ func (r *Resolver) Resolve(rel string) (string, error) {
 	cleaned := filepath.Clean(rel)
 	if cleaned == "." {
 		return "", ErrInvalidPath
+	}
+	if r.opts.OnlyBase != "" && cleaned != r.opts.OnlyBase {
+		return "", ErrPathTraversal
 	}
 	if cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
 		return "", ErrPathTraversal
@@ -196,3 +205,7 @@ func withinRoot(root, p string) bool {
 	}
 	return true
 }
+
+// OnlyBase returns the single filename this resolver is narrowed to, or ""
+// when it serves a whole tree. See Options.OnlyBase.
+func (r *Resolver) OnlyBase() string { return r.opts.OnlyBase }

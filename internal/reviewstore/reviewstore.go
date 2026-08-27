@@ -367,3 +367,21 @@ func atomicWrite(target string, data []byte) error {
 	committed = true
 	return nil
 }
+
+// PurgeRoot deletes every sidecar stored under root. It exists for the
+// ad-hoc ("anonymous") slot, which is volatile by design: reopening a file
+// there must not resurrect comments left by whatever was reviewed in the
+// slot before. A missing directory is not an error.
+func PurgeRoot(root string) error {
+	if err := validateSegment(root); err != nil {
+		return err
+	}
+	base, err := baseDir()
+	if err != nil {
+		return err
+	}
+	if err := os.RemoveAll(filepath.Join(base, root)); err != nil {
+		return fmt.Errorf("reviewstore: purge root %q: %w", root, err)
+	}
+	return nil
+}
