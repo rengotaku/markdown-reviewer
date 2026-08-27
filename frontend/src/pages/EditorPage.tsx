@@ -96,10 +96,20 @@ function basename(path: string): string {
 }
 
 const TARGET_SNIPPET_LENGTH = 60;
+/** How much of a comment body to quote when naming the delete target. */
+const COMMENT_SUMMARY_LENGTH = 40;
 const COMMENT_ID_PARAM = "comment_id";
 // How often to re-poll the active review file's comments for out-of-band
 // changes (mr CLI / API / other viewers). Matches the file-tree cadence.
 const COMMENTS_POLL_MS = 30_000;
+
+/** One-line preview of a comment body, for naming what is about to be deleted. */
+function commentSummary(body: string): string {
+  const oneLine = body.replace(/\s+/g, " ").trim();
+  return oneLine.length > COMMENT_SUMMARY_LENGTH
+    ? `${oneLine.slice(0, COMMENT_SUMMARY_LENGTH)}…`
+    : oneLine;
+}
 
 function todayISO(): string {
   const d = new Date();
@@ -1083,6 +1093,8 @@ export function EditorPage() {
   // Whether a pointer gesture in the editor is still in progress — the
   // selection bubble stays hidden until the drag ends.
   const pointerIsDown = useRef(false);
+  // Comment whose DELETE is in flight, if any (see handleBubbleDeleteComment).
+  const [deletingCommentId, setDeletingCommentId] = useState<string | null>(null);
 
   // Viewport position of the floating "コメント追加" bubble shown while a
   // non-empty selection sits in the editor (#233). Null = hidden. Kept in
@@ -1590,9 +1602,32 @@ export function EditorPage() {
     ? "AI のコメントは削除できません"
     : null;
 
+  // Two guards the right-click menu did not need:
+  //  - a confirmation naming the comment. The bubble's buttons sit next to
+  //    「コメント追加」 and the target is implicit (with nested highlights the
+  //    innermost one wins), so a misclick would silently drop someone's
+  //    comment.
+  //  - one in-flight delete per comment. The bubble stays up while the DELETE
+  //    runs (the menu closed on click), so a double-click fired it twice and
+  //    the second one 404'd into a failure toast for a delete that succeeded.
   const handleBubbleDeleteComment = () => {
-    const id = bubbleComment?.id;
-    if (id && !bubbleDeleteDisabledReason) void handleDeleteComment(id);
+    const target = bubbleComment;
+    if (!target || bubbleDeleteDisabledReason || deletingCommentId === target.id) {
+      return;
+    }
+    setDeletingCommentId(target.id);
+    void (async () => {
+      try {
+        const ok = await confirm({
+          title: "コメントを削除しますか？",
+          message: `「${commentSummary(target.body)}」を削除します。元に戻せません。`,
+          confirmLabel: "削除",
+        });
+        if (ok) await handleDeleteComment(target.id);
+      } finally {
+        setDeletingCommentId(null);
+      }
+    })();
   };
 
   // Edit the selected comment without leaving the editor: the same dialog used
@@ -2491,7 +2526,12 @@ export function EditorPage() {
             </Button>
             {bubbleComment && (
               <>
-                <Tooltip title={bubbleEditDisabledReason ?? ""}>
+                <Tooltip
+                  title={
+                    bubbleEditDisabledReason ??
+                    `対象: ${commentSummary(bubbleComment.body)}`
+                  }
+                >
                   {/* A disabled MUI Button swallows hover events, so the
                       tooltip carrying the reason needs a live wrapper. */}
                   <span>
@@ -2507,13 +2547,21 @@ export function EditorPage() {
                     </Button>
                   </span>
                 </Tooltip>
-                <Tooltip title={bubbleDeleteDisabledReason ?? ""}>
+                <Tooltip
+                  title={
+                    bubbleDeleteDisabledReason ??
+                    `対象: ${commentSummary(bubbleComment.body)}`
+                  }
+                >
                   <span>
                     <Button
                       size="small"
                       color="error"
                       startIcon={<DeleteOutlineIcon fontSize="small" />}
-                      disabled={!!bubbleDeleteDisabledReason}
+                      disabled={
+                        !!bubbleDeleteDisabledReason ||
+                        deletingCommentId === bubbleComment.id
+                      }
                       onMouseDown={(e) => e.preventDefault()}
                       onClick={handleBubbleDeleteComment}
                       data-testid="selection-bubble-delete-comment"

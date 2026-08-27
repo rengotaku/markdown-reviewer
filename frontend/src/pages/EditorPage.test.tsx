@@ -1,5 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, screen, waitFor, fireEvent, act } from "@testing-library/react";
+import {
+  render,
+  screen,
+  waitFor,
+  fireEvent,
+  act,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Routes, Route, useLocation } from "react-router-dom";
@@ -1624,8 +1631,63 @@ describe("EditorPage selection bubble comment actions (#238)", () => {
     await selectHighlight(ed);
 
     await user.click(await screen.findByTestId("selection-bubble-delete-comment"));
+    // Deleting asks first, naming the comment it is about to drop.
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent("ここ直して");
+    await user.click(within(dialog).getByRole("button", { name: "削除" }));
 
     await waitFor(() => expect(deleted).toBe("c-300"));
+  });
+
+  it("連打しても DELETE は1回しか飛ばない", async () => {
+    const { user, ed } = await openWithComment(openComment);
+    const { http, HttpResponse } = await import("msw");
+    const { server } = await import("@/test/mocks/server");
+    let calls = 0;
+    server.use(
+      http.delete("http://localhost:8080/api/comments/*", async () => {
+        calls += 1;
+        // Hold the request open so the second click lands mid-flight.
+        await new Promise((r) => setTimeout(r, 300));
+        return HttpResponse.json({ ok: true });
+      })
+    );
+    await selectHighlight(ed);
+
+    const btn = await screen.findByTestId("selection-bubble-delete-comment");
+    await user.click(btn);
+    await user.click(await screen.findByRole("button", { name: "削除" }));
+
+    // The button is disabled while the request is in flight, and a click that
+    // gets through anyway (fireEvent ignores pointer-events) is a no-op.
+    await waitFor(() => expect(btn).toBeDisabled());
+    fireEvent.click(btn);
+
+    await waitFor(() => expect(calls).toBe(1));
+    expect(calls).toBe(1);
+  });
+
+  it("削除の確認をキャンセルするとコメントは残る", async () => {
+    const { user, ed } = await openWithComment(openComment);
+    const { http, HttpResponse } = await import("msw");
+    const { server } = await import("@/test/mocks/server");
+    let calls = 0;
+    server.use(
+      http.delete("http://localhost:8080/api/comments/*", () => {
+        calls += 1;
+        return HttpResponse.json({ ok: true });
+      })
+    );
+    await selectHighlight(ed);
+
+    await user.click(await screen.findByTestId("selection-bubble-delete-comment"));
+    await user.click(await screen.findByRole("button", { name: "キャンセル" }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("selection-bubble-delete-comment")).toBeEnabled()
+    );
+    expect(calls).toBe(0);
+    expect(ed.view.dom.querySelectorAll(".comment-mark").length).toBeGreaterThan(0);
   });
 
   it("AI のコメントは編集・削除とも無効になる", async () => {
