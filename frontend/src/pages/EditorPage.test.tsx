@@ -1473,11 +1473,11 @@ describe("EditorPage selection bubble (#233)", () => {
   });
 });
 
-describe("EditorPage selection bubble comment actions (#238)", () => {
-  // The 編集 / 削除 items used to live in the editor's right-click menu, which
-  // resolved its target through the DOM (`closest("[data-comment-id]")`).
-  // They now hang off the selection bubble and resolve the target from the
-  // selection's document range instead.
+describe("EditorPage comment hover menu (#238)", () => {
+  // The 編集 / 削除 items used to live in the editor's right-click menu. They
+  // now open by hovering the comment's highlight — adding a comment is what
+  // the selection bubble is for, and an already-commented span should not
+  // have to be re-selected to act on it.
   let fakeEditor: Editor | null = null;
 
   function installEditor(html: string): Editor {
@@ -1542,13 +1542,16 @@ describe("EditorPage selection bubble comment actions (#238)", () => {
     return { user, ed };
   }
 
-  /** Selects the range the comment's highlight covers. */
-  async function selectHighlight(ed: Editor) {
+  /** Hovers the comment's highlight and waits for the menu to open. */
+  async function hoverHighlight(ed: Editor) {
     const mark = ed.view.dom.querySelector(".comment-mark") as HTMLElement;
-    const from = ed.view.posAtDOM(mark, 0);
-    await act(async () => {
-      ed.commands.setTextSelection({ from, to: from + 2 });
-    });
+    // jsdom has no layout, so posAtCoords cannot resolve — the handler then
+    // falls back to the mark's data-comment-id, which is what we exercise.
+    fireEvent.mouseOver(mark);
+    await waitFor(() =>
+      expect(screen.getByTestId("comment-hover-menu")).toBeInTheDocument()
+    );
+    return mark;
   }
 
   const openComment: CommentJSON = {
@@ -1577,41 +1580,59 @@ describe("EditorPage selection bubble comment actions (#238)", () => {
     useEditorInstance.setState({ editor: null });
   });
 
-  it("コメント上を選択すると編集・削除がバブルに出る", async () => {
+  it("ハイライトにホバーするだけで編集・削除が出る", async () => {
     const { ed } = await openWithComment(openComment);
 
-    await selectHighlight(ed);
+    const mark = await hoverHighlight(ed);
 
-    await waitFor(() =>
-      expect(screen.getByTestId("selection-bubble-edit-comment")).toBeEnabled()
+    expect(screen.getByTestId("comment-hover-edit")).toBeEnabled();
+    expect(screen.getByTestId("comment-hover-delete")).toBeEnabled();
+    // The menu names the comment it acts on.
+    expect(screen.getByTestId("comment-hover-menu-target")).toHaveTextContent(
+      "ここ直して"
     );
-    expect(screen.getByTestId("selection-bubble-delete-comment")).toBeEnabled();
+
+    // Leaving the highlight closes it again.
+    fireEvent.mouseOut(mark, { relatedTarget: document.body });
+    await waitFor(() =>
+      expect(screen.queryByTestId("comment-hover-menu")).not.toBeInTheDocument()
+    );
   });
 
-  it("コメントに掛からない選択では編集・削除は出ない", async () => {
+  it("コメント外にホバーしてもメニューは出ない", async () => {
     const { ed } = await openWithComment(openComment);
 
     // The "実績" heading sits before the highlighted paragraph.
+    const heading = ed.view.dom.querySelector("h2") as HTMLElement;
+    fireEvent.mouseOver(heading);
+
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 300));
+    });
+    expect(screen.queryByTestId("comment-hover-menu")).not.toBeInTheDocument();
+  });
+
+  it("選択が残っていてもホバーメニューは開く", async () => {
+    // Right after commenting, the commented range is still selected — hover
+    // must not go dead just because the selection bubble is up.
+    const { ed } = await openWithComment(openComment);
     await act(async () => {
       ed.commands.setTextSelection({ from: 1, to: 3 });
     });
-
     await waitFor(() =>
       expect(screen.getByTestId("selection-bubble")).toBeInTheDocument()
     );
-    expect(
-      screen.queryByTestId("selection-bubble-edit-comment")
-    ).not.toBeInTheDocument();
-    expect(
-      screen.queryByTestId("selection-bubble-delete-comment")
-    ).not.toBeInTheDocument();
+
+    await hoverHighlight(ed);
+
+    expect(screen.getByTestId("comment-hover-edit")).toBeEnabled();
   });
 
   it("編集は本文入りのダイアログを開く", async () => {
     const { user, ed } = await openWithComment(openComment);
-    await selectHighlight(ed);
+    await hoverHighlight(ed);
 
-    await user.click(await screen.findByTestId("selection-bubble-edit-comment"));
+    await user.click(await screen.findByTestId("comment-hover-edit"));
 
     const input = await screen.findByTestId("comment-body-input");
     expect(input).toHaveValue("ここ直して");
@@ -1628,9 +1649,9 @@ describe("EditorPage selection bubble comment actions (#238)", () => {
         return HttpResponse.json({ ok: true });
       })
     );
-    await selectHighlight(ed);
+    await hoverHighlight(ed);
 
-    await user.click(await screen.findByTestId("selection-bubble-delete-comment"));
+    await user.click(await screen.findByTestId("comment-hover-delete"));
     // Deleting asks first, naming the comment it is about to drop.
     const dialog = await screen.findByRole("dialog");
     expect(dialog).toHaveTextContent("ここ直して");
@@ -1652,9 +1673,9 @@ describe("EditorPage selection bubble comment actions (#238)", () => {
         return HttpResponse.json({ ok: true });
       })
     );
-    await selectHighlight(ed);
+    await hoverHighlight(ed);
 
-    const btn = await screen.findByTestId("selection-bubble-delete-comment");
+    const btn = await screen.findByTestId("comment-hover-delete");
     await user.click(btn);
     await user.click(await screen.findByRole("button", { name: "削除" }));
 
@@ -1678,26 +1699,26 @@ describe("EditorPage selection bubble comment actions (#238)", () => {
         return HttpResponse.json({ ok: true });
       })
     );
-    await selectHighlight(ed);
+    await hoverHighlight(ed);
 
-    await user.click(await screen.findByTestId("selection-bubble-delete-comment"));
+    await user.click(await screen.findByTestId("comment-hover-delete"));
     await user.click(await screen.findByRole("button", { name: "キャンセル" }));
 
-    await waitFor(() =>
-      expect(screen.getByTestId("selection-bubble-delete-comment")).toBeEnabled()
-    );
     expect(calls).toBe(0);
     expect(ed.view.dom.querySelectorAll(".comment-mark").length).toBeGreaterThan(0);
+    // Hovering again offers the action once more (no stuck in-flight state).
+    await hoverHighlight(ed);
+    expect(screen.getByTestId("comment-hover-delete")).toBeEnabled();
   });
 
   it("AI のコメントは編集・削除とも無効になる", async () => {
     const { ed } = await openWithComment({ ...openComment, author: "ai" });
-    await selectHighlight(ed);
+    await hoverHighlight(ed);
 
     await waitFor(() =>
-      expect(screen.getByTestId("selection-bubble-edit-comment")).toBeDisabled()
+      expect(screen.getByTestId("comment-hover-edit")).toBeDisabled()
     );
-    expect(screen.getByTestId("selection-bubble-delete-comment")).toBeDisabled();
+    expect(screen.getByTestId("comment-hover-delete")).toBeDisabled();
   });
 });
 

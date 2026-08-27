@@ -96,6 +96,10 @@ function basename(path: string): string {
 }
 
 const TARGET_SNIPPET_LENGTH = 60;
+/** Pointer dwell before a comment highlight opens its 編集 / 削除 menu. */
+const COMMENT_HOVER_OPEN_MS = 150;
+/** Grace period after the pointer leaves the highlight or its menu. */
+const COMMENT_HOVER_CLOSE_MS = 250;
 /** How much of a comment body to quote when naming the delete target. */
 const COMMENT_SUMMARY_LENGTH = 40;
 const COMMENT_ID_PARAM = "comment_id";
@@ -1102,11 +1106,20 @@ export function EditorPage() {
   const [selectionBubble, setSelectionBubble] = useState<{
     top: number;
     left: number;
-    /**
-     * Innermost comment highlight the selection overlaps, if any. Drives the
-     * 編集 / 削除 buttons that used to live in the editor's right-click menu.
-     */
-    commentId?: string;
+  } | null>(null);
+  // Comment highlight the pointer is resting on, with the mark's viewport
+  // rect. Hovering an existing highlight is how 編集 / 削除 are reached — the
+  // selection bubble is for adding a comment to a fresh range, and an
+  // already-commented span should not have to be re-selected to act on it.
+  // Set while the pointer rests on the hover menu itself, so the grace timer
+  // armed when it left the highlight does not close it out from under them.
+  const hoverMenuHeld = useRef(false);
+  const [hoverComment, setHoverComment] = useState<{
+    commentId: string;
+    top: number;
+    left: number;
+    bottom: number;
+    right: number;
   } | null>(null);
 
   // Re-render the toolbar Add-Comment button when selection / doc changes.
@@ -1155,7 +1168,6 @@ export function EditorPage() {
         setSelectionBubble({
           top: Math.min(start.top, end.top),
           left: end.left,
-          commentId: commentIdsInRange(editor.state, from, to)[0],
         });
       } catch {
         // View not mounted (or the position is not laid out yet) — no anchor
@@ -1211,6 +1223,86 @@ export function EditorPage() {
       window.removeEventListener("pointercancel", onPointerUp, true);
       window.removeEventListener("scroll", update, true);
       window.removeEventListener("resize", update);
+    };
+  }, [editor]);
+
+  // Hover a comment highlight → its 編集 / 削除 menu. Decorations are not React
+  // elements, so the listeners go on the editor's DOM and the menu is anchored
+  // to the hovered mark's rect. A dwell before opening and a grace period
+  // after leaving keep the menu from flickering while the pointer crosses the
+  // text, and the grace also covers the gap between the mark and the menu.
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) return;
+
+    let openTimer: ReturnType<typeof setTimeout> | undefined;
+    let closeTimer: ReturnType<typeof setTimeout> | undefined;
+    const clearTimers = () => {
+      if (openTimer) clearTimeout(openTimer);
+      if (closeTimer) clearTimeout(closeTimer);
+      openTimer = undefined;
+      closeTimer = undefined;
+    };
+
+    const commentIdAt = (markEl: HTMLElement, ev: MouseEvent): string | undefined => {
+      // Overlapping highlights render as split spans whose merged attributes
+      // keep only one id, so ask the decoration set which comment actually
+      // sits under the pointer (innermost first) and fall back to the DOM.
+      try {
+        const pos = editor.view.posAtCoords({ left: ev.clientX, top: ev.clientY });
+        if (pos) {
+          const id = commentIdsInRange(editor.state, pos.pos, pos.pos + 1)[0];
+          if (id) return id;
+        }
+      } catch {
+        // No layout (or the coords fall outside the doc) — use the attribute.
+      }
+      return markEl.getAttribute("data-comment-id") ?? undefined;
+    };
+
+    const onOver = (e: Event) => {
+      const ev = e as MouseEvent;
+      const markEl = (ev.target as HTMLElement | null)?.closest?.(
+        "[data-comment-id]"
+      ) as HTMLElement | null;
+      if (!markEl) return;
+      const commentId = commentIdAt(markEl, ev);
+      if (!commentId) return;
+      clearTimers();
+      const r = markEl.getBoundingClientRect();
+      openTimer = setTimeout(() => {
+        setHoverComment({
+          commentId,
+          top: r.top,
+          left: r.left,
+          bottom: r.bottom,
+          right: r.right,
+        });
+      }, COMMENT_HOVER_OPEN_MS);
+    };
+
+    const onOut = (e: Event) => {
+      const ev = e as MouseEvent;
+      const from = (ev.target as HTMLElement | null)?.closest?.("[data-comment-id]");
+      if (!from) return;
+      // Moving within the same highlight (across its split spans) is not a
+      // leave — only schedule the close when the pointer lands elsewhere.
+      const to = (ev.relatedTarget as HTMLElement | null)?.closest?.(
+        "[data-comment-id]"
+      );
+      if (to === from) return;
+      clearTimers();
+      closeTimer = setTimeout(() => {
+        if (!hoverMenuHeld.current) setHoverComment(null);
+      }, COMMENT_HOVER_CLOSE_MS);
+    };
+
+    const dom = editor.view.dom as HTMLElement;
+    dom.addEventListener("mouseover", onOver);
+    dom.addEventListener("mouseout", onOut);
+    return () => {
+      clearTimers();
+      dom.removeEventListener("mouseover", onOver);
+      dom.removeEventListener("mouseout", onOut);
     };
   }, [editor]);
 
@@ -1583,10 +1675,9 @@ export function EditorPage() {
     openGlobalCommentDialog();
   };
 
-  // The comment the selection sits inside, if any — the selection bubble's
-  // 編集 / 削除 act on it. Looked up from the live list rather than cached with
-  // the bubble so a delete elsewhere makes the buttons disappear.
-  const bubbleComment = comments.find((c) => c.id === selectionBubble?.commentId);
+  // The hovered comment, looked up from the live list rather than cached with
+  // the hover state so a delete elsewhere makes the menu disappear.
+  const bubbleComment = comments.find((c) => c.id === hoverComment?.commentId);
   // AI-authored comments are read-only to the human reviewer; see
   // CommentSidePane's isAiAuthored for the same "ai" author marker.
   const bubbleCommentIsAiAuthored = bubbleComment?.author === "ai";
@@ -1623,7 +1714,10 @@ export function EditorPage() {
           message: `「${commentSummary(target.body)}」を削除します。元に戻せません。`,
           confirmLabel: "削除",
         });
-        if (ok) await handleDeleteComment(target.id);
+        if (ok) {
+        await handleDeleteComment(target.id);
+        setHoverComment(null);
+      }
       } finally {
         setDeletingCommentId(null);
       }
@@ -1635,6 +1729,7 @@ export function EditorPage() {
   const handleBubbleEditComment = () => {
     const target = bubbleComment;
     if (!target || bubbleEditDisabledReason) return;
+    setHoverComment(null);
     setCommentDialog({
       open: true,
       mode: "edit",
@@ -2512,10 +2607,12 @@ export function EditorPage() {
           sx={{ zIndex: (theme) => theme.zIndex.tooltip }}
           data-testid="selection-bubble"
         >
-          <Paper elevation={4} sx={{ px: 0.5, py: 0.25 }}>
+          <Paper elevation={4} sx={{ p: 0.5 }}>
             <Button
               size="small"
+              fullWidth
               startIcon={<CommentIcon fontSize="small" />}
+              sx={{ justifyContent: "flex-start" }}
               // Keep the selection alive: focusing the button would collapse
               // it in some browsers before the handler reads from/to.
               onMouseDown={(e) => e.preventDefault()}
@@ -2524,54 +2621,85 @@ export function EditorPage() {
             >
               コメント追加
             </Button>
-            {bubbleComment && (
-              <>
-                <Tooltip
-                  title={
-                    bubbleEditDisabledReason ??
-                    `対象: ${commentSummary(bubbleComment.body)}`
-                  }
+          </Paper>
+        </Popper>
+      )}
+
+      {/* Can coexist with the selection bubble: that one sits above the
+          selection and this one below the highlight. Suppressing it while a
+          selection is live would make hover dead right after commenting,
+          when the commented range is still selected. */}
+      {hoverComment && bubbleComment && (
+        <Popper
+          open
+          placement="bottom-start"
+          anchorEl={{
+            getBoundingClientRect: () =>
+              new DOMRect(
+                hoverComment.left,
+                hoverComment.top,
+                hoverComment.right - hoverComment.left,
+                hoverComment.bottom - hoverComment.top
+              ),
+          }}
+          modifiers={[{ name: "offset", options: { offset: [0, 4] } }]}
+          sx={{ zIndex: (theme) => theme.zIndex.tooltip }}
+          data-testid="comment-hover-menu"
+          // The pointer has to cross the gap between the highlight and the
+          // menu, so the menu itself keeps the hover alive.
+          onMouseEnter={() => {
+            hoverMenuHeld.current = true;
+          }}
+          onMouseLeave={() => {
+            hoverMenuHeld.current = false;
+            setHoverComment(null);
+          }}
+        >
+          <Paper elevation={4} sx={{ p: 0.5, minWidth: 180 }}>
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              sx={{ display: "block", px: 1, pt: 0.25, pb: 0.5 }}
+              data-testid="comment-hover-menu-target"
+            >
+              {commentSummary(bubbleComment.body)}
+            </Typography>
+            <Tooltip title={bubbleEditDisabledReason ?? ""} placement="right">
+              {/* A disabled MUI Button swallows hover events, so the tooltip
+                  carrying the reason needs a live wrapper. */}
+              <span>
+                <Button
+                  size="small"
+                  fullWidth
+                  startIcon={<EditOutlinedIcon fontSize="small" />}
+                  sx={{ justifyContent: "flex-start" }}
+                  disabled={!!bubbleEditDisabledReason}
+                  onClick={handleBubbleEditComment}
+                  data-testid="comment-hover-edit"
                 >
-                  {/* A disabled MUI Button swallows hover events, so the
-                      tooltip carrying the reason needs a live wrapper. */}
-                  <span>
-                    <Button
-                      size="small"
-                      startIcon={<EditOutlinedIcon fontSize="small" />}
-                      disabled={!!bubbleEditDisabledReason}
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={handleBubbleEditComment}
-                      data-testid="selection-bubble-edit-comment"
-                    >
-                      コメント編集
-                    </Button>
-                  </span>
-                </Tooltip>
-                <Tooltip
-                  title={
-                    bubbleDeleteDisabledReason ??
-                    `対象: ${commentSummary(bubbleComment.body)}`
+                  コメント編集
+                </Button>
+              </span>
+            </Tooltip>
+            <Tooltip title={bubbleDeleteDisabledReason ?? ""} placement="right">
+              <span>
+                <Button
+                  size="small"
+                  fullWidth
+                  color="error"
+                  startIcon={<DeleteOutlineIcon fontSize="small" />}
+                  sx={{ justifyContent: "flex-start" }}
+                  disabled={
+                    !!bubbleDeleteDisabledReason ||
+                    deletingCommentId === bubbleComment.id
                   }
+                  onClick={handleBubbleDeleteComment}
+                  data-testid="comment-hover-delete"
                 >
-                  <span>
-                    <Button
-                      size="small"
-                      color="error"
-                      startIcon={<DeleteOutlineIcon fontSize="small" />}
-                      disabled={
-                        !!bubbleDeleteDisabledReason ||
-                        deletingCommentId === bubbleComment.id
-                      }
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={handleBubbleDeleteComment}
-                      data-testid="selection-bubble-delete-comment"
-                    >
-                      コメント削除
-                    </Button>
-                  </span>
-                </Tooltip>
-              </>
-            )}
+                  コメント削除
+                </Button>
+              </span>
+            </Tooltip>
           </Paper>
         </Popper>
       )}
