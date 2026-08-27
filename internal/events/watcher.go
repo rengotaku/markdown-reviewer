@@ -534,3 +534,22 @@ func (w *Watcher) stopAllTimers() {
 		delete(w.pending, key)
 	}
 }
+
+// SetAdhocDir moves the ad-hoc slot's watch from prev to dir (issue #240).
+// Only the directory itself is watched — the slot holds exactly one file, so
+// there is no tree to walk. Errors are logged rather than returned: losing
+// push notifications degrades the ad-hoc review to the polling fallback,
+// which is not worth failing the registration over.
+func (w *Watcher) SetAdhocDir(prev, dir string) {
+	if prev != "" && prev != dir {
+		if err := w.fsw.Remove(prev); err != nil {
+			slog.Debug("events: unwatch previous ad-hoc dir failed", "dir", prev, "err", err)
+		}
+	}
+	if dir == "" || dir == prev {
+		return
+	}
+	if err := w.fsw.Add(dir); err != nil {
+		slog.Warn("events: watch ad-hoc dir failed", "dir", dir, "err", err)
+	}
+}

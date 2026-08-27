@@ -138,6 +138,13 @@ function commentTargetText(c: CommentJSON): string {
 }
 
 export function EditorPage() {
+  const { active: activeRoot, roots, activePath: activeRootPath } = useActiveRoot();
+  // The ad-hoc root (#240) holds exactly one file, so there is no tree to
+  // browse: the sidebar stays collapsed and its hover/open affordances are
+  // switched off rather than opening an empty panel.
+  const isEphemeralRoot =
+    roots.find((r) => r.name === activeRoot)?.ephemeral === true;
+
   // #219: `isSidebarOpen` now only tracks the transient hover overlay (see
   // useUIStore.ts). Whether the sidebar is visible at all is `isSidebarShown`
   // below, which also accounts for `sidebarPinned`.
@@ -152,12 +159,12 @@ export function EditorPage() {
 
   // Pinned => always shown (push layout). Unpinned => shown only while the
   // hover-panel guard has the overlay open.
-  const isSidebarShown = sidebarPinned || isHoverOverlayOpen;
+  const isSidebarShown = !isEphemeralRoot && (sidebarPinned || isHoverOverlayOpen);
 
   const { hotZoneHandlers, panelHandlers } = useHoverPanel({
     onOpen: () => setSidebarOpen(true),
     onClose: () => setSidebarOpen(false),
-    disabled: sidebarPinned,
+    disabled: sidebarPinned || isEphemeralRoot,
   });
 
   /** Header-row hamburger (#219): toggles the pin, and — going by the
@@ -196,7 +203,6 @@ export function EditorPage() {
     window.addEventListener("mouseup", onMouseUp);
   };
 
-  const { active: activeRoot, roots, activePath: activeRootPath } = useActiveRoot();
   const allFiles = useOpenFiles((s) => s.files);
   const activeIdByRoot = useOpenFiles((s) => s.activeIdByRoot);
   // Editor-tab list = open files belonging to the currently selected root.
@@ -2036,7 +2042,7 @@ export function EditorPage() {
               removed its 38px footprint (30px button + 8px flex gap) the
               moment the overlay opened, so the logo and the filename after
               it jumped left every time the pointer touched the hot zone. */}
-          {!sidebarPinned && (
+          {!sidebarPinned && !isEphemeralRoot && (
             <Tooltip title="サイドバーを開く">
               <IconButton
                 size="small"

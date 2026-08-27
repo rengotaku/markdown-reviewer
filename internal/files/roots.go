@@ -6,7 +6,16 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 )
+
+// AdhocRootName is the single reserved slot used for one-off reviews of a
+// file that lives outside every configured root (issue #240). There is
+// exactly one such slot: registering a second file replaces the first.
+// The name is fixed (rather than generated per file) so the deeplink and
+// the sidecar location are predictable, and it is listed in
+// reservedRootNames so a REVIEW_ROOTS entry can never collide with it.
+const AdhocRootName = "anonymous"
 
 // reservedRootNames are top-level URL path segments the server already owns
 // — the Gin route groups in internal/handler/handler.go (`/health`, `/api/*`)
@@ -25,6 +34,7 @@ var reservedRootNames = map[string]bool{
 	"index.html":  true,
 	"logo.png":    true,
 	"favicon.svg": true,
+	AdhocRootName: true,
 }
 
 // RootSpec is one entry parsed out of the REVIEW_ROOTS env var. Name is the
@@ -44,13 +54,19 @@ type RootSpec struct {
 type Root struct {
 	Resolver *Resolver
 	Name     string
+	// Ephemeral marks the ad-hoc slot: it is not persisted anywhere, dies
+	// with the process, and the UI renders it without a file tree.
+	Ephemeral bool
 }
 
 // Roots is an ordered set of named Resolvers exposed by the files API. The
 // first entry is the default returned when a request omits the root selector.
+// Roots is mutated at runtime by SetAdhoc while handlers read it
+// concurrently, so every accessor takes mu.
 type Roots struct {
 	byName map[string]*Root
 	order  []*Root
+	mu     sync.RWMutex
 }
 
 // NewRoots builds a Roots from the given specs. Each spec produces a Resolver
@@ -94,6 +110,8 @@ func (r *Roots) Get(name string) (*Resolver, bool) {
 	if r == nil {
 		return nil, false
 	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	root, ok := r.byName[name]
 	if !ok {
 		return nil, false
@@ -104,7 +122,12 @@ func (r *Roots) Get(name string) (*Resolver, bool) {
 // Default returns the first-configured root's resolver and name. Callers use
 // this when a request omits the `?root=` selector.
 func (r *Roots) Default() (*Resolver, string) {
-	if r == nil || len(r.order) == 0 {
+	if r == nil {
+		return nil, ""
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if len(r.order) == 0 {
 		return nil, ""
 	}
 	d := r.order[0]
@@ -117,11 +140,43 @@ func (r *Roots) List() []Root {
 	if r == nil {
 		return nil
 	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	out := make([]Root, len(r.order))
 	for i, root := range r.order {
 		out[i] = *root
 	}
 	return out
+}
+
+// SetAdhoc points the ad-hoc slot at base inside dir, replacing whatever it
+// held before. The resolver is narrowed to that one file (Options.OnlyBase)
+// so the slot never widens write access to dir's other entries. Returns the
+// directory the slot pointed at previously ("" when it was empty) so the
+// caller can move its file watch across.
+//
+// The slot is appended last and Default() only ever returns order[0], so a
+// request that omits ?root= can't accidentally land here.
+func (r *Roots) SetAdhoc(dir, base string) (string, error) {
+	if r == nil {
+		return "", errors.New("files API is not configured")
+	}
+	resolver, err := NewResolverWithOptions(dir, Options{OnlyBase: base})
+	if err != nil {
+		return "", fmt.Errorf("init ad-hoc resolver: %w", err)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	prev := ""
+	if existing, ok := r.byName[AdhocRootName]; ok {
+		prev = existing.Resolver.Root()
+		existing.Resolver = resolver
+		return prev, nil
+	}
+	root := &Root{Name: AdhocRootName, Resolver: resolver, Ephemeral: true}
+	r.byName[AdhocRootName] = root
+	r.order = append(r.order, root)
+	return prev, nil
 }
 
 // ParseRootsJSON parses the REVIEW_ROOTS env value, which is a JSON array of
@@ -135,4 +190,32 @@ func ParseRootsJSON(raw string) ([]RootSpec, error) {
 		return nil, errors.New("REVIEW_ROOTS contains no entries")
 	}
 	return specs, nil
+}
+
+// Locate finds the non-ephemeral root that contains abs (an absolute,
+// symlink-resolved path) and returns its name plus abs's forward-slash path
+// relative to it. The ad-hoc slot is skipped on purpose: callers use Locate
+// to decide whether a file needs the slot at all, and a slot hit would make
+// that decision circular.
+func (r *Roots) Locate(abs string) (name, rel string, ok bool) {
+	if r == nil {
+		return "", "", false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, root := range r.order {
+		if root.Ephemeral {
+			continue
+		}
+		base := root.Resolver.Root()
+		relPath, err := filepath.Rel(base, abs)
+		if err != nil {
+			continue
+		}
+		if relPath == "." || relPath == ".." || strings.HasPrefix(relPath, ".."+string(filepath.Separator)) {
+			continue
+		}
+		return root.Name, filepath.ToSlash(relPath), true
+	}
+	return "", "", false
 }
