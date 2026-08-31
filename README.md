@@ -106,6 +106,15 @@ mr open ~/some-other-repo/draft.md      # → http://localhost:8080/anonymous/dr
 
 サーバが起動していないと登録できないので、この経路は `mr open` が URL だけ出して終わることができない。
 
+登録した後は `mr comments` / `mr review` / `mr reply` / `mr resolve` も同じパスで通る。
+
+```zsh
+mr open ~/some-other-repo/draft.md      # 先に登録する
+mr comments ~/some-other-repo/draft.md  # 登録済みなので読める
+```
+
+枠に入れられるのは `mr open` だけで、読み書き側のコマンドは枠を差し替えない。差し替えると、そのとき枠に入っていた別ファイルのコメントが黙って消えるため。未登録のパスを渡すと、先に `mr open` するよう案内して止まる。
+
 ## コメントモデル（sidecar）
 
 - コメントは `<ユーザー設定ディレクトリ>/reviewer/<root>/<path>/review.json` に保存され、本文には埋め込まれない

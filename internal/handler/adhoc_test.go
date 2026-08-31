@@ -190,3 +190,57 @@ func TestAdhoc_ConfigMarksSlotEphemeral(t *testing.T) {
 	assert.True(t, resp.ReviewRoots[1].Ephemeral)
 	assert.Equal(t, "default", resp.ReviewRootName, "the slot must never become the default root")
 }
+
+// getAdhoc reads the slot's current occupant through GET /api/adhoc.
+func getAdhoc(h *handler.Handler) *httptest.ResponseRecorder {
+	return serve(h, httptest.NewRequest(http.MethodGet, "/api/adhoc", nil))
+}
+
+func TestAdhocCurrent_EmptySlotIs404(t *testing.T) {
+	h, _ := setupFilesHandler(t)
+	rec := getAdhoc(h)
+	assert.Equal(t, http.StatusNotFound, rec.Code, rec.Body.String())
+}
+
+func TestAdhocCurrent_ReportsRegisteredFile(t *testing.T) {
+	h, _ := setupFilesHandler(t)
+	t.Setenv("REVIEWER_CONFIG_DIR", t.TempDir())
+	outside := outsideFile(t, "draft.md", "# draft")
+	require.Equal(t, http.StatusOK, postAdhoc(t, h, outside).Code)
+
+	rec := getAdhoc(h)
+	require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+
+	var resp struct {
+		Root      string `json:"root"`
+		Dir       string `json:"dir"`
+		Path      string `json:"path"`
+		Ephemeral bool   `json:"ephemeral"`
+	}
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	assert.Equal(t, files.AdhocRootName, resp.Root)
+	assert.Equal(t, filepath.Dir(outside), resp.Dir)
+	assert.Equal(t, filepath.Base(outside), resp.Path)
+	assert.True(t, resp.Ephemeral)
+}
+
+// The read-back path must not double as a registration path: a GET that
+// re-pointed (or created) the slot would let `mr comments` wipe the review
+// `mr open` had parked there.
+func TestAdhocCurrent_DoesNotChangeTheSlot(t *testing.T) {
+	h, _ := setupFilesHandler(t)
+	t.Setenv("REVIEWER_CONFIG_DIR", t.TempDir())
+	first := outsideFile(t, "first.md", "# first")
+	require.Equal(t, http.StatusOK, postAdhoc(t, h, first).Code)
+
+	require.Equal(t, http.StatusOK, getAdhoc(h).Code)
+
+	rec := getAdhoc(h)
+	require.Equal(t, http.StatusOK, rec.Code)
+	var resp struct {
+		Dir  string `json:"dir"`
+		Path string `json:"path"`
+	}
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
+	assert.Equal(t, first, filepath.Join(resp.Dir, resp.Path))
+}

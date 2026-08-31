@@ -107,12 +107,18 @@ func TestCmdOpen_UsageOnWrongArgCount(t *testing.T) {
 	}
 }
 
-func TestCmdOpen_RejectsPathOutsideRoots(t *testing.T) {
-	// An explicit REVIEW_ROOTS keeps this off the machine's real plist.
+func TestCmdOpen_OutsideRootsFallsBackToTheAdhocSlot(t *testing.T) {
+	// An explicit REVIEW_ROOTS keeps this off the machine's real plist, and
+	// an unreachable base URL keeps it off a reviewer that happens to be
+	// running on this machine — otherwise the assertion depends on whether
+	// the developer's own server is up.
 	t.Setenv("REVIEW_ROOTS", `[{"name":"works","path":"`+t.TempDir()+`"}]`)
+	t.Setenv(baseURLEnv, "http://127.0.0.1:1")
 	err := cmdOpen([]string{"/definitely/not/under/a/root.md", "--print"})
-	if err == nil || !strings.Contains(err.Error(), "not under any configured root") {
-		t.Errorf("cmdOpen() error = %v, want a containment error", err)
+	// Out of root is no longer fatal (issue #240): it becomes a one-off
+	// registration, which here fails on the unreachable server.
+	if err == nil || !strings.Contains(err.Error(), "one-off review") {
+		t.Errorf("cmdOpen() error = %v, want an ad-hoc registration error", err)
 	}
 }
 

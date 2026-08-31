@@ -62,3 +62,42 @@ func registerAdhoc(base, path string) (root, rel string, err error) {
 	}
 	return payload.Root, payload.Path, nil
 }
+
+// adhocFile is the ad-hoc slot's current occupant as reported by
+// GET /api/adhoc: the directory it is rooted at plus the single file name it
+// is narrowed to.
+type adhocFile struct {
+	Dir  string `json:"dir"`
+	Base string `json:"path"`
+}
+
+// lookupAdhoc asks the running server which file the ad-hoc slot holds right
+// now. Unlike registerAdhoc it never changes the slot, so read-back commands
+// can reach an ad-hoc file without wiping the review of whatever else was
+// registered (issue #242). found=false means the slot is empty; a server that
+// is down or unreachable is an error, not an empty slot.
+func lookupAdhoc(base string) (file adhocFile, found bool, err error) {
+	client := &http.Client{Timeout: adhocTimeout}
+	resp, err := client.Get(strings.TrimSuffix(base, "/") + "/api/adhoc")
+	if err != nil {
+		return adhocFile{}, false, fmt.Errorf("asking the server at %s about one-off reviews failed (start it, then retry): %w", base, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	if err != nil {
+		return adhocFile{}, false, err
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		return adhocFile{}, false, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return adhocFile{}, false, fmt.Errorf("asking the server about one-off reviews failed (HTTP %d): %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+	if jsonErr := json.Unmarshal(raw, &file); jsonErr != nil {
+		return adhocFile{}, false, fmt.Errorf("the server's one-off review reply was not JSON: %s", strings.TrimSpace(string(raw)))
+	}
+	if file.Dir == "" || file.Base == "" {
+		return adhocFile{}, false, nil
+	}
+	return file, true, nil
+}
