@@ -78,6 +78,33 @@ func (h *Handler) Adhoc(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"root": files.AdhocRootName, "path": base, "ephemeral": true})
 }
 
+// AdhocCurrent reports which file the ad-hoc slot currently holds, without
+// touching it. Read-back commands (`mr comments` / `review` / `reply` /
+// `resolve`) use it to reach a file registered by an earlier `mr open`
+// (issue #242): they must not re-register, because taking the slot over for
+// a different file wipes the previous occupant's comments — a command whose
+// job is to read would then silently destroy the review it was pointed at.
+//
+// 404 when the slot is empty, so the caller can say "run mr open first"
+// instead of reporting a generic root mismatch.
+func (h *Handler) AdhocCurrent(c *gin.Context) {
+	if h.roots == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "review roots are not configured"})
+		return
+	}
+	resolver, ok := h.roots.Get(files.AdhocRootName)
+	if !ok || resolver.OnlyBase() == "" {
+		c.JSON(http.StatusNotFound, gin.H{"error": "no one-off review is registered"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"root":      files.AdhocRootName,
+		"dir":       resolver.Root(),
+		"path":      resolver.OnlyBase(),
+		"ephemeral": true,
+	})
+}
+
 // canonicalMarkdownPath validates the requested path and returns it
 // absolute and symlink-resolved. Requirements are deliberately narrow: an
 // absolute path (the CLI knows the cwd, the server does not), an existing

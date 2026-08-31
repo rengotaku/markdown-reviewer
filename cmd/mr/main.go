@@ -13,8 +13,11 @@
 //	mr reopen   <path> <id>       reopen a resolved comment
 //	mr open     <path> [--comment ID] [--print]  open the file in the web UI
 //
-// <path> may be absolute or relative to the current directory; it must live
-// under one of the configured REVIEW_ROOTS.
+// <path> may be absolute or relative to the current directory. It normally
+// lives under one of the configured REVIEW_ROOTS. A path outside all of them
+// is handled by the server's one-off ("anonymous") slot: `mr open` registers
+// it there, and the other subcommands then work on it for as long as it is
+// the file the slot holds.
 //
 // --since ID returns only comments numbered after ID (e.g. --since c-008) so a
 // caller can spot what was added since its last look. --unanswered returns only
@@ -80,7 +83,9 @@ Usage:
   mr reopen   <path> <id>              reopen a resolved comment
   mr open     <path> [--comment ID] [--print]  open the file in the web UI (--print: URL only)
 
-<path> is absolute or relative to cwd, and must be under a configured root.
+<path> is absolute or relative to cwd, normally under a configured root.
+A path outside every root is registered as a one-off review by "mr open"; the
+other subcommands then work on it while it is the file that slot holds.
 --since ID: only comments after ID (e.g. --since c-008).
 --unanswered: only comments whose latest activity is not from the AI.
 `)
@@ -88,7 +93,7 @@ Usage:
 
 // readForReview resolves the path and loads canonical content + comments.
 func readForReview(path string) (rel, content string, comments []reviewstore.Comment, err error) {
-	root, rel, abs, err := resolvePath(path)
+	root, rel, abs, err := resolveRegistered(path)
 	if err != nil {
 		return "", "", nil, err
 	}
@@ -160,7 +165,7 @@ func cmdReply(args []string) error {
 	if len(pos) != 3 {
 		return fmt.Errorf("usage: mr reply <path> <id> <text> [--author NAME]")
 	}
-	root, rel, _, err := resolvePath(pos[0])
+	root, rel, _, err := resolveRegistered(pos[0])
 	if err != nil {
 		return err
 	}
@@ -185,7 +190,7 @@ func cmdSetStatus(args []string, status string) error {
 	if len(pos) != 2 {
 		return fmt.Errorf("usage: mr %s <path> <id>", statusVerb(status))
 	}
-	root, rel, _, err := resolvePath(pos[0])
+	root, rel, _, err := resolveRegistered(pos[0])
 	if err != nil {
 		return err
 	}

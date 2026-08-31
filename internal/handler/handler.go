@@ -99,6 +99,7 @@ func (h *Handler) Routes(staticHandler http.Handler) http.Handler {
 		api.POST("/ingest/*path", h.IngestFile)
 		api.GET("/revisions/*path", h.Revisions)
 		api.POST("/adhoc", h.Adhoc)
+		api.GET("/adhoc", h.AdhocCurrent)
 		api.GET("/events", h.Events)
 	}
 
