@@ -77,6 +77,7 @@ import {
   type CommentJSON,
 } from "@/api";
 import { stripHint } from "@/utils/stripHint";
+import { firstH1 } from "@/utils/firstH1";
 import { formatLocalTimestamp } from "@/utils/formatTimestamp";
 import { computeAnchorsFromSelection, resolveAnchorInDoc } from "@/utils/pmAnchor";
 import { lineDiff, hasChanges } from "@/utils/lineDiff";
@@ -250,11 +251,16 @@ export function EditorPage() {
 
   // Browser tab title mirrors the editor tab you are looking at (#245), so
   // several markdown-reviewer windows are tellable apart from the OS tab bar
-  // alone. Keep the dirty marker identical to the one on the editor tab.
+  // alone. The document's own h1 wins over the file name when it has one
+  // (#247): names like `summary.md` repeat across roots and say nothing about
+  // the contents. Keep the dirty marker identical to the editor tab's.
   useEffect(() => {
-    document.title = activeFile
-      ? `${activeFile.name}${activeFile.isDirty ? " \u2022" : ""} \u2014 ${APP_TITLE}`
-      : APP_TITLE;
+    if (!activeFile) {
+      document.title = APP_TITLE;
+      return;
+    }
+    const name = firstH1(activeFile.markdown) ?? activeFile.name;
+    document.title = `${name}${activeFile.isDirty ? " •" : ""} — ${APP_TITLE}`;
     // Leaving the editor entirely (e.g. back-navigating onto NotFoundPage)
     // would otherwise leave the last file's name on a page that no longer
     // shows it.
