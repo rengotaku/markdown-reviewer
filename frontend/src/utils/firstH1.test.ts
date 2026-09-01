@@ -60,7 +60,21 @@ describe("firstH1 CommonMark edge cases (codex review on #247)", () => {
   });
 
   it("renders reference-style links as their text", () => {
-    expect(firstH1("# [API][docs]")).toBe("API");
+    expect(firstH1("# [API][docs]\n\n[docs]: http://x\n")).toBe("API");
+    // Without a definition it is not a link, and reads literally.
+    expect(firstH1("# [API][docs]")).toBe("[API][docs]");
+  });
+
+  it("keeps a link destination that contains parentheses whole", () => {
+    expect(firstH1("# [x](http://example.com/a_(b))")).toBe("x");
+  });
+
+  it("reads a setext heading that spans several lines", () => {
+    expect(firstH1("Foo\nbar\n===\n")).toBe("Foo bar");
+  });
+
+  it("does not read tab-indented code as a heading", () => {
+    expect(firstH1("\t# not a heading\n\n# real\n")).toBe("real");
   });
 
   it("does not close a fence on a line carrying an info string", () => {
