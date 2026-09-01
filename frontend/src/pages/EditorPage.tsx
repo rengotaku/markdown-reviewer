@@ -105,6 +105,9 @@ const HOVER_SAMPLE_MS = 60;
 /** How much of a comment body to quote when naming the delete target. */
 const COMMENT_SUMMARY_LENGTH = 40;
 const COMMENT_ID_PARAM = "comment_id";
+
+/** Suffix on the browser tab title; matches the <title> in index.html. */
+const APP_TITLE = "markdown-reviewer";
 // How often to re-poll the active review file's comments for out-of-band
 // changes (mr CLI / API / other viewers). Matches the file-tree cadence.
 const COMMENTS_POLL_MS = 30_000;
@@ -244,6 +247,21 @@ export function EditorPage() {
     () => (activeFile ? dirOf(activeFile.path) : null),
     [activeFile]
   );
+
+  // Browser tab title mirrors the editor tab you are looking at (#245), so
+  // several markdown-reviewer windows are tellable apart from the OS tab bar
+  // alone. Keep the dirty marker identical to the one on the editor tab.
+  useEffect(() => {
+    document.title = activeFile
+      ? `${activeFile.name}${activeFile.isDirty ? " \u2022" : ""} \u2014 ${APP_TITLE}`
+      : APP_TITLE;
+    // Leaving the editor entirely (e.g. back-navigating onto NotFoundPage)
+    // would otherwise leave the last file's name on a page that no longer
+    // shows it.
+    return () => {
+      document.title = APP_TITLE;
+    };
+  }, [activeFile]);
 
   const readFile = useReadFile();
   const writeFile = useWriteFile();
