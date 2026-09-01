@@ -229,7 +229,7 @@ export function EditorPage() {
   const closeOthersRaw = useOpenFiles((s) => s.closeOthers);
   const closeToRightRaw = useOpenFiles((s) => s.closeToRight);
   const reorderFiles = useOpenFiles((s) => s.reorderFiles);
-  // "Recently" history for the sidebar (#248): the open-tab list itself is no
+  // "Recently" history for the sidebar (#229): the open-tab list itself is no
   // longer restored across reloads, so this is the only thing that carries
   // "what was I looking at last session" over.
   const recordRecentOpened = useRecentOpened((s) => s.record);
