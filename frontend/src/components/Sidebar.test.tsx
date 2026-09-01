@@ -52,6 +52,8 @@ describe("Sidebar", () => {
       await waitFor(() =>
         expect(screen.getByTestId("sidebar-recently-opened")).toBeInTheDocument()
       );
+      // Collapsed by default (#248).
+      await user.click(screen.getByTestId("sidebar-recently-opened-toggle"));
       const rows = screen
         .getAllByTestId(/^sidebar-recently-opened-file-/)
         .map((el) => el.getAttribute("data-testid"));
@@ -73,12 +75,15 @@ describe("Sidebar", () => {
       await waitFor(() =>
         expect(screen.getByTestId("sidebar-recently-opened")).toBeInTheDocument()
       );
+      await userEvent.setup().click(
+        screen.getByTestId("sidebar-recently-opened-toggle")
+      );
       expect(screen.getAllByTestId(/^sidebar-recently-opened-file-/)).toHaveLength(
         RECENT_OPENED_LIMIT
       );
     });
 
-    it("collapses and expands on the header click", async () => {
+    it("starts collapsed, and expands and collapses on the header click", async () => {
       const user = userEvent.setup();
       seedRecent(["README.md"]);
       renderWithProviders(<Sidebar onSelect={() => {}} />);
@@ -86,7 +91,7 @@ describe("Sidebar", () => {
       await waitFor(() =>
         expect(screen.getByTestId("sidebar-recently-opened")).toBeInTheDocument()
       );
-      await user.click(screen.getByTestId("sidebar-recently-opened-toggle"));
+      // #248: the history is folded away until asked for.
       expect(
         screen.queryByTestId("sidebar-recently-opened-file-README.md")
       ).not.toBeInTheDocument();
@@ -95,6 +100,39 @@ describe("Sidebar", () => {
       expect(
         screen.getByTestId("sidebar-recently-opened-file-README.md")
       ).toBeInTheDocument();
+
+      await user.click(screen.getByTestId("sidebar-recently-opened-toggle"));
+      expect(
+        screen.queryByTestId("sidebar-recently-opened-file-README.md")
+      ).not.toBeInTheDocument();
+    });
+
+    it("shows both numbers while a filter hides part of the history", async () => {
+      const user = userEvent.setup();
+      seedRecent(["README.md", "docs/intro.md", "notes.md"]);
+      renderWithProviders(<Sidebar onSelect={() => {}} />);
+
+      await waitFor(() =>
+        expect(screen.getByTestId("sidebar-recently-opened-count")).toBeInTheDocument()
+      );
+      await user.type(screen.getByTestId("sidebar-filter"), "docs");
+      // Otherwise "1" would read as "one file is all the history there is".
+      await waitFor(() =>
+        expect(screen.getByTestId("sidebar-recently-opened-count")).toHaveTextContent(
+          "1/3"
+        )
+      );
+    });
+
+    it("shows how many entries the history holds, without expanding it", async () => {
+      seedRecent(["README.md", "docs/intro.md", "notes.md"]);
+      renderWithProviders(<Sidebar onSelect={() => {}} />);
+
+      await waitFor(() =>
+        expect(screen.getByTestId("sidebar-recently-opened-count")).toHaveTextContent(
+          "3"
+        )
+      );
     });
 
     it("is hidden in the mtime-ordered '更新順' view", async () => {
@@ -263,6 +301,8 @@ describe("Sidebar recent view (#68)", () => {
       await waitFor(() =>
         expect(screen.getByTestId("sidebar-recently-opened")).toBeInTheDocument()
       );
+      // Collapsed by default (#248).
+      await user.click(screen.getByTestId("sidebar-recently-opened-toggle"));
       const rows = screen
         .getAllByTestId(/^sidebar-recently-opened-file-/)
         .map((el) => el.getAttribute("data-testid"));
@@ -284,12 +324,15 @@ describe("Sidebar recent view (#68)", () => {
       await waitFor(() =>
         expect(screen.getByTestId("sidebar-recently-opened")).toBeInTheDocument()
       );
+      await userEvent.setup().click(
+        screen.getByTestId("sidebar-recently-opened-toggle")
+      );
       expect(screen.getAllByTestId(/^sidebar-recently-opened-file-/)).toHaveLength(
         RECENT_OPENED_LIMIT
       );
     });
 
-    it("collapses and expands on the header click", async () => {
+    it("starts collapsed, and expands and collapses on the header click", async () => {
       const user = userEvent.setup();
       seedRecent(["README.md"]);
       renderWithProviders(<Sidebar onSelect={() => {}} />);
@@ -297,7 +340,7 @@ describe("Sidebar recent view (#68)", () => {
       await waitFor(() =>
         expect(screen.getByTestId("sidebar-recently-opened")).toBeInTheDocument()
       );
-      await user.click(screen.getByTestId("sidebar-recently-opened-toggle"));
+      // #248: the history is folded away until asked for.
       expect(
         screen.queryByTestId("sidebar-recently-opened-file-README.md")
       ).not.toBeInTheDocument();
@@ -306,6 +349,22 @@ describe("Sidebar recent view (#68)", () => {
       expect(
         screen.getByTestId("sidebar-recently-opened-file-README.md")
       ).toBeInTheDocument();
+
+      await user.click(screen.getByTestId("sidebar-recently-opened-toggle"));
+      expect(
+        screen.queryByTestId("sidebar-recently-opened-file-README.md")
+      ).not.toBeInTheDocument();
+    });
+
+    it("shows how many entries the history holds, without expanding it", async () => {
+      seedRecent(["README.md", "docs/intro.md", "notes.md"]);
+      renderWithProviders(<Sidebar onSelect={() => {}} />);
+
+      await waitFor(() =>
+        expect(screen.getByTestId("sidebar-recently-opened-count")).toHaveTextContent(
+          "3"
+        )
+      );
     });
 
     it("is hidden in the mtime-ordered '更新順' view", async () => {
@@ -620,6 +679,8 @@ describe("Sidebar name tooltip (#192)", () => {
       await waitFor(() =>
         expect(screen.getByTestId("sidebar-recently-opened")).toBeInTheDocument()
       );
+      // Collapsed by default (#248).
+      await user.click(screen.getByTestId("sidebar-recently-opened-toggle"));
       const rows = screen
         .getAllByTestId(/^sidebar-recently-opened-file-/)
         .map((el) => el.getAttribute("data-testid"));
@@ -641,12 +702,15 @@ describe("Sidebar name tooltip (#192)", () => {
       await waitFor(() =>
         expect(screen.getByTestId("sidebar-recently-opened")).toBeInTheDocument()
       );
+      await userEvent.setup().click(
+        screen.getByTestId("sidebar-recently-opened-toggle")
+      );
       expect(screen.getAllByTestId(/^sidebar-recently-opened-file-/)).toHaveLength(
         RECENT_OPENED_LIMIT
       );
     });
 
-    it("collapses and expands on the header click", async () => {
+    it("starts collapsed, and expands and collapses on the header click", async () => {
       const user = userEvent.setup();
       seedRecent(["README.md"]);
       renderWithProviders(<Sidebar onSelect={() => {}} />);
@@ -654,7 +718,7 @@ describe("Sidebar name tooltip (#192)", () => {
       await waitFor(() =>
         expect(screen.getByTestId("sidebar-recently-opened")).toBeInTheDocument()
       );
-      await user.click(screen.getByTestId("sidebar-recently-opened-toggle"));
+      // #248: the history is folded away until asked for.
       expect(
         screen.queryByTestId("sidebar-recently-opened-file-README.md")
       ).not.toBeInTheDocument();
@@ -663,6 +727,22 @@ describe("Sidebar name tooltip (#192)", () => {
       expect(
         screen.getByTestId("sidebar-recently-opened-file-README.md")
       ).toBeInTheDocument();
+
+      await user.click(screen.getByTestId("sidebar-recently-opened-toggle"));
+      expect(
+        screen.queryByTestId("sidebar-recently-opened-file-README.md")
+      ).not.toBeInTheDocument();
+    });
+
+    it("shows how many entries the history holds, without expanding it", async () => {
+      seedRecent(["README.md", "docs/intro.md", "notes.md"]);
+      renderWithProviders(<Sidebar onSelect={() => {}} />);
+
+      await waitFor(() =>
+        expect(screen.getByTestId("sidebar-recently-opened-count")).toHaveTextContent(
+          "3"
+        )
+      );
     });
 
     it("is hidden in the mtime-ordered '更新順' view", async () => {

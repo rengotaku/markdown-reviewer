@@ -17,8 +17,8 @@ function makeOpenFile(
   return {
     name: overrides.path,
     root: "mock-root",
-    markdown: "# body",
-    savedMarkdown: "# body",
+    markdown: "plain body, no heading",
+    savedMarkdown: "plain body, no heading",
     isDirty: false,
     reloadToken: 0,
     serverModified: "2026-05-20T00:00:00Z",
@@ -85,6 +85,42 @@ describe("EditorPage browser tab title (#245)", () => {
     renderPage();
     await waitFor(() =>
       expect(document.title).toBe("README.md • — markdown-reviewer")
+    );
+  });
+
+  it("prefers the document's own h1 over the file name (#247)", async () => {
+    useOpenFiles.setState({
+      files: [
+        makeOpenFile({
+          id: "a",
+          path: "summary.md",
+          markdown: "# Phase 2 の調査結果\n\nbody",
+        }),
+      ],
+      activeIdByRoot: { "mock-root": "a" },
+    });
+
+    renderPage();
+    await waitFor(() =>
+      expect(document.title).toBe("Phase 2 の調査結果 \u2014 markdown-reviewer")
+    );
+  });
+
+  it("uses the first h1 when the document has several (#247)", async () => {
+    useOpenFiles.setState({
+      files: [
+        makeOpenFile({
+          id: "a",
+          path: "summary.md",
+          markdown: "# first\n\ntext\n\n# second\n",
+        }),
+      ],
+      activeIdByRoot: { "mock-root": "a" },
+    });
+
+    renderPage();
+    await waitFor(() =>
+      expect(document.title).toBe("first \u2014 markdown-reviewer")
     );
   });
 

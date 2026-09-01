@@ -497,7 +497,7 @@ interface RecentlyOpenedSectionProps {
 }
 
 /**
- * "Recently" (#248): the files opened most recently in this root, newest
+ * "Recently" (#229): the files opened most recently in this root, newest
  * first, capped at RECENT_OPENED_LIMIT. Open tabs are no longer restored on
  * reload — the editor starts empty and shows only what the user picks here or
  * in the tree — so this history is what makes getting back to yesterday's file
@@ -513,16 +513,28 @@ function RecentlyOpenedSection({
   onSelect,
   onContextMenu,
 }: RecentlyOpenedSectionProps) {
-  const [open, setOpen] = useState(true);
+  // Collapsed by default (#248): the tree below it is what the sidebar is
+  // for, and an expanded 20-item history pushes it off screen. The count on
+  // the header is what tells you whether opening it is worth it.
+  const [open, setOpen] = useState(false);
   const entries = useRecentOpened((s) => s.entries);
 
   const filterLower = filter.toLowerCase();
-  const visible = entries
+  const inRoot = entries
     .filter((e) => e.root === root)
-    .slice(0, RECENT_OPENED_LIMIT)
-    .filter((e) => !filterLower || e.path.toLowerCase().includes(filterLower));
+    .slice(0, RECENT_OPENED_LIMIT);
+  const visible = inRoot.filter(
+    (e) => !filterLower || e.path.toLowerCase().includes(filterLower)
+  );
 
   if (root === "" || visible.length === 0) return null;
+
+  // While filtering, the header has to say both numbers — otherwise the count
+  // reads as "this is all the history there is".
+  const count =
+    visible.length === inRoot.length
+      ? `${inRoot.length}`
+      : `${visible.length}/${inRoot.length}`;
 
   return (
     <Box
@@ -545,6 +557,14 @@ function RecentlyOpenedSection({
             sx: { letterSpacing: "0.06em", textTransform: "uppercase" },
           }}
         />
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          data-testid="sidebar-recently-opened-count"
+          sx={{ flexShrink: 0, pl: 0.5, fontVariantNumeric: "tabular-nums" }}
+        >
+          {count}
+        </Typography>
       </ListItemButton>
       {open && (
         <List dense disablePadding>
