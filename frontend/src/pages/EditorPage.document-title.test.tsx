@@ -68,7 +68,7 @@ describe("EditorPage browser tab title (#245)", () => {
     await waitFor(() =>
       expect(screen.getByTestId("editor-active-path")).toHaveTextContent("README.md")
     );
-    expect(document.title).toBe("README.md — markdown-reviewer");
+    expect(document.title).toBe("README.md \u2014 markdown-reviewer");
 
     act(() => useOpenFiles.getState().setActive("mock-root", "b"));
     await waitFor(() =>
@@ -86,6 +86,23 @@ describe("EditorPage browser tab title (#245)", () => {
     await waitFor(() =>
       expect(document.title).toBe("README.md • — markdown-reviewer")
     );
+  });
+
+  it("restores the bare app name when the editor unmounts", async () => {
+    useOpenFiles.setState({
+      files: [makeOpenFile({ id: "a", path: "README.md" })],
+      activeIdByRoot: { "mock-root": "a" },
+    });
+
+    const { unmount } = renderPage();
+    await waitFor(() =>
+      expect(document.title).toBe("README.md \u2014 markdown-reviewer")
+    );
+
+    // Navigating off the editor (a bad URL lands on NotFoundPage) must not
+    // leave the last file's name on a page that no longer shows it.
+    unmount();
+    expect(document.title).toBe("markdown-reviewer");
   });
 
   it("falls back to the bare app name with no file open", async () => {

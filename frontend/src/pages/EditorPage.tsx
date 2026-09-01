@@ -255,6 +255,12 @@ export function EditorPage() {
     document.title = activeFile
       ? `${activeFile.name}${activeFile.isDirty ? " \u2022" : ""} \u2014 ${APP_TITLE}`
       : APP_TITLE;
+    // Leaving the editor entirely (e.g. back-navigating onto NotFoundPage)
+    // would otherwise leave the last file's name on a page that no longer
+    // shows it.
+    return () => {
+      document.title = APP_TITLE;
+    };
   }, [activeFile]);
 
   const readFile = useReadFile();
