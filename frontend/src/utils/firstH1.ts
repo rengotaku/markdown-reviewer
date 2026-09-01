@@ -2,8 +2,14 @@ import { splitPreamble } from "@/utils/frontmatter";
 
 /** Opening or closing line of a fenced code block (``` or ~~~). */
 const FENCE_RE = /^\s{0,3}(`{3,}|~{3,})/;
-/** ATX h1: a single leading `#`, and nothing but `#`s for the optional closer. */
-const ATX_H1_RE = /^\s{0,3}#[ \t]+(.*?)[ \t]*#*[ \t]*$/;
+/** ATX h1: a single leading `#`, then the heading text. */
+const ATX_H1_RE = /^\s{0,3}#[ \t]+(.*)$/;
+/**
+ * The optional closing run of `#`s. It only counts as a closer when preceded
+ * by whitespace (or when it is the whole text, since the space after the
+ * opening `#` already separates it) — `# C#` is a heading reading `C#`.
+ */
+const ATX_CLOSER_RE = /(^|[ \t]+)#+[ \t]*$/;
 /** Setext h1 underline: a run of `=` under a non-empty line. */
 const SETEXT_H1_RE = /^\s{0,3}=+[ \t]*$/;
 
@@ -15,6 +21,7 @@ const SETEXT_H1_RE = /^\s{0,3}=+[ \t]*$/;
 function toPlainText(text: string): string {
   return text
     .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/!?\[([^\]]*)\]\[[^\]]*\]/g, "$1")
     .replace(/`([^`]*)`/g, "$1")
     .replace(/(\*\*\*|___)(.+?)\1/g, "$2")
     .replace(/(\*\*|__)(.+?)\1/g, "$2")
@@ -42,7 +49,14 @@ export function firstH1(raw: string): string | null {
     const fenceMatch = line.match(FENCE_RE);
     if (fence) {
       // Only a fence of the same kind and at least the same length closes it.
-      if (fenceMatch && fenceMatch[1][0] === fence[0] && fenceMatch[1].length >= fence.length) {
+      // A closing fence carries no info string: same character, at least as
+      // long, and nothing but whitespace after it.
+      const closes =
+        fenceMatch !== null &&
+        fenceMatch[1][0] === fence[0] &&
+        fenceMatch[1].length >= fence.length &&
+        line.slice(line.indexOf(fenceMatch[1]) + fenceMatch[1].length).trim() === "";
+      if (closes) {
         fence = null;
       }
       prev = "";
@@ -56,7 +70,7 @@ export function firstH1(raw: string): string | null {
 
     const atx = line.match(ATX_H1_RE);
     if (atx) {
-      const text = toPlainText(atx[1]);
+      const text = toPlainText(atx[1].replace(ATX_CLOSER_RE, "$1"));
       if (text) return text;
       prev = "";
       continue;
@@ -64,7 +78,9 @@ export function firstH1(raw: string): string | null {
 
     // A setext underline names the line above it, so it can only be a heading
     // when that line held text (and wasn't itself a heading or a list item).
-    if (prev.trim() && SETEXT_H1_RE.test(line)) {
+    // `prev` is only a setext heading's text when it is a paragraph line:
+    // four or more leading spaces make it indented code instead.
+    if (prev.trim() && !/^ {4}/.test(prev) && SETEXT_H1_RE.test(line)) {
       const text = toPlainText(prev);
       if (text) return text;
     }

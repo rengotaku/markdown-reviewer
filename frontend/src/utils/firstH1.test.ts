@@ -52,3 +52,22 @@ describe("firstH1 (#247)", () => {
     expect(firstH1("## two\n\n# one\n")).toBe("one");
   });
 });
+
+describe("firstH1 CommonMark edge cases (codex review on #247)", () => {
+  it("keeps a trailing # that is part of the text", () => {
+    expect(firstH1("# C#")).toBe("C#");
+    expect(firstH1("# heading ###")).toBe("heading");
+  });
+
+  it("renders reference-style links as their text", () => {
+    expect(firstH1("# [API][docs]")).toBe("API");
+  });
+
+  it("does not close a fence on a line carrying an info string", () => {
+    expect(firstH1("```\n```js\n# inside the block\n```\n")).toBeNull();
+  });
+
+  it("does not read indented code as a setext heading", () => {
+    expect(firstH1("    indented code\n===\n\n# real\n")).toBe("real");
+  });
+});
