@@ -1497,7 +1497,7 @@ describe("EditorPage selection menu (#233)", () => {
   });
 });
 
-describe("EditorPage comment menu (#238)", () => {
+describe("EditorPage comment hover preview / thread (#251)", () => {
   // The 編集 / 削除 items used to live in the editor's right-click menu. They
   // now open by hovering the comment's highlight — adding a comment is what
   // the selection bubble is for, and an already-commented span should not
@@ -1567,7 +1567,7 @@ describe("EditorPage comment menu (#238)", () => {
     return { user, ed };
   }
 
-  /** Rests the pointer on the comment's highlight and waits for the menu. */
+  /** Rests the pointer on the comment's highlight and waits for the preview. */
   async function hoverHighlight(ed: Editor) {
     // jsdom has no layout, so posAtCoords returns null (stubbed in
     // installEditor) and the handler falls back to the mark's
@@ -1580,7 +1580,17 @@ describe("EditorPage comment menu (#238)", () => {
     await waitFor(() => {
       const el = ed.view.dom.querySelector(".comment-mark") as HTMLElement;
       fireEvent.mouseMove(el, { clientX: 10, clientY: 10 });
-      expect(screen.getByTestId("editor-menu-edit-comment")).toBeInTheDocument();
+      expect(screen.getByTestId("comment-hover-preview")).toBeInTheDocument();
+    });
+    return ed.view.dom.querySelector(".comment-mark") as HTMLElement;
+  }
+
+  /** Clicks the comment's highlight and waits for its thread to open. */
+  async function openThread(ed: Editor) {
+    await waitFor(() => {
+      const el = ed.view.dom.querySelector(".comment-mark") as HTMLElement;
+      fireEvent.click(el, { clientX: 10, clientY: 10 });
+      expect(screen.getByTestId("comment-thread-popover")).toBeInTheDocument();
     });
     return ed.view.dom.querySelector(".comment-mark") as HTMLElement;
   }
@@ -1611,22 +1621,22 @@ describe("EditorPage comment menu (#238)", () => {
     useEditorInstance.setState({ editor: null });
   });
 
-  it("ハイライトにホバーするだけで編集・削除が出る", async () => {
+  it("ホバーでは本文のプレビューだけが出て、操作は出ない", async () => {
     const { ed } = await openWithComment(openComment);
 
     await hoverHighlight(ed);
 
-    expect(screen.getByTestId("editor-menu-edit-comment")).toBeEnabled();
-    expect(screen.getByTestId("editor-menu-delete-comment")).toBeEnabled();
-    // The menu names the comment it acts on.
-    expect(screen.getByTestId("editor-comment-menu-target")).toHaveTextContent(
+    expect(screen.getByTestId("comment-hover-preview-body")).toHaveTextContent(
       "ここ直して"
     );
+    // Hover reads, click writes (#251).
+    expect(screen.queryByTestId("comment-thread-edit")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("comment-thread-delete")).not.toBeInTheDocument();
 
     // Leaving the editor closes it again.
     fireEvent.mouseLeave(ed.view.dom);
     await waitFor(() =>
-      expect(screen.queryByTestId("editor-comment-menu")).not.toBeInTheDocument()
+      expect(screen.queryByTestId("comment-hover-preview")).not.toBeInTheDocument()
     );
   });
 
@@ -1643,27 +1653,165 @@ describe("EditorPage comment menu (#238)", () => {
     expect(screen.queryByTestId("editor-comment-menu")).not.toBeInTheDocument();
   });
 
-  it("選択が残っていてもハイライトのホバーで開く", async () => {
-    // Right after commenting the commented range is still selected; hovering
-    // the highlight must still bring up the same menu.
+  it("クリックでスレッドが開き、返信・解決・編集・削除が揃う", async () => {
+    const { ed } = await openWithComment(openComment);
+
+    await openThread(ed);
+
+    expect(screen.getByTestId("comment-thread-message")).toHaveTextContent(
+      "ここ直して"
+    );
+    expect(screen.getByTestId("comment-thread-reply-input")).toBeInTheDocument();
+    expect(screen.getByTestId("comment-thread-resolve")).toBeEnabled();
+    expect(screen.getByTestId("comment-thread-edit")).toBeEnabled();
+    expect(screen.getByTestId("comment-thread-delete")).toBeEnabled();
+  });
+
+  it("プレビューのカードをクリックしてもスレッドが開く", async () => {
+    // The card covers the text it describes, so a pointer that drifted onto it
+    // while reading must not click through to nothing.
+    const { user, ed } = await openWithComment(openComment);
+    await hoverHighlight(ed);
+
+    await user.click(screen.getByTestId("comment-hover-preview-click"));
+
+    expect(await screen.findByTestId("comment-thread-popover")).toBeInTheDocument();
+  });
+
+  it("キーボードでもスレッドを開ける", async () => {
+    const { ed } = await openWithComment(openComment);
+
+    await waitFor(() => {
+      const el = ed.view.dom.querySelector(".comment-mark") as HTMLElement;
+      expect(el).toHaveAttribute("tabindex", "0");
+      fireEvent.keyDown(el, { key: "Enter" });
+      expect(screen.getByTestId("comment-thread-popover")).toBeInTheDocument();
+    });
+  });
+
+  it("スレッドを開いている間はホバープレビューを出さない", async () => {
+    const { ed } = await openWithComment(openComment);
+    await openThread(ed);
+
+    const el = ed.view.dom.querySelector(".comment-mark") as HTMLElement;
+    fireEvent.mouseMove(el, { clientX: 10, clientY: 10 });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 300));
+    });
+
+    expect(screen.queryByTestId("comment-hover-preview")).not.toBeInTheDocument();
+  });
+
+  it("選択が残っていてもハイライトのクリックでスレッドが開く", async () => {
+    // Right after commenting the commented range is still selected; clicking
+    // the highlight must still open its thread.
     const { ed } = await openWithComment(openComment);
     await act(async () => {
       ed.commands.setTextSelection({ from: 1, to: 3 });
     });
 
-    await hoverHighlight(ed);
+    await openThread(ed);
 
-    expect(screen.getByTestId("editor-menu-edit-comment")).toBeEnabled();
+    expect(screen.getByTestId("comment-thread-popover")).toBeInTheDocument();
   });
 
   it("編集は本文入りのダイアログを開く", async () => {
     const { user, ed } = await openWithComment(openComment);
-    await hoverHighlight(ed);
+    await openThread(ed);
 
-    await user.click(await screen.findByTestId("editor-menu-edit-comment"));
+    await user.click(await screen.findByTestId("comment-thread-edit"));
 
     const input = await screen.findByTestId("comment-body-input");
     expect(input).toHaveValue("ここ直して");
+  });
+
+  it("返信は POST を投げてスレッドに載る", async () => {
+    const { user, ed } = await openWithComment(openComment);
+    const { http, HttpResponse } = await import("msw");
+    const { server } = await import("@/test/mocks/server");
+    let posted: unknown = null;
+    server.use(
+      http.post("http://localhost:8080/api/replies*", async ({ request }) => {
+        posted = await request.json();
+        return HttpResponse.json({ ok: true });
+      })
+    );
+    await openThread(ed);
+
+    await user.type(
+      screen.getByTestId("comment-thread-reply-input"),
+      "直しました"
+    );
+    await user.click(screen.getByTestId("comment-thread-send"));
+
+    await waitFor(() =>
+      expect(posted).toMatchObject({ body: "直しました" })
+    );
+  });
+
+  it("未送信の返信があると外側クリックでは閉じない", async () => {
+    const { user, ed } = await openWithComment(openComment);
+    await openThread(ed);
+
+    await user.type(screen.getByTestId("comment-thread-reply-input"), "書きかけ");
+    fireEvent.mouseDown(document.body);
+
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    expect(screen.getByTestId("comment-thread-popover")).toBeInTheDocument();
+    expect(screen.getByTestId("comment-thread-draft-hint")).toBeInTheDocument();
+  });
+
+  it("未送信がなければ外側クリックで閉じる", async () => {
+    const { ed } = await openWithComment(openComment);
+    await openThread(ed);
+
+    fireEvent.mouseDown(document.body);
+
+    await waitFor(() =>
+      expect(screen.queryByTestId("comment-thread-popover")).not.toBeInTheDocument()
+    );
+  });
+
+  it("Esc は未送信の返信の破棄を確認してから閉じる", async () => {
+    const { user, ed } = await openWithComment(openComment);
+    await openThread(ed);
+    await user.type(screen.getByTestId("comment-thread-reply-input"), "書きかけ");
+
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    const dialog = await screen.findByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: "破棄して閉じる" }));
+
+    await waitFor(() =>
+      expect(screen.queryByTestId("comment-thread-popover")).not.toBeInTheDocument()
+    );
+  });
+
+  it("長いスレッドは畳まれ、ボタンで全部開く", async () => {
+    const { user, ed } = await openWithComment({
+      ...openComment,
+      replies: [
+        { author: "ai", body: "r1" },
+        { author: "human", body: "r2" },
+        { author: "ai", body: "r3" },
+        { author: "human", body: "r4" },
+        { author: "ai", body: "r5" },
+      ],
+    });
+    await openThread(ed);
+
+    // Scoped to the popover: the side pane lists the same replies.
+    const popover = screen.getByTestId("comment-thread-popover");
+    // Opening remark + the last two, with the middle folded behind a button.
+    expect(within(popover).getAllByTestId("comment-thread-message")).toHaveLength(3);
+    expect(within(popover).queryByText("r1")).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId("comment-thread-expand"));
+
+    expect(within(popover).getAllByTestId("comment-thread-message")).toHaveLength(6);
+    expect(within(popover).getByText("r1")).toBeInTheDocument();
   });
 
   it("削除は DELETE を投げる", async () => {
@@ -1677,9 +1825,9 @@ describe("EditorPage comment menu (#238)", () => {
         return HttpResponse.json({ ok: true });
       })
     );
-    await hoverHighlight(ed);
+    await openThread(ed);
 
-    await user.click(await screen.findByTestId("editor-menu-delete-comment"));
+    await user.click(await screen.findByTestId("comment-thread-delete"));
     // Deleting asks first, naming the comment it is about to drop.
     const dialog = await screen.findByRole("dialog");
     expect(dialog).toHaveTextContent("ここ直して");
@@ -1701,9 +1849,9 @@ describe("EditorPage comment menu (#238)", () => {
         return HttpResponse.json({ ok: true });
       })
     );
-    await hoverHighlight(ed);
+    await openThread(ed);
 
-    const btn = await screen.findByTestId("editor-menu-delete-comment");
+    const btn = await screen.findByTestId("comment-thread-delete");
     await user.click(btn);
     await user.click(await screen.findByRole("button", { name: "削除" }));
 
@@ -1727,26 +1875,25 @@ describe("EditorPage comment menu (#238)", () => {
         return HttpResponse.json({ ok: true });
       })
     );
-    await hoverHighlight(ed);
+    await openThread(ed);
 
-    await user.click(await screen.findByTestId("editor-menu-delete-comment"));
+    await user.click(await screen.findByTestId("comment-thread-delete"));
     await user.click(await screen.findByRole("button", { name: "キャンセル" }));
 
     expect(calls).toBe(0);
     expect(ed.view.dom.querySelectorAll(".comment-mark").length).toBeGreaterThan(0);
-    // Hovering again offers the action once more (no stuck in-flight state).
-    await hoverHighlight(ed);
-    expect(screen.getByTestId("editor-menu-delete-comment")).toBeEnabled();
+    // The thread is still usable (no stuck in-flight state).
+    expect(screen.getByTestId("comment-thread-delete")).toBeEnabled();
   });
 
   it("AI のコメントは編集・削除とも無効になる", async () => {
     const { ed } = await openWithComment({ ...openComment, author: "ai" });
-    await hoverHighlight(ed);
+    await openThread(ed);
 
     await waitFor(() =>
-      expect(screen.getByTestId("editor-menu-edit-comment")).toBeDisabled()
+      expect(screen.getByTestId("comment-thread-edit")).toBeDisabled()
     );
-    expect(screen.getByTestId("editor-menu-delete-comment")).toBeDisabled();
+    expect(screen.getByTestId("comment-thread-delete")).toBeDisabled();
   });
 });
 

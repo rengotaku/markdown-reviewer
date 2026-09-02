@@ -30,6 +30,12 @@ export interface FlashRange {
 
 interface PluginState {
   comments: HighlightComment[];
+  /**
+   * The comment whose thread is open (#251). Carried in the decoration rather
+   * than toggled on the DOM node: ProseMirror re-renders decorated spans on
+   * its own transactions, which would silently drop a class set from outside.
+   */
+  activeId: string | null;
   deco: DecorationSet;
   /**
    * Transient decorations painted by flashCommentRanges and removed by
@@ -45,12 +51,14 @@ const key = new PluginKey<PluginState>("commentHighlight");
 
 type PluginMeta =
   | { type: "setComments"; comments: HighlightComment[] }
+  | { type: "setActive"; activeId: string | null }
   | { type: "flash"; ranges: FlashRange[] }
   | { type: "clearFlash" };
 
 function buildDeco(
   doc: ProseMirrorNode,
-  comments: ReadonlyArray<HighlightComment>
+  comments: ReadonlyArray<HighlightComment>,
+  activeId: string | null
 ): DecorationSet {
   const decos: Decoration[] = [];
   // Flatten the doc once, not once per anchor: buildDeco re-runs on every
@@ -75,7 +83,14 @@ function buildDeco(
         Decoration.inline(
           range.from,
           range.to,
-          { class: "comment-mark", "data-comment-id": c.id },
+          {
+            class: c.id === activeId ? "comment-mark is-active" : "comment-mark",
+            "data-comment-id": c.id,
+            // Reachable by keyboard (#251): the thread opens on click, so the
+            // highlight has to be a focusable control rather than plain text.
+            tabindex: "0",
+            role: "button",
+          },
           // Kept in the (public) spec as well as the DOM attrs so a lookup by
           // document range — what the selection bubble needs — does not have
           // to go through the rendered DOM the way the old right-click menu
@@ -141,6 +156,8 @@ declare module "@tiptap/core" {
     commentHighlight: {
       /** Replace the set of highlighted comments. */
       setCommentHighlights: (comments: HighlightComment[]) => ReturnType;
+      /** Mark one comment's highlight as the open thread's anchor (#251). */
+      setActiveComment: (id: string | null) => ReturnType;
       /**
        * Paint a transient highlight over `ranges` (cleared by
        * clearCommentFlash). Used to flash a jump target that has no
@@ -163,6 +180,7 @@ export const CommentHighlight = Extension.create({
         state: {
           init: () => ({
             comments: [],
+            activeId: null,
             deco: DecorationSet.empty,
             flashDeco: DecorationSet.empty,
           }),
@@ -170,8 +188,18 @@ export const CommentHighlight = Extension.create({
             const meta = tr.getMeta(key) as PluginMeta | undefined;
             if (meta?.type === "setComments") {
               return {
+                ...value,
                 comments: meta.comments,
-                deco: buildDeco(newState.doc, meta.comments),
+                deco: buildDeco(newState.doc, meta.comments, value.activeId),
+                flashDeco: value.flashDeco.map(tr.mapping, newState.doc),
+              };
+            }
+            if (meta?.type === "setActive") {
+              if (meta.activeId === value.activeId) return value;
+              return {
+                ...value,
+                activeId: meta.activeId,
+                deco: buildDeco(newState.doc, value.comments, meta.activeId),
                 flashDeco: value.flashDeco.map(tr.mapping, newState.doc),
               };
             }
@@ -186,8 +214,9 @@ export const CommentHighlight = Extension.create({
             }
             if (tr.docChanged) {
               return {
+                ...value,
                 comments: value.comments,
-                deco: buildDeco(newState.doc, value.comments),
+                deco: buildDeco(newState.doc, value.comments, value.activeId),
                 flashDeco: value.flashDeco.map(tr.mapping, newState.doc),
               };
             }
@@ -214,6 +243,12 @@ export const CommentHighlight = Extension.create({
         (comments: HighlightComment[]) =>
         ({ tr, dispatch }) => {
           if (dispatch) dispatch(tr.setMeta(key, { type: "setComments", comments }));
+          return true;
+        },
+      setActiveComment:
+        (id: string | null) =>
+        ({ tr, dispatch }) => {
+          if (dispatch) dispatch(tr.setMeta(key, { type: "setActive", activeId: id }));
           return true;
         },
       flashCommentRanges:

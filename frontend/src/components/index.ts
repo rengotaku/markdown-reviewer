@@ -4,6 +4,8 @@ export { ToastViewport } from "./ToastViewport";
 export { ConfirmDialog } from "./ConfirmDialog";
 export { AddCommentDialog } from "./AddCommentDialog";
 export { CommentSidePane } from "./CommentSidePane";
+export { CommentThreadPopover } from "./CommentThreadPopover";
+export { CommentHoverPreview } from "./CommentHoverPreview";
 export { DiffView } from "./DiffView";
 export { NameTooltip } from "./NameTooltip";
 export { LinkPreviewCard } from "./LinkPreviewCard";

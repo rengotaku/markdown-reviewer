@@ -390,9 +390,23 @@
   background-color: #fff8c5;
   border-bottom: 1px dashed #c9a700;
   border-radius: 2px;
-  cursor: help;
+  /* Clicking opens the thread (#251), so the highlight reads as a control. */
+  cursor: pointer;
 }
 
+/* The highlight is focusable (#251); keep the ring the keyboard needs without
+   painting one for every mouse click. */
+.ProseMirror .comment-mark:focus {
+  outline: none;
+}
+
+.ProseMirror .comment-mark:focus-visible {
+  outline: 2px solid #f4b400;
+  outline-offset: 1px;
+}
+
+/* Set while this comment's thread is open, so the anchor of the popover is
+   obvious when several highlights sit in the same paragraph. */
 .ProseMirror .comment-mark.is-active {
   background-color: #ffec99;
   outline: 2px solid #f4b400;
