@@ -21,8 +21,6 @@ import RateReviewOutlinedIcon from "@mui/icons-material/RateReviewOutlined";
 import MenuOpenIcon from "@mui/icons-material/MenuOpen";
 import MenuIcon from "@mui/icons-material/Menu";
 import RefreshIcon from "@mui/icons-material/Refresh";
-import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
-import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import CommentIcon from "@mui/icons-material/Comment";
 import FormatAlignCenterIcon from "@mui/icons-material/FormatAlignCenter";
 import FormatListNumberedIcon from "@mui/icons-material/FormatListNumbered";
@@ -37,6 +35,8 @@ import {
   ConfirmDialog,
   AddCommentDialog,
   CommentSidePane,
+  CommentThreadPopover,
+  CommentHoverPreview,
   DiffView,
   NameTooltip,
 } from "@/components";
@@ -89,6 +89,7 @@ import {
   commentIdsInRange,
   type HighlightComment,
 } from "@/components/tiptap/extensions/CommentHighlight";
+import { contextLabel } from "@/utils/commentContext";
 import { BAR_HEIGHT, TAB_CONTENT_HEIGHT } from "@/theme/dimensions";
 
 function basename(path: string): string {
@@ -1155,6 +1156,30 @@ export function EditorPage() {
     right: number;
   } | null>(null);
 
+  // The comment whose thread is open, with the rect its popover hangs off.
+  // Click opens, hover only previews (#251), so at most one thread is open at
+  // a time and the hover preview stays suppressed while it is.
+  const [openThread, setOpenThread] = useState<{
+    commentId: string;
+    rect: DOMRect;
+  } | null>(null);
+  // The reply being typed in that thread. Lifted out of the popover so the
+  // dismissal paths can refuse to throw away unsent text (#251).
+  const [threadDraft, setThreadDraft] = useState("");
+  // Read from DOM listeners registered once per editor, which would otherwise
+  // close over the first render's value.
+  const openThreadRef = useRef<typeof openThread>(null);
+  const threadDraftRef = useRef("");
+  useEffect(() => {
+    openThreadRef.current = openThread;
+    threadDraftRef.current = threadDraft;
+  }, [openThread, threadDraft]);
+
+  const closeThread = () => {
+    setOpenThread(null);
+    setThreadDraft("");
+  };
+
   // Re-render the toolbar Add-Comment button when selection / doc changes.
   const [, setSelectionTick] = useState(0);
   useEffect(() => {
@@ -1223,6 +1248,9 @@ export function EditorPage() {
     };
 
     const update = (ev: MouseEvent) => {
+      // A thread is the foreground surface: previewing the highlight behind it
+      // (or a neighbour) would stack two cards over the same paragraph.
+      if (openThreadRef.current) return;
       const next = targetAt(ev);
       const key = next ? `${next.commentId ?? ""}|${next.canAdd}` : null;
       if (key === hoverKey.current) return;
@@ -1278,6 +1306,48 @@ export function EditorPage() {
       if (lastEvent) update(lastEvent);
     };
 
+    // Clicking a highlight opens its thread (#251). The id comes from the
+    // decoration set first for the same reason the hover path does it: nested
+    // highlights merge into one span whose attribute keeps a single id.
+    const openThreadAt = (el: HTMLElement, pos: number | null) => {
+      const commentId =
+        (pos !== null ? commentIdsInRange(editor.state, pos, pos + 1)[0] : undefined) ??
+        el.getAttribute("data-comment-id") ??
+        undefined;
+      if (!commentId) return;
+      clearTimers();
+      hoverKey.current = null;
+      setHoverTarget(null);
+      setThreadDraft("");
+      setOpenThread({ commentId, rect: el.getBoundingClientRect() });
+    };
+
+    const onClick = (e: Event) => {
+      const ev = e as MouseEvent;
+      const el = (ev.target as HTMLElement | null)?.closest?.(
+        "[data-comment-id]"
+      ) as HTMLElement | null;
+      if (!el) return;
+      let pos: number | null = null;
+      try {
+        pos = editor.view.posAtCoords({ left: ev.clientX, top: ev.clientY })?.pos ?? null;
+      } catch {
+        pos = null; // no layout (jsdom) — the attribute below is enough
+      }
+      openThreadAt(el, pos);
+    };
+
+    const onKeyDown = (e: Event) => {
+      const ev = e as KeyboardEvent;
+      if (ev.key !== "Enter" && ev.key !== " ") return;
+      const el = (ev.target as HTMLElement | null)?.closest?.(
+        "[data-comment-id]"
+      ) as HTMLElement | null;
+      if (!el) return;
+      ev.preventDefault();
+      openThreadAt(el, null);
+    };
+
     let dom: HTMLElement | undefined;
     const attach = () => {
       if (dom) return;
@@ -1291,6 +1361,8 @@ export function EditorPage() {
       dom.addEventListener("pointerdown", onPointerDown, true);
       dom.addEventListener("mousemove", onMove);
       dom.addEventListener("mouseleave", onLeave);
+      dom.addEventListener("click", onClick);
+      dom.addEventListener("keydown", onKeyDown);
     };
     attach();
     editor.on("create", attach);
@@ -1306,8 +1378,80 @@ export function EditorPage() {
       dom?.removeEventListener("pointerdown", onPointerDown, true);
       dom?.removeEventListener("mousemove", onMove);
       dom?.removeEventListener("mouseleave", onLeave);
+      dom?.removeEventListener("click", onClick);
+      dom?.removeEventListener("keydown", onKeyDown);
     };
   }, [editor]);
+
+  // Mark the open thread's highlight so the popover's anchor is obvious when a
+  // paragraph carries several.
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) return;
+    editor.commands.setActiveComment(openThread?.commentId ?? null);
+  }, [editor, openThread]);
+
+  // Esc and a click outside dismiss the thread — but never silently drop an
+  // unsent reply (#251): the click is ignored outright, and Esc asks first.
+  useEffect(() => {
+    if (!openThread) return;
+
+    const onDocMouseDown = (e: MouseEvent) => {
+      const el = e.target as HTMLElement | null;
+      if (el?.closest?.('[data-testid="comment-thread-popover"]')) return;
+      // Another highlight: its own click handler switches threads, and doing
+      // that with a draft in flight would lose it, so guard here too.
+      if (el?.closest?.("[data-comment-id]")) {
+        if (threadDraftRef.current.trim()) {
+          showToast("未送信の返信があります。Esc で破棄できます", "info");
+          e.preventDefault();
+          e.stopPropagation();
+        }
+        return;
+      }
+      // MUI renders confirm dialogs and tooltips in portals outside the
+      // popover, so a click on "削除" 's confirmation must not count as outside.
+      if (el?.closest?.('[role="dialog"], [role="tooltip"]')) return;
+      if (threadDraftRef.current.trim()) {
+        showToast("未送信の返信があります。Esc で破棄できます", "info");
+        return;
+      }
+      closeThread();
+    };
+
+    const onDocKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (!threadDraftRef.current.trim()) {
+        closeThread();
+        return;
+      }
+      e.preventDefault();
+      void (async () => {
+        const ok = await confirm({
+          title: "未送信の返信があります",
+          message: "書きかけの返信を破棄して閉じますか？",
+          confirmLabel: "破棄して閉じる",
+        });
+        if (ok) closeThread();
+      })();
+    };
+
+    document.addEventListener("mousedown", onDocMouseDown, true);
+    document.addEventListener("keydown", onDocKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onDocMouseDown, true);
+      document.removeEventListener("keydown", onDocKeyDown);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openThread]);
+
+  // The thread belongs to one file: switching tabs or leaving review mode
+  // leaves a popover anchored to text that is no longer on screen.
+  useEffect(() => {
+    // Synchronous on purpose: the popover is anchored to a rect in the old
+    // file's layout, so it has to go in the same commit as the switch.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    closeThread();
+  }, [activePath, reviewState]);
 
   const handleSelect = async (path: string) => {
     if (!activeRoot) return;
@@ -1697,30 +1841,74 @@ export function EditorPage() {
   const bubbleComment = comments.find((c) => c.id === hoverTarget?.commentId);
   const menuCanAdd = !!hoverTarget?.canAdd && canAddComment;
   const menuOpen = !!menuAnchor && (menuCanAdd || !!bubbleComment);
-  const bubbleCommentIsAiAuthored = bubbleComment?.author === "ai";
-  // Resolved comments are read-only until reopened — the backend rejects a
-  // body edit with 409, so the bubble mirrors the side pane and disables it.
-  const bubbleCommentIsResolved = bubbleComment?.status === "resolved";
-  const bubbleEditDisabledReason = bubbleCommentIsAiAuthored
-    ? "AI のコメントは編集できません"
-    : bubbleCommentIsResolved
-      ? "解決済みのため編集できません"
-      : null;
-  const bubbleDeleteDisabledReason = bubbleCommentIsAiAuthored
-    ? "AI のコメントは削除できません"
-    : null;
+  const threadComment = comments.find((c) => c.id === openThread?.commentId);
+  // A thread whose comment was deleted (or whose file reloaded without it)
+  // has nothing left to show.
+  useEffect(() => {
+    // Same reason as above: a popover with no comment behind it must not
+    // survive the commit that dropped the comment.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (openThread && !threadComment) closeThread();
+  }, [openThread, threadComment]);
 
-  // Two guards the right-click menu did not need:
-  //  - a confirmation naming the comment. The bubble's buttons sit next to
-  //    「コメント追加」 and the target is implicit (with nested highlights the
-  //    innermost one wins), so a misclick would silently drop someone's
-  //    comment.
-  //  - one in-flight delete per comment. The bubble stays up while the DELETE
-  //    runs (the menu closed on click), so a double-click fired it twice and
-  //    the second one 404'd into a failure toast for a delete that succeeded.
-  const handleBubbleDeleteComment = () => {
-    const target = bubbleComment;
-    if (!target || bubbleDeleteDisabledReason || deletingCommentId === target.id) {
+  // Which side the popover opens on, and how tall it may grow: an expanded
+  // thread is taller than most gaps, and Popper only repositions — it will not
+  // shrink a card that does not fit, so the card is told its own ceiling.
+  const { threadPlacement, threadMaxHeight } = (() => {
+    if (!openThread) {
+      return { threadPlacement: "bottom-start" as const, threadMaxHeight: 0 };
+    }
+    const gap = 16;
+    const below = window.innerHeight - openThread.rect.bottom - gap;
+    const above = openThread.rect.top - gap;
+    const openDown = below >= above;
+    return {
+      threadPlacement: (openDown ? "bottom-start" : "top-start") as
+        | "bottom-start"
+        | "top-start",
+      threadMaxHeight: Math.max(240, Math.min(440, openDown ? below : above)),
+    };
+  })();
+
+  const threadEditDisabledReason =
+    threadComment?.author === "ai"
+      ? "AI のコメントは編集できません"
+      : threadComment?.status === "resolved"
+        ? "解決済みのため編集できません"
+        : null;
+  const threadDeleteDisabledReason =
+    threadComment?.author === "ai" ? "AI のコメントは削除できません" : null;
+
+  const handleThreadReply = async (body: string) => {
+    if (!threadComment) return;
+    await handleReplyComment(threadComment.id, body);
+    // Cleared only once the POST resolved, so a failed reply keeps the text.
+    setThreadDraft("");
+  };
+
+  const handleThreadResolveToggle = (next: "open" | "resolved") => {
+    if (!threadComment) return;
+    void handleResolveToggle(threadComment.id, next);
+    // Resolving removes the highlight the popover hangs off, so close with it.
+    if (next === "resolved") closeThread();
+  };
+
+  const handleThreadEdit = () => {
+    if (!threadComment || threadEditDisabledReason) return;
+    const target = threadComment;
+    closeThread();
+    setCommentDialog({
+      open: true,
+      mode: "edit",
+      snippet: buildTargetSnippet(commentTargetText(target)),
+      editingId: target.id,
+      defaultBody: target.body,
+    });
+  };
+
+  const handleThreadDelete = () => {
+    const target = threadComment;
+    if (!target || threadDeleteDisabledReason || deletingCommentId === target.id) {
       return;
     }
     setDeletingCommentId(target.id);
@@ -1732,30 +1920,13 @@ export function EditorPage() {
           confirmLabel: "削除",
         });
         if (ok) {
-        await handleDeleteComment(target.id);
-        setHoverTarget(null);
-        hoverKey.current = null;
-      }
+          await handleDeleteComment(target.id);
+          closeThread();
+        }
       } finally {
         setDeletingCommentId(null);
       }
     })();
-  };
-
-  // Edit the selected comment without leaving the editor: the same dialog used
-  // to add a comment, seeded with the stored body and switched to "edit".
-  const handleBubbleEditComment = () => {
-    const target = bubbleComment;
-    if (!target || bubbleEditDisabledReason) return;
-    setHoverTarget(null);
-    hoverKey.current = null;
-    setCommentDialog({
-      open: true,
-      mode: "edit",
-      snippet: buildTargetSnippet(commentTargetText(target)),
-      editingId: target.id,
-      defaultBody: target.body,
-    });
   };
 
   const closeCommentDialog = () =>
@@ -2633,18 +2804,11 @@ export function EditorPage() {
             hoverKey.current = null;
           }}
         >
-          <Paper elevation={4} sx={{ p: 0.5, minWidth: 180 }}>
-            {bubbleComment && (
-              <Typography
-                variant="caption"
-                color="text.secondary"
-                sx={{ display: "block", px: 1, pt: 0.25, pb: 0.5 }}
-                data-testid="editor-comment-menu-target"
-              >
-                {commentSummary(bubbleComment.body)}
-              </Typography>
-            )}
-            {menuCanAdd && (
+          {menuCanAdd ? (
+            // Resting inside a selection is an offer to act, so the button
+            // wins even when the selection sits inside an existing highlight —
+            // that comment is one click away on the highlight itself.
+            <Paper elevation={4} sx={{ p: 0.5, minWidth: 180 }}>
               <Button
                 size="small"
                 fullWidth
@@ -2658,50 +2822,43 @@ export function EditorPage() {
               >
                 コメント追加
               </Button>
-            )}
-            {bubbleComment && (
-              <>
-                <Tooltip title={bubbleEditDisabledReason ?? ""} placement="right">
-                  {/* A disabled MUI Button swallows hover events, so the
-                      tooltip carrying the reason needs a live wrapper. */}
-                  <span>
-                    <Button
-                      size="small"
-                      fullWidth
-                      startIcon={<EditOutlinedIcon fontSize="small" />}
-                      sx={{ justifyContent: "flex-start" }}
-                      disabled={!!bubbleEditDisabledReason}
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={handleBubbleEditComment}
-                      data-testid="editor-menu-edit-comment"
-                    >
-                      コメント編集
-                    </Button>
-                  </span>
-                </Tooltip>
-                <Tooltip title={bubbleDeleteDisabledReason ?? ""} placement="right">
-                  <span>
-                    <Button
-                      size="small"
-                      fullWidth
-                      color="error"
-                      startIcon={<DeleteOutlineIcon fontSize="small" />}
-                      sx={{ justifyContent: "flex-start" }}
-                      disabled={
-                        !!bubbleDeleteDisabledReason ||
-                        deletingCommentId === bubbleComment.id
-                      }
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={handleBubbleDeleteComment}
-                      data-testid="editor-menu-delete-comment"
-                    >
-                      コメント削除
-                    </Button>
-                  </span>
-                </Tooltip>
-              </>
-            )}
-          </Paper>
+            </Paper>
+          ) : (
+            // Hover reads (#251): edit / delete moved into the thread the
+            // highlight opens on click, leaving this card free to show what
+            // the comment actually says instead of a one-line summary.
+            <CommentHoverPreview comment={bubbleComment!} />
+          )}
+        </Popper>
+      )}
+
+      {openThread && threadComment && (
+        <Popper
+          open
+          placement={threadPlacement}
+          anchorEl={{ getBoundingClientRect: () => openThread.rect }}
+          modifiers={[
+            { name: "offset", options: { offset: [0, 8] } },
+            { name: "preventOverflow", options: { padding: 8 } },
+          ]}
+          sx={{ zIndex: (theme) => theme.zIndex.modal }}
+          data-testid="editor-comment-thread"
+        >
+          <CommentThreadPopover
+            key={threadComment.id}
+            maxHeight={threadMaxHeight}
+            comment={threadComment}
+            contextLabel={contextLabel(threadComment)}
+            editDisabledReason={threadEditDisabledReason}
+            deleteDisabledReason={threadDeleteDisabledReason}
+            deleting={deletingCommentId === threadComment.id}
+            draft={threadDraft}
+            onDraftChange={setThreadDraft}
+            onReply={handleThreadReply}
+            onResolveToggle={handleThreadResolveToggle}
+            onEdit={handleThreadEdit}
+            onDelete={handleThreadDelete}
+          />
         </Popper>
       )}
 
