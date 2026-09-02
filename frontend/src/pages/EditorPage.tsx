@@ -2078,7 +2078,7 @@ export function EditorPage() {
         const anchors = range
           ? computeAnchorsFromSelection(editor.state.doc, range.from, range.to)
           : [];
-        if (anchors.length === 0) {
+        if (!range || anchors.length === 0) {
           showToast("選択範囲のアンカーを特定できませんでした", "warning");
           closeComposer();
           return;
@@ -2088,6 +2088,11 @@ export function EditorPage() {
           { scope: "inline", body, author, date, anchor: anchors[0], anchors: anchors.slice(1) },
           root
         );
+        // The selection has done its job. Left standing it covers the very
+        // highlight it just produced, and hovering there reads as "pointer is
+        // inside a selection" — so the new comment answered with 「コメント追加」
+        // instead of showing itself.
+        editor.commands.setTextSelection(range.to);
       }
       refreshComments();
     } catch (err) {

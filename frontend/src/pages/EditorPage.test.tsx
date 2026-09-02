@@ -1499,6 +1499,31 @@ describe("EditorPage selection menu (#233)", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
+  it("コメント作成後は選択が残らない", async () => {
+    // A standing selection covers the highlight it just produced, and the
+    // hover bubble then offers 「コメント追加」 instead of showing the comment.
+    const { http, HttpResponse } = await import("msw");
+    const { server } = await import("@/test/mocks/server");
+    server.use(
+      http.post("http://localhost:8080/api/comments/*", () =>
+        HttpResponse.json({ id: "c-900" }, { status: 201 })
+      )
+    );
+    const user = await openReadme();
+    const ed = installEditor("<p>SLA遵守率 98%</p>");
+    await act(async () => {
+      ed.commands.setTextSelection({ from: 1, to: 5 });
+    });
+    await hoverAt(ed, 3);
+    await user.click(await screen.findByTestId("editor-menu-add-comment"));
+    await screen.findByTestId("comment-composer-popover");
+
+    await user.type(screen.getByTestId("comment-body-input"), "ここ直して");
+    await user.click(screen.getByTestId("comment-submit"));
+
+    await waitFor(() => expect(ed.state.selection.empty).toBe(true));
+  });
+
   it("入力中に外側をクリックしても閉じない", async () => {
     const user = await openReadme();
     const ed = installEditor("<p>SLA遵守率 98%</p>");
