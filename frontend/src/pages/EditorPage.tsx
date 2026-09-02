@@ -1732,6 +1732,26 @@ export function EditorPage() {
     }, 1600);
   };
 
+  /**
+   * Open a comment from the list (#253): scroll to it, then open its thread
+   * beside the text. The rect has to be read *after* the jump, because that is
+   * what put the highlight on screen — and after a frame, so the smooth scroll
+   * has moved it. Comments the jump cannot resolve (global, orphan) never
+   * reach here; the pane keeps those operable in its own section.
+   */
+  const handleSelectComment = (id: string) => {
+    handleJumpToComment(id);
+    if (!editor || editor.isDestroyed) return;
+    requestAnimationFrame(() => {
+      if (!editor || editor.isDestroyed) return;
+      const el = editor.view.dom.querySelector<HTMLElement>(
+        `[data-comment-id="${CSS.escape(id)}"]`
+      );
+      if (!el) return;
+      openThreadForRef.current(id, el.getBoundingClientRect());
+    });
+  };
+
   // Deeplink: `?comment_id=<id>` jumps to that comment once the file and comments land.
   useEffect(() => {
     const commentId = initialCommentIdRef.current;
@@ -1741,7 +1761,9 @@ export function EditorPage() {
     if (!editor || editor.isDestroyed) return;
 
     initialCommentIdRef.current = null;
-    handleJumpToComment(commentId);
+    // A shared link exists to show one comment, so open it rather than making
+    // the reader hunt for the highlight that just flashed (#253).
+    handleSelectComment(commentId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activePath, reviewState, commentsLoadedForPath, editor, comments]);
 
@@ -2863,6 +2885,8 @@ export function EditorPage() {
             onEditReply={handleEditReply}
             onDeleteReply={handleDeleteReply}
             onJump={handleJumpToComment}
+            onSelect={handleSelectComment}
+            selectedId={openThread?.commentId ?? null}
           />
         </Box>
       ) : (
