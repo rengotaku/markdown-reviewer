@@ -23,6 +23,7 @@ import { CommentHighlight } from "@/components/tiptap/extensions/CommentHighligh
 import { DiffGutter } from "@/components/tiptap/extensions/DiffGutter";
 import { LineNumberGutter } from "@/components/tiptap/extensions/LineNumberGutter";
 import type { CommentJSON } from "@/api";
+import { useUIStore } from "@/hooks/useUIStore";
 
 vi.mock("@/components/tiptap/TiptapEditor", () => ({
   TiptapEditor: () => <div data-testid="tiptap-editor" />,
@@ -65,6 +66,30 @@ function renderPage(initialPath = `/${DEFAULT_ROOT}`) {
     </QueryClientProvider>
   );
 }
+
+// The comment pane no longer opens by default (#253). These tests are mostly
+// about what it lists, so open it for all of them; the default itself is
+// asserted in its own test below.
+beforeEach(() => {
+  useUIStore.setState({ isCommentPaneOpen: true });
+});
+
+describe("EditorPage comment pane default (#253)", () => {
+  it("starts closed and opens from the editor header", async () => {
+    useUIStore.setState({ isCommentPaneOpen: false });
+    const user = userEvent.setup();
+    renderPage();
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
+    );
+    await user.click(screen.getByTestId("sidebar-file-README.md"));
+
+    expect(screen.queryByTestId("comment-side-pane")).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId("editor-toggle-comments"));
+    expect(await screen.findByTestId("comment-side-pane")).toBeInTheDocument();
+  });
+});
 
 describe("EditorPage", () => {
   beforeEach(() => {
@@ -1733,6 +1758,22 @@ describe("EditorPage comment hover preview / thread (#251)", () => {
     expect(screen.getByTestId("comment-thread-delete")).toBeEnabled();
   });
 
+  it("一覧のカードをクリックすると本文へ飛んでスレッドが開く", async () => {
+    const { user } = await openWithComment(openComment);
+
+    await user.click(screen.getByTestId("comment-item"));
+
+    expect(await screen.findByTestId("comment-thread-popover")).toBeInTheDocument();
+    expect(vi.mocked(Element.prototype.scrollIntoView)).toHaveBeenCalled();
+    // The list marks the row whose thread is open.
+    await waitFor(() =>
+      expect(screen.getByTestId("comment-item")).toHaveAttribute(
+        "data-selected",
+        "true"
+      )
+    );
+  });
+
   it("プレビューのカードをクリックしてもスレッドが開く", async () => {
     // The card covers the text it describes, so a pointer that drifted onto it
     // while reading must not click through to nothing.
@@ -2020,6 +2061,12 @@ describe("EditorPage jump to comment (#167)", () => {
       expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
     );
     await user.click(screen.getByTestId("sidebar-file-README.md"));
+    // The list shows 未解決 by default (#253) and several of these fixtures are
+    // resolved, so widen the filter before waiting for their rows.
+    await waitFor(() =>
+      expect(screen.getByTestId("comment-filter-all")).toBeInTheDocument()
+    );
+    await user.click(screen.getByTestId("comment-filter-all"));
     // Comments are only fetched once the file is under review — wait for the
     // side pane to actually render the row(s) before touching the editor.
     for (const c of comments) {

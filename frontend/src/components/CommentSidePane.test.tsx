@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, fireEvent, within, waitFor } from "@testing-library/react";
+import { render, screen, within, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { CommentSidePane } from "./CommentSidePane";
 import type { CommentJSON } from "@/api";
@@ -17,6 +17,17 @@ const comment = (id: string, overrides: Partial<CommentJSON> = {}): CommentJSON 
   ...overrides,
 });
 
+/** A comment with no live anchor — the pane keeps these fully operable in its
+ *  pinned section, so this is the fixture for reply / edit / resolve tests. */
+const pinned = (id: string, overrides: Partial<CommentJSON> = {}): CommentJSON =>
+  comment(id, { scope: "global", context: null, anchor: undefined, ...overrides });
+
+/** The list shows unresolved comments by default (#253); resolved fixtures
+ *  need the filter switched before they appear. */
+async function showAll(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByTestId("comment-filter-all"));
+}
+
 function renderPane(props: Partial<React.ComponentProps<typeof CommentSidePane>> = {}) {
   const handlers = {
     onClose: vi.fn(),
@@ -30,6 +41,7 @@ function renderPane(props: Partial<React.ComponentProps<typeof CommentSidePane>>
     onEditReply: vi.fn(),
     onDeleteReply: vi.fn(),
     onJump: vi.fn(),
+    onSelect: vi.fn(),
   };
   render(
     <CommentSidePane root="works" filePath="doc.md" comments={[]} reviewActive canAddComment {...handlers} {...props} />
@@ -119,7 +131,7 @@ describe("CommentSidePane", () => {
     const longReply = "り".repeat(250);
     renderPane({
       comments: [
-        comment("c1", {
+        pinned("c1", {
           body: "short",
           replies: [
             { author: "ai", date: "2026-05-21", body: "短い返信" },
@@ -145,13 +157,15 @@ describe("CommentSidePane", () => {
     expect(screen.getByTestId("comment-reply-body-toggle")).toHaveTextContent("折りたたむ");
   });
 
-  it("marks resolved and orphan comments", () => {
+  it("marks resolved and orphan comments", async () => {
+    const user = userEvent.setup();
     renderPane({
       comments: [
-        comment("c1", { status: "resolved" }),
-        comment("c2", { orphan: true, context: null }),
+        pinned("c1", { status: "resolved" }),
+        pinned("c2", { orphan: true, context: null }),
       ],
     });
+    await showAll(user);
     expect(screen.getByText("Comments (1/2)")).toBeInTheDocument();
     expect(screen.getByTestId("comment-status-resolved")).toBeInTheDocument();
     expect(screen.getByTestId("comment-orphan")).toBeInTheDocument();
@@ -159,15 +173,17 @@ describe("CommentSidePane", () => {
 
   it("calls onDelete / onResolveToggle for a comment", async () => {
     const user = userEvent.setup();
-    const h = renderPane({ comments: [comment("c1")] });
+    const h = renderPane({ comments: [pinned("c1")] });
     await user.click(screen.getByTestId("comment-delete"));
     expect(h.onDelete).toHaveBeenCalledWith("c1");
     await user.click(screen.getByTestId("comment-resolve-toggle"));
     expect(h.onResolveToggle).toHaveBeenCalledWith("c1", "resolved");
   });
 
-  it("disables reply and edit for a resolved comment", () => {
-    renderPane({ comments: [comment("c1", { status: "resolved" })] });
+  it("disables reply and edit for a resolved comment", async () => {
+    const user = userEvent.setup();
+    renderPane({ comments: [pinned("c1", { status: "resolved" })] });
+    await showAll(user);
     expect(screen.getByTestId("comment-reply-toggle")).toBeDisabled();
     expect(screen.getByTestId("comment-edit")).toBeDisabled();
     // reopen + delete stay enabled
@@ -176,7 +192,7 @@ describe("CommentSidePane", () => {
   });
 
   it("disables edit/delete for an AI-authored comment but keeps reply/resolve enabled", () => {
-    renderPane({ comments: [comment("c1", { author: "ai", status: "open" })] });
+    renderPane({ comments: [pinned("c1", { author: "ai", status: "open" })] });
     expect(screen.getByTestId("comment-edit")).toBeDisabled();
     expect(screen.getByTestId("comment-delete")).toBeDisabled();
     expect(screen.getByTestId("comment-reply-toggle")).toBeEnabled();
@@ -184,7 +200,7 @@ describe("CommentSidePane", () => {
   });
 
   it("keeps edit/delete enabled for a human-authored comment", () => {
-    renderPane({ comments: [comment("c1", { author: "reviewer", status: "open" })] });
+    renderPane({ comments: [pinned("c1", { author: "reviewer", status: "open" })] });
     expect(screen.getByTestId("comment-edit")).toBeEnabled();
     expect(screen.getByTestId("comment-delete")).toBeEnabled();
   });
@@ -192,7 +208,7 @@ describe("CommentSidePane", () => {
   it("disables edit/delete for an AI-authored reply but keeps human replies editable", () => {
     renderPane({
       comments: [
-        comment("c1", {
+        pinned("c1", {
           replies: [
             { author: "ai", date: "2026-05-20", body: "ai reply" },
             { author: "reviewer", date: "2026-05-21", body: "human reply" },
@@ -217,14 +233,15 @@ describe("CommentSidePane", () => {
 
   it("reopens a resolved comment via the toggle", async () => {
     const user = userEvent.setup();
-    const h = renderPane({ comments: [comment("c1", { status: "resolved" })] });
+    const h = renderPane({ comments: [pinned("c1", { status: "resolved" })] });
+    await showAll(user);
     await user.click(screen.getByTestId("comment-resolve-toggle"));
     expect(h.onResolveToggle).toHaveBeenCalledWith("c1", "open");
   });
 
   it("edits a comment body", async () => {
     const user = userEvent.setup();
-    const h = renderPane({ comments: [comment("c1", { body: "old body" })] });
+    const h = renderPane({ comments: [pinned("c1", { body: "old body" })] });
     await user.click(screen.getByTestId("comment-edit"));
     const input = screen.getByTestId("comment-edit-input");
     await user.clear(input);
@@ -235,7 +252,7 @@ describe("CommentSidePane", () => {
 
   it("submits a reply", async () => {
     const user = userEvent.setup();
-    const h = renderPane({ comments: [comment("c1")] });
+    const h = renderPane({ comments: [pinned("c1")] });
     await user.click(screen.getByTestId("comment-reply-toggle"));
     await user.type(screen.getByTestId("comment-reply-input"), "返信です");
     await user.click(screen.getByTestId("comment-reply-submit"));
@@ -246,7 +263,7 @@ describe("CommentSidePane", () => {
     const user = userEvent.setup();
     const h = renderPane({
       comments: [
-        comment("c1", {
+        pinned("c1", {
           replies: [
             { author: "reviewer", date: "2026-05-20", body: "reply0" },
             { author: "reviewer", date: "2026-05-21", body: "reply1" },
@@ -269,7 +286,7 @@ describe("CommentSidePane", () => {
     const user = userEvent.setup();
     const h = renderPane({
       comments: [
-        comment("c1", {
+        pinned("c1", {
           replies: [
             { author: "reviewer", date: "2026-05-20", body: "reply0" },
             { author: "reviewer", date: "2026-05-21", body: "reply1" },
@@ -282,15 +299,17 @@ describe("CommentSidePane", () => {
     expect(h.onDeleteReply).toHaveBeenCalledWith("c1", 0);
   });
 
-  it("disables per-reply edit/delete for a resolved comment", () => {
+  it("disables per-reply edit/delete for a resolved comment", async () => {
+    const user = userEvent.setup();
     renderPane({
       comments: [
-        comment("c1", {
+        pinned("c1", {
           status: "resolved",
           replies: [{ author: "ai", date: "2026-05-20", body: "reply0" }],
         }),
       ],
     });
+    await showAll(user);
     expect(screen.getByTestId("comment-reply-edit")).toBeDisabled();
     expect(screen.getByTestId("comment-reply-delete")).toBeDisabled();
   });
@@ -303,6 +322,9 @@ describe("CommentSidePane", () => {
         comment("c2", { status: "resolved" }),
       ],
     });
+    // 未解決 by default (#253)
+    expect(screen.getAllByTestId("comment-item")).toHaveLength(1);
+    await showAll(user);
     expect(screen.getAllByTestId("comment-item")).toHaveLength(2);
     await user.click(screen.getByTestId("comment-filter-resolved"));
     let items = screen.getAllByTestId("comment-item");
@@ -333,10 +355,40 @@ describe("CommentSidePane", () => {
     expect(ctx).toHaveTextContent("現在の本文には見つかりません");
   });
 
-  it("calls onJump when the context label of an anchored comment is clicked", () => {
+  it("selects an anchored comment when its row is clicked", async () => {
+    // The row is the whole target now: the editor scrolls to the comment and
+    // opens its thread beside the text (#253).
+    const user = userEvent.setup();
     const h = renderPane({ comments: [comment("c1")] });
-    fireEvent.click(screen.getByTestId("comment-context-c1"));
-    expect(h.onJump).toHaveBeenCalledWith("c1");
+    await user.click(screen.getByTestId("comment-item"));
+    expect(h.onSelect).toHaveBeenCalledWith("c1");
+  });
+
+  it("marks the row whose thread is open", () => {
+    renderPane({ comments: [comment("c1"), comment("c2")], selectedId: "c2" });
+    const [first, second] = screen.getAllByTestId("comment-item");
+    expect(first).toHaveAttribute("data-selected", "false");
+    expect(second).toHaveAttribute("data-selected", "true");
+  });
+
+  it("copying a link from a row does not open its thread", async () => {
+    const user = userEvent.setup();
+    const h = renderPane({ comments: [comment("c1")] });
+    await user.click(screen.getByTestId("comment-copy-link"));
+    expect(h.onSelect).not.toHaveBeenCalled();
+  });
+
+  it("puts global and orphan comments in their own section", () => {
+    renderPane({
+      comments: [
+        comment("c1"),
+        pinned("g1"),
+        comment("o1", { orphan: true, context: null }),
+      ],
+    });
+    const section = screen.getByTestId("comment-pinned-section");
+    expect(within(section).getAllByTestId("comment-item")).toHaveLength(2);
+    expect(screen.getByText("全体・位置不明 2")).toBeInTheDocument();
   });
 
   it("invokes the add-comment callbacks from the toolbar", async () => {
@@ -350,7 +402,7 @@ describe("CommentSidePane", () => {
 
   it("opens a centered detail dialog and replies / resolves from it", async () => {
     const user = userEvent.setup();
-    const h = renderPane({ comments: [comment("c1", { body: "detail body" })] });
+    const h = renderPane({ comments: [pinned("c1", { body: "detail body" })] });
     expect(screen.queryByTestId("comment-detail-dialog")).not.toBeInTheDocument();
 
     await user.click(screen.getByTestId("comment-open-detail"));
@@ -367,7 +419,8 @@ describe("CommentSidePane", () => {
 
   it("resolved comment's detail dialog hides the reply input", async () => {
     const user = userEvent.setup();
-    renderPane({ comments: [comment("c1", { status: "resolved" })] });
+    renderPane({ comments: [pinned("c1", { status: "resolved" })] });
+    await showAll(user);
     await user.click(screen.getByTestId("comment-open-detail"));
     expect(screen.getByTestId("comment-detail-dialog")).toBeInTheDocument();
     expect(screen.queryByTestId("comment-detail-reply-input")).not.toBeInTheDocument();
@@ -481,7 +534,7 @@ describe("CommentSidePane", () => {
 
   it("cancels an inline edit without calling onEdit", async () => {
     const user = userEvent.setup();
-    const h = renderPane({ comments: [comment("c1", { body: "original" })] });
+    const h = renderPane({ comments: [pinned("c1", { body: "original" })] });
     await user.click(screen.getByTestId("comment-edit"));
     await user.type(screen.getByTestId("comment-edit-input"), " extra");
     await user.click(screen.getByRole("button", { name: "キャンセル" }));
@@ -492,7 +545,7 @@ describe("CommentSidePane", () => {
 
   it("submitting an unchanged edit just closes the editor without onEdit", async () => {
     const user = userEvent.setup();
-    const h = renderPane({ comments: [comment("c1", { body: "same body" })] });
+    const h = renderPane({ comments: [pinned("c1", { body: "same body" })] });
     await user.click(screen.getByTestId("comment-edit"));
     await user.click(screen.getByTestId("comment-edit-submit"));
     expect(h.onEdit).not.toHaveBeenCalled();
@@ -501,7 +554,7 @@ describe("CommentSidePane", () => {
 
   it("cancels a reply draft without calling onReply", async () => {
     const user = userEvent.setup();
-    const h = renderPane({ comments: [comment("c1")] });
+    const h = renderPane({ comments: [pinned("c1")] });
     await user.click(screen.getByTestId("comment-reply-toggle"));
     await user.type(screen.getByTestId("comment-reply-input"), "下書き");
     await user.click(screen.getByRole("button", { name: "キャンセル" }));
@@ -513,7 +566,7 @@ describe("CommentSidePane", () => {
     const user = userEvent.setup();
     renderPane({
       comments: [
-        comment("c1", {
+        pinned("c1", {
           replies: [
             { author: "ai", date: "2026-05-21", body: "一次回答" },
             { body: "追記" },
@@ -530,7 +583,7 @@ describe("CommentSidePane", () => {
 
   it("edits the comment body from the detail dialog", async () => {
     const user = userEvent.setup();
-    const h = renderPane({ comments: [comment("c1", { body: "old" })] });
+    const h = renderPane({ comments: [pinned("c1", { body: "old" })] });
     await user.click(screen.getByTestId("comment-open-detail"));
     await user.click(screen.getByTestId("comment-detail-edit"));
     const input = screen.getByTestId("comment-detail-edit-input");
@@ -543,7 +596,7 @@ describe("CommentSidePane", () => {
 
   it("detail edit submit with unchanged body closes without onEdit", async () => {
     const user = userEvent.setup();
-    const h = renderPane({ comments: [comment("c1", { body: "keep me" })] });
+    const h = renderPane({ comments: [pinned("c1", { body: "keep me" })] });
     await user.click(screen.getByTestId("comment-open-detail"));
     await user.click(screen.getByTestId("comment-detail-edit"));
     await user.click(screen.getByTestId("comment-detail-edit-submit"));
@@ -553,7 +606,7 @@ describe("CommentSidePane", () => {
 
   it("cancels a detail edit without calling onEdit", async () => {
     const user = userEvent.setup();
-    const h = renderPane({ comments: [comment("c1", { body: "old" })] });
+    const h = renderPane({ comments: [pinned("c1", { body: "old" })] });
     await user.click(screen.getByTestId("comment-open-detail"));
     await user.click(screen.getByTestId("comment-detail-edit"));
     await user.type(screen.getByTestId("comment-detail-edit-input"), " more");
@@ -565,7 +618,7 @@ describe("CommentSidePane", () => {
 
   it("deletes from the detail dialog and closes it", async () => {
     const user = userEvent.setup();
-    const h = renderPane({ comments: [comment("c1")] });
+    const h = renderPane({ comments: [pinned("c1")] });
     await user.click(screen.getByTestId("comment-open-detail"));
     await user.click(screen.getByTestId("comment-detail-delete"));
     expect(h.onDelete).toHaveBeenCalledWith("c1");
@@ -574,21 +627,10 @@ describe("CommentSidePane", () => {
     );
   });
 
-  it("jumps from the detail dialog's context label and closes it", async () => {
-    const user = userEvent.setup();
-    const h = renderPane({ comments: [comment("c1")] });
-    await user.click(screen.getByTestId("comment-open-detail"));
-    const dialog = screen.getByTestId("comment-detail-dialog");
-    await user.click(within(dialog).getByText(/対象:/));
-    expect(h.onJump).toHaveBeenCalledWith("c1");
-    await waitFor(() =>
-      expect(screen.queryByTestId("comment-detail-dialog")).not.toBeInTheDocument()
-    );
-  });
 
   it("closes the detail dialog via 閉じる", async () => {
     const user = userEvent.setup();
-    renderPane({ comments: [comment("c1")] });
+    renderPane({ comments: [pinned("c1")] });
     await user.click(screen.getByTestId("comment-open-detail"));
     await user.click(screen.getByRole("button", { name: "閉じる" }));
     await waitFor(() =>
@@ -598,7 +640,7 @@ describe("CommentSidePane", () => {
 
   it("disables edit/delete in the detail dialog for an AI-authored comment", async () => {
     const user = userEvent.setup();
-    renderPane({ comments: [comment("c1", { author: "ai", status: "open" })] });
+    renderPane({ comments: [pinned("c1", { author: "ai", status: "open" })] });
     await user.click(screen.getByTestId("comment-open-detail"));
     expect(screen.getByTestId("comment-detail-edit")).toBeDisabled();
     expect(screen.getByTestId("comment-detail-delete")).toBeDisabled();
@@ -606,7 +648,8 @@ describe("CommentSidePane", () => {
 
   it("reopens a resolved comment from the detail dialog", async () => {
     const user = userEvent.setup();
-    const h = renderPane({ comments: [comment("c1", { status: "resolved" })] });
+    const h = renderPane({ comments: [pinned("c1", { status: "resolved" })] });
+    await showAll(user);
     await user.click(screen.getByTestId("comment-open-detail"));
     await user.click(screen.getByTestId("comment-detail-resolve-toggle"));
     expect(h.onResolveToggle).toHaveBeenCalledWith("c1", "open");
@@ -632,7 +675,7 @@ describe("CommentSidePane", () => {
   it("B3: renders inline code in a reply body", () => {
     renderPane({
       comments: [
-        comment("c1", {
+        pinned("c1", {
           replies: [{ author: "reviewer", date: "2026-05-21", body: "`code`" }],
         }),
       ],
@@ -666,7 +709,7 @@ describe("CommentSidePane", () => {
   it("B6: editing a human comment's body shows the raw Markdown source, not rendered text", async () => {
     const user = userEvent.setup();
     renderPane({
-      comments: [comment("c1", { author: "reviewer", body: "**強調** テキスト" })],
+      comments: [pinned("c1", { author: "reviewer", body: "**強調** テキスト" })],
     });
     await user.click(screen.getByTestId("comment-edit"));
     const input = screen.getByTestId("comment-edit-input") as HTMLTextAreaElement;
@@ -674,7 +717,7 @@ describe("CommentSidePane", () => {
   });
 
   it("B7: a comment row has a comment-header containing the author", () => {
-    renderPane({ comments: [comment("c1", { author: "alice" })] });
+    renderPane({ comments: [pinned("c1", { author: "alice" })] });
     const header = screen.getByTestId("comment-header");
     expect(header).toHaveTextContent("alice");
   });
@@ -682,7 +725,7 @@ describe("CommentSidePane", () => {
   it("B8: a reply row has a comment-reply-header", () => {
     renderPane({
       comments: [
-        comment("c1", {
+        pinned("c1", {
           replies: [{ author: "reviewer", date: "2026-05-21", body: "reply" }],
         }),
       ],
@@ -730,7 +773,7 @@ describe("CommentSidePane", () => {
     renderPane({
       root: "code",
       filePath: "foo.md",
-      comments: [comment("c-001")],
+      comments: [pinned("c-001")],
     });
 
     const openDetailBtn = screen.getByTestId("comment-open-detail");

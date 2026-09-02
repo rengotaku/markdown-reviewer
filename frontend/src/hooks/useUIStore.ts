@@ -28,6 +28,9 @@ interface UIState {
   sidebarPinned: boolean;
   setSidebarPinned: (pinned: boolean) => void;
   toggleSidebarPinned: () => void;
+  /** Whether the comment list is showing. Closed by default (#253): comments
+   *  are read and answered beside the text now, so the list is something the
+   *  reviewer opens to survey what is left, not a standing third column. */
   isCommentPaneOpen: boolean;
   toggleCommentPane: () => void;
   setCommentPaneOpen: (open: boolean) => void;
@@ -58,7 +61,7 @@ export const useUIStore = create<UIState>()(
       sidebarPinned: true,
       setSidebarPinned: (pinned) => set({ sidebarPinned: pinned }),
       toggleSidebarPinned: () => set((state) => ({ sidebarPinned: !state.sidebarPinned })),
-      isCommentPaneOpen: true,
+      isCommentPaneOpen: false,
       toggleCommentPane: () =>
         set((state) => ({ isCommentPaneOpen: !state.isCommentPaneOpen })),
       setCommentPaneOpen: (open) => set({ isCommentPaneOpen: open }),

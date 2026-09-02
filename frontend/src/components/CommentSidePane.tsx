@@ -34,12 +34,11 @@ import { buildCommentDeepLink } from "@/utils/deeplink";
 import { useToast } from "@/hooks/useToast";
 import { markdownBodySx } from "./markdownBodySx";
 import { contextLabel } from "@/utils/commentContext";
+import { isAiAuthored } from "@/utils/commentPresentation";
+import { CommentAuthor } from "./CommentAuthor";
 
 /** AI-authored comments/replies are read-only to the human reviewer: they can
- *  reply, resolve, and jump to them, but not edit the body or delete them. The
- *  marker is the "ai" author (mr CLI default; see cmd/mr/inbox.go). */
-const AI_AUTHOR = "ai";
-const isAiAuthored = (author?: string): boolean => author === AI_AUTHOR;
+ *  reply, resolve, and jump to them, but not edit the body or delete them. */
 
 /** Comment/reply bodies longer than this are collapsed to a preview in the
  *  side-pane row, each with its own inline link to expand/collapse. The detail
@@ -149,6 +148,11 @@ interface Props {
   onDeleteReply: (id: string, index: number) => void;
   /** Scroll to + flash the comment's highlight in the editor. */
   onJump: (id: string) => void;
+  /** Open an anchored comment: the editor scrolls to it and opens its thread
+   *  beside the text (#253). Reading and replying happen there, not here. */
+  onSelect: (id: string) => void;
+  /** The comment whose thread is currently open, if it is one of these. */
+  selectedId?: string | null;
 }
 
 type StatusFilter = "all" | "open" | "resolved";
@@ -170,6 +174,8 @@ export function CommentSidePane({
   onEditReply,
   onDeleteReply,
   onJump,
+  onSelect,
+  selectedId,
 }: Props) {
   const canCopyLink = Boolean(root && filePath);
   const handleCopyLink = async (id: string) => {
@@ -183,7 +189,9 @@ export function CommentSidePane({
     }
   };
 
-  const [filter, setFilter] = useState<StatusFilter>("all");
+  // Unresolved by default (#253): the pane exists to show what still needs an
+  // answer, and a finished review is mostly resolved rows.
+  const [filter, setFilter] = useState<StatusFilter>("open");
   const [detailId, setDetailId] = useState<string | null>(null);
   // Look the comment up live so the dialog reflects refetched replies/edits;
   // if it was deleted out from under us, the dialog simply closes.
@@ -199,6 +207,16 @@ export function CommentSidePane({
   const visible = useMemo(
     () => (filter === "all" ? comments : comments.filter((c) => c.status === filter)),
     [comments, filter]
+  );
+  // Comments with no live anchor cannot open a popover beside the text, so
+  // they get their own section at the top and stay operable here (#253).
+  const pinned = useMemo(
+    () => visible.filter((c) => c.scope === "global" || c.orphan),
+    [visible]
+  );
+  const anchored = useMemo(
+    () => visible.filter((c) => !(c.scope === "global" || c.orphan)),
+    [visible]
   );
 
   return (
@@ -375,22 +393,53 @@ export function CommentSidePane({
             </Typography>
           </Box>
         ) : (
-          visible.map((c) => (
-            <CommentRow
-              key={c.id}
-              comment={c}
-              onDelete={onDelete}
-              onResolveToggle={onResolveToggle}
-              onReply={onReply}
-              onEdit={onEdit}
-              onEditReply={onEditReply}
-              onDeleteReply={onDeleteReply}
-              onJump={onJump}
-              onOpenDetail={setDetailId}
-              onCopyLink={handleCopyLink}
-              canCopyLink={canCopyLink}
-            />
-          ))
+          <>
+            {pinned.length > 0 && (
+              <Box data-testid="comment-pinned-section">
+                <Typography
+                  variant="caption"
+                  sx={{
+                    display: "block",
+                    px: 1.5,
+                    py: 0.75,
+                    color: "text.secondary",
+                    bgcolor: "action.hover",
+                    borderBottom: "1px solid",
+                    borderColor: "divider",
+                    letterSpacing: ".04em",
+                  }}
+                >
+                  全体・位置不明 {pinned.length}
+                </Typography>
+                {pinned.map((c) => (
+                  <CommentRow
+                    key={c.id}
+                    comment={c}
+                    onDelete={onDelete}
+                    onResolveToggle={onResolveToggle}
+                    onReply={onReply}
+                    onEdit={onEdit}
+                    onEditReply={onEditReply}
+                    onDeleteReply={onDeleteReply}
+                    onJump={onJump}
+                    onOpenDetail={setDetailId}
+                    onCopyLink={handleCopyLink}
+                    canCopyLink={canCopyLink}
+                  />
+                ))}
+              </Box>
+            )}
+            {anchored.map((c) => (
+              <CommentCard
+                key={c.id}
+                comment={c}
+                selected={c.id === selectedId}
+                onSelect={onSelect}
+                onCopyLink={handleCopyLink}
+                canCopyLink={canCopyLink}
+              />
+            ))}
+          </>
         )}
       </Box>
 
@@ -413,6 +462,141 @@ export function CommentSidePane({
         onCopyLink={handleCopyLink}
         canCopyLink={canCopyLink}
       />
+    </Box>
+  );
+}
+
+interface CardProps {
+  comment: CommentJSON;
+  selected: boolean;
+  onSelect: (id: string) => void;
+  onCopyLink: (id: string) => void;
+  canCopyLink?: boolean;
+}
+
+/** One anchored comment as a list entry (#253). The pane is where a comment is
+ *  found; it is read and answered in the thread the editor opens beside the
+ *  text, so this row carries no reply box, no edit form and no resolve button —
+ *  only what tells the reader which comment this is. */
+function CommentCard({
+  comment: c,
+  selected,
+  onSelect,
+  onCopyLink,
+  canCopyLink = true,
+}: CardProps) {
+  const ctx = contextLabel(c);
+  const badge = SCOPE_BADGE[c.scope];
+  const replies = c.replies?.length ?? 0;
+  const resolved = c.status === "resolved";
+
+  return (
+    <Box
+      role="button"
+      tabIndex={0}
+      data-testid="comment-item"
+      data-comment-id={c.id}
+      data-comment-status={c.status}
+      data-selected={String(selected)}
+      onClick={() => onSelect(c.id)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect(c.id);
+        }
+      }}
+      sx={{
+        px: 1.5,
+        py: 1.25,
+        cursor: "pointer",
+        borderBottom: "1px solid",
+        borderColor: "divider",
+        // The open thread's entry stays marked, so the list and the editor
+        // agree on what is being looked at.
+        borderLeft: "3px solid",
+        borderLeftColor: selected ? "primary.main" : "transparent",
+        bgcolor: selected ? "action.selected" : undefined,
+        opacity: resolved ? 0.6 : 1,
+        "&:hover": { bgcolor: selected ? "action.selected" : "action.hover" },
+      }}
+    >
+      <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 0.5 }}>
+        <CommentAuthor author={c.author} date={c.date} />
+        <Box sx={{ flexGrow: 1 }} />
+        {badge && (
+          <Chip
+            label={badge.label}
+            size="small"
+            sx={{
+              height: 18,
+              fontSize: "0.65rem",
+              bgcolor: badge.color,
+              "& .MuiChip-label": { px: 0.75 },
+            }}
+            data-testid={`comment-scope-${c.scope}`}
+          />
+        )}
+        {resolved && (
+          <Chip
+            label="resolved"
+            size="small"
+            color="success"
+            variant="outlined"
+            sx={{ height: 18, fontSize: "0.65rem", "& .MuiChip-label": { px: 0.75 } }}
+            data-testid="comment-status-resolved"
+          />
+        )}
+        <Tooltip
+          title={
+            canCopyLink ? "リンクをコピー" : "ファイルが開かれていないためコピーできません"
+          }
+        >
+          <span>
+            <IconButton
+              size="small"
+              disabled={!canCopyLink}
+              // The row itself opens the thread; this button must not.
+              onClick={(e) => {
+                e.stopPropagation();
+                onCopyLink(c.id);
+              }}
+              aria-label="copy comment link"
+              data-testid="comment-copy-link"
+              sx={{ p: 0.25 }}
+            >
+              <LinkIcon sx={{ fontSize: 16 }} />
+            </IconButton>
+          </span>
+        </Tooltip>
+      </Box>
+
+      {ctx && (
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          data-testid={`comment-context-${c.id}`}
+          sx={{ display: "block", fontStyle: "italic", wordBreak: "break-word" }}
+        >
+          対象: {ctx}
+        </Typography>
+      )}
+
+      <CollapsibleText
+        text={c.body}
+        testid="comment-body"
+        sx={{ mt: 0.5, wordBreak: "break-word" }}
+      />
+
+      {replies > 0 && (
+        <Typography
+          variant="caption"
+          color="text.disabled"
+          data-testid="comment-reply-count"
+          sx={{ display: "block", mt: 0.75 }}
+        >
+          返信 {replies} 件
+        </Typography>
+      )}
     </Box>
   );
 }
