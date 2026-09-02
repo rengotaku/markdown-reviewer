@@ -135,8 +135,10 @@ interface Props {
   onRefresh: () => void;
   /** Whether the current editor selection can take an anchored comment. */
   canAddComment: boolean;
-  onAddComment: () => void;
-  onAddGlobal: () => void;
+  /** Both receive the trigger button's rect: the composer opens beside it
+   *  rather than in a centre modal (#252). */
+  onAddComment: (anchor: DOMRect) => void;
+  onAddGlobal: (anchor: DOMRect) => void;
   onDelete: (id: string) => void;
   onResolveToggle: (id: string, next: "open" | "resolved") => void;
   onReply: (id: string, body: string) => void;
@@ -326,7 +328,7 @@ export function CommentSidePane({
               size="small"
               color="primary"
               disabled={!canAddComment}
-              onClick={onAddComment}
+              onClick={(e) => onAddComment(e.currentTarget.getBoundingClientRect())}
               aria-label="選択範囲にコメントを追加"
               data-testid="editor-add-comment"
               sx={{ flexShrink: 0 }}
@@ -340,7 +342,7 @@ export function CommentSidePane({
             <IconButton
               size="small"
               color="primary"
-              onClick={onAddGlobal}
+              onClick={(e) => onAddGlobal(e.currentTarget.getBoundingClientRect())}
               aria-label="ファイル全体にコメントを追加"
               data-testid="editor-add-global-comment"
               sx={{ flexShrink: 0 }}
