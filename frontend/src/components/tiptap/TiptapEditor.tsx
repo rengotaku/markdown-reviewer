@@ -28,9 +28,12 @@ import { MarkdownPaste } from "./extensions/MarkdownPaste";
 import { CommentHighlight } from "./extensions/CommentHighlight";
 import { DiffGutter } from "./extensions/DiffGutter";
 import { LineNumberGutter } from "./extensions/LineNumberGutter";
+import { BlankLines } from "./extensions/BlankLines";
 import { ExternalLinkDecoration } from "./extensions/ExternalLinkDecoration";
 import { LinkPreviewCard } from "../LinkPreviewCard";
 import { LinkHoverGuard } from "./linkHoverGuard";
+import { getEditorMarkdown } from "./markdownSerialize";
+import { computeBlankLines } from "@/utils/blankLines";
 import "./styles/editor.css";
 
 /** Hover delay (ms) before an internal link's preview card opens (#213). */
@@ -42,13 +45,6 @@ const LINK_PREVIEW_CLOSE_GRACE_MS = 250;
 // Built once per module: registering the grammars is pure setup and the
 // instance is stateless across editors.
 const codeLowlight = createCodeLowlight();
-
-function getEditorMarkdown(editor: { storage: unknown }): string {
-  const storage = editor.storage as {
-    markdown?: { getMarkdown: () => string };
-  };
-  return storage.markdown?.getMarkdown() ?? "";
-}
 
 export function TiptapEditor() {
   const centered = useEditorPrefs((s) => s.centered);
@@ -132,6 +128,7 @@ export function TiptapEditor() {
       CommentHighlight,
       DiffGutter,
       LineNumberGutter,
+      BlankLines,
       ExternalLinkDecoration,
     ],
     content: "",
@@ -183,9 +180,20 @@ export function TiptapEditor() {
       // (e.g. trailing newline tweaks) which would otherwise set isDirty=true
       // immediately after opening a freshly-loaded file. See issue #20.
       editor.commands.setContent(body, { emitUpdate: false });
-      // Open a settle window so post-setContent extension transactions
-      // (autolink, etc.) don't slip past the suppression above.
+      // Open the settle window *before* any further programmatic
+      // transactions, not after. setBlankLinesBefore below dispatches
+      // synchronously, which runs onUpdate synchronously too — if the
+      // window were opened after that call (as it originally was), onUpdate
+      // would read the *previous* load's now-expired settleUntilRef, slip
+      // past the suppression, and mark a freshly-opened file dirty (#259
+      // regression of the #20 fix). Same reasoning applies to any other
+      // post-setContent extension transaction (autolink, etc.).
       settleUntilRef.current = Date.now() + 250;
+      // Push the blank-line counts markdown-it saw in `body` onto the
+      // freshly loaded doc's top-level blocks (#259) — an attribute-only,
+      // addToHistory:false transaction (BlankLines.ts), so it rides along
+      // in the settle window opened above, same as setContent itself.
+      editor.commands.setBlankLinesBefore(computeBlankLines(body));
     }
   }, [editor, activeId, activeReloadToken]);
 
