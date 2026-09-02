@@ -18,15 +18,17 @@ interface Props {
 
 /** Read-only card shown while the pointer rests on a comment highlight (#251).
  *  Hover reads, click writes: every action — reply, resolve, edit, delete —
- *  lives in CommentThreadPopover, so nothing here is interactive and the card
- *  stays pointer-transparent, leaving the text underneath selectable. */
+ *  lives in CommentThreadPopover. The card carries no controls of its own, but
+ *  it does take the click that opens the thread: it covers the text it
+ *  describes, so a pointer that drifted onto it while reading would otherwise
+ *  land on nothing while the card says "クリックで開く". */
 export function CommentHoverPreview({ comment }: Props) {
   const replyCount = comment.replies?.length ?? 0;
   return (
     <Paper
       elevation={4}
       data-testid="comment-hover-preview"
-      sx={{ width: 288, p: 1.25, pointerEvents: "none" }}
+      sx={{ width: 288, p: 1.25, cursor: "pointer" }}
     >
       <Typography
         variant="caption"

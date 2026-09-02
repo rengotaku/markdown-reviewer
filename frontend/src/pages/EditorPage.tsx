@@ -1175,6 +1175,23 @@ export function EditorPage() {
     threadDraftRef.current = threadDraft;
   }, [openThread, threadDraft]);
 
+  // Opening is triggered from two places — the highlight's own click handler
+  // and the hover preview sitting on top of it — so the state transition lives
+  // in one function rather than being written out at each call site. Held in a
+  // ref as well, because the editor's DOM listeners are registered once and
+  // would otherwise close over the first render's copy.
+  const openThreadFor = (commentId: string, rect: DOMRect) => {
+    hoverKey.current = null;
+    setHoverTarget(null);
+    setThreadDraft("");
+    setOpenThread({ commentId, rect });
+  };
+
+  const openThreadForRef = useRef(openThreadFor);
+  useEffect(() => {
+    openThreadForRef.current = openThreadFor;
+  });
+
   const closeThread = () => {
     setOpenThread(null);
     setThreadDraft("");
@@ -1316,10 +1333,7 @@ export function EditorPage() {
         undefined;
       if (!commentId) return;
       clearTimers();
-      hoverKey.current = null;
-      setHoverTarget(null);
-      setThreadDraft("");
-      setOpenThread({ commentId, rect: el.getBoundingClientRect() });
+      openThreadForRef.current(commentId, el.getBoundingClientRect());
     };
 
     const onClick = (e: Event) => {
@@ -2826,8 +2840,15 @@ export function EditorPage() {
           ) : (
             // Hover reads (#251): edit / delete moved into the thread the
             // highlight opens on click, leaving this card free to show what
-            // the comment actually says instead of a one-line summary.
-            <CommentHoverPreview comment={bubbleComment!} />
+            // the comment actually says instead of a one-line summary. The
+            // card opens the same thread the highlight does — it sits over
+            // the text, so a click meant for the highlight often lands here.
+            <Box
+              onClick={() => openThreadFor(bubbleComment!.id, menuAnchor.rect)}
+              data-testid="comment-hover-preview-click"
+            >
+              <CommentHoverPreview comment={bubbleComment!} />
+            </Box>
           )}
         </Popper>
       )}

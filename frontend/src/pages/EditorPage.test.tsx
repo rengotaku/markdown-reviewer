@@ -1667,6 +1667,17 @@ describe("EditorPage comment hover preview / thread (#251)", () => {
     expect(screen.getByTestId("comment-thread-delete")).toBeEnabled();
   });
 
+  it("プレビューのカードをクリックしてもスレッドが開く", async () => {
+    // The card covers the text it describes, so a pointer that drifted onto it
+    // while reading must not click through to nothing.
+    const { user, ed } = await openWithComment(openComment);
+    await hoverHighlight(ed);
+
+    await user.click(screen.getByTestId("comment-hover-preview-click"));
+
+    expect(await screen.findByTestId("comment-thread-popover")).toBeInTheDocument();
+  });
+
   it("キーボードでもスレッドを開ける", async () => {
     const { ed } = await openWithComment(openComment);
 
