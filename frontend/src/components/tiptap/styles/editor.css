@@ -12,6 +12,14 @@
   font-size: 1rem;
   line-height: 1.6;
   color: #333;
+  /* #256's paragraph gap, now shared with BlankLines.ts (#259) so the two
+     features agree on what "one blank line" looks like. */
+  --paragraph-gap: 18px;
+  /* Height of one source blank line's worth of extra spacing. Matches the
+     line-height above (1.6em) rather than the font's raw line box, so N
+     extra blank lines in the Markdown source look like N empty lines of
+     rendered text, not an arbitrary gap. */
+  --blank-line-height: 1.6em;
 }
 
 .editor-centered .ProseMirror {
@@ -72,7 +80,7 @@
    enough that a paragraph reads as one block, while list items stay tight
    (a bulleted list is one block, not a stack of paragraphs). */
 .ProseMirror p {
-  margin-bottom: 18px;
+  margin-bottom: var(--paragraph-gap);
 }
 
 .ProseMirror li p {
@@ -230,7 +238,7 @@
   /* Match the paragraph gap (#256) so a list reads as one block separated from
      the paragraph that follows it. Nested lists stay tight (they belong to the
      item above them). */
-  margin-bottom: 18px;
+  margin-bottom: var(--paragraph-gap);
 }
 
 .ProseMirror li > ul,
