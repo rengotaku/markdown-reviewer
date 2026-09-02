@@ -67,8 +67,16 @@
   border-radius: 0 4px 4px 0;
 }
 
+/* Paragraph spacing (#256): Markdown collapses consecutive blank lines, so the
+   writer cannot widen the gap from the document side. Keep the body gap wide
+   enough that a paragraph reads as one block, while list items stay tight
+   (a bulleted list is one block, not a stack of paragraphs). */
 .ProseMirror p {
-  margin-bottom: 8px;
+  margin-bottom: 18px;
+}
+
+.ProseMirror li p {
+  margin-bottom: 4px;
 }
 
 .ProseMirror code {
@@ -219,6 +227,15 @@
 .ProseMirror ul,
 .ProseMirror ol {
   padding-left: 24px;
+  /* Match the paragraph gap (#256) so a list reads as one block separated from
+     the paragraph that follows it. Nested lists stay tight (they belong to the
+     item above them). */
+  margin-bottom: 18px;
+}
+
+.ProseMirror li > ul,
+.ProseMirror li > ol {
+  margin-bottom: 4px;
 }
 
 /* Nested bullets: browsers switch to ○ (circle) / ■ (square) per depth —
