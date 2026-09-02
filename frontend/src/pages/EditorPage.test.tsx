@@ -1481,7 +1481,7 @@ describe("EditorPage selection menu (#233)", () => {
     expect(screen.queryByTestId("editor-comment-menu")).not.toBeInTheDocument();
   });
 
-  it("メニューからコメント追加ダイアログを開ける", async () => {
+  it("メニューからコメント入力の吹き出しを開ける", async () => {
     const user = await openReadme();
     const ed = installEditor("<p>SLA遵守率 98%</p>");
 
@@ -1491,8 +1491,49 @@ describe("EditorPage selection menu (#233)", () => {
     await hoverAt(ed, 3);
     await user.click(await screen.findByTestId("editor-menu-add-comment"));
 
+    // Beside the selection, not a modal over the document (#252).
     await waitFor(() =>
-      expect(screen.getByTestId("comment-body-input")).toBeInTheDocument()
+      expect(screen.getByTestId("comment-composer-popover")).toBeInTheDocument()
+    );
+    expect(screen.getByTestId("comment-body-input")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("入力中に外側をクリックしても閉じない", async () => {
+    const user = await openReadme();
+    const ed = installEditor("<p>SLA遵守率 98%</p>");
+    await act(async () => {
+      ed.commands.setTextSelection({ from: 1, to: 5 });
+    });
+    await hoverAt(ed, 3);
+    await user.click(await screen.findByTestId("editor-menu-add-comment"));
+    await screen.findByTestId("comment-composer-popover");
+
+    await user.type(screen.getByTestId("comment-body-input"), "書きかけ");
+    fireEvent.mouseDown(document.body);
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+    });
+
+    expect(screen.getByTestId("comment-composer-popover")).toBeInTheDocument();
+  });
+
+  it("入力が空なら外側クリックで閉じる", async () => {
+    const user = await openReadme();
+    const ed = installEditor("<p>SLA遵守率 98%</p>");
+    await act(async () => {
+      ed.commands.setTextSelection({ from: 1, to: 5 });
+    });
+    await hoverAt(ed, 3);
+    await user.click(await screen.findByTestId("editor-menu-add-comment"));
+    await screen.findByTestId("comment-composer-popover");
+
+    fireEvent.mouseDown(document.body);
+
+    await waitFor(() =>
+      expect(
+        screen.queryByTestId("comment-composer-popover")
+      ).not.toBeInTheDocument()
     );
   });
 });
@@ -1715,14 +1756,16 @@ describe("EditorPage comment hover preview / thread (#251)", () => {
     expect(screen.getByTestId("comment-thread-popover")).toBeInTheDocument();
   });
 
-  it("編集は本文入りのダイアログを開く", async () => {
+  it("編集は本文入りの吹き出しを開く", async () => {
     const { user, ed } = await openWithComment(openComment);
     await openThread(ed);
 
     await user.click(await screen.findByTestId("comment-thread-edit"));
 
-    const input = await screen.findByTestId("comment-body-input");
-    expect(input).toHaveValue("ここ直して");
+    // The composer takes the thread's place at the same anchor (#252).
+    expect(await screen.findByTestId("comment-composer-popover")).toBeInTheDocument();
+    expect(screen.getByTestId("comment-body-input")).toHaveValue("ここ直して");
+    expect(screen.queryByTestId("comment-thread-popover")).not.toBeInTheDocument();
   });
 
   it("返信は POST を投げてスレッドに載る", async () => {

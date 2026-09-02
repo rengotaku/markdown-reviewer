@@ -33,9 +33,9 @@ import {
   RootSelect,
   ToastViewport,
   ConfirmDialog,
-  AddCommentDialog,
   CommentSidePane,
   CommentThreadPopover,
+  CommentComposerPopover,
   CommentHoverPreview,
   DiffView,
   NameTooltip,
@@ -90,11 +90,33 @@ import {
   type HighlightComment,
 } from "@/components/tiptap/extensions/CommentHighlight";
 import { contextLabel } from "@/utils/commentContext";
+import type {
+  ComposerMode,
+  ComposerSubmit,
+} from "@/components/CommentComposerPopover";
 import { BAR_HEIGHT, TAB_CONTENT_HEIGHT } from "@/theme/dimensions";
 
 function basename(path: string): string {
   const idx = path.lastIndexOf("/");
   return idx === -1 ? path : path.slice(idx + 1);
+}
+
+/** Which side a comment popover opens on, and how tall it may grow. Popper
+ *  repositions but never shrinks a card that does not fit, so the card is told
+ *  its own ceiling — an expanded thread is taller than most gaps. */
+function popoverFrame(rect: DOMRect | null): {
+  placement: "bottom-start" | "top-start";
+  maxHeight: number;
+} {
+  if (!rect) return { placement: "bottom-start", maxHeight: 0 };
+  const gap = 16;
+  const below = window.innerHeight - rect.bottom - gap;
+  const above = rect.top - gap;
+  const openDown = below >= above;
+  return {
+    placement: openDown ? "bottom-start" : "top-start",
+    maxHeight: Math.max(240, Math.min(440, openDown ? below : above)),
+  };
 }
 
 const TARGET_SNIPPET_LENGTH = 60;
@@ -1112,21 +1134,32 @@ export function EditorPage() {
     navigate({ pathname: next, search: location.search }, { replace: true });
   }, [activeRoot, activeFile?.path, location.pathname, location.search, navigate]);
 
-  const [commentDialog, setCommentDialog] = useState<{
-    open: boolean;
-    mode: "anchored" | "global" | "edit";
+  // The composer, and what it will write. Anchored beside its target like the
+  // thread is (#252) — a new comment no longer opens a modal over the document.
+  const [composer, setComposer] = useState<{
+    mode: ComposerMode;
+    /** Quoted target text. Empty in "global" mode. */
     snippet: string;
+    /** What the popover hangs off: the selection, or the button pressed. */
+    rect: DOMRect;
     /**
-     * The editor selection captured when the dialog opened (anchored mode).
+     * The editor selection captured when the composer opened (anchored mode).
      * Held so the anchor is computed against the exact range the user picked,
-     * even if focus shifts to the dialog.
+     * even once focus moves into the composer.
      */
     range?: { from: number; to: number };
-    /** Set in "edit" mode: the comment whose body the dialog rewrites. */
+    /** Set in "edit" mode: the comment whose body is being rewritten. */
     editingId?: string;
-    /** Set in "edit" mode: the body the dialog opens with. */
-    defaultBody?: string;
-  }>({ open: false, mode: "anchored", snippet: "" });
+  } | null>(null);
+  const [composerDraft, setComposerDraft] = useState("");
+  const composerRef = useRef<typeof composer>(null);
+  const composerDraftRef = useRef("");
+
+  const closeComposer = () => {
+    setComposer(null);
+    setComposerDraft("");
+  };
+
   // Whether a pointer gesture in the editor is still in progress — the
   // selection bubble stays hidden until the drag ends.
   const pointerIsDown = useRef(false);
@@ -1174,6 +1207,10 @@ export function EditorPage() {
     openThreadRef.current = openThread;
     threadDraftRef.current = threadDraft;
   }, [openThread, threadDraft]);
+  useEffect(() => {
+    composerRef.current = composer;
+    composerDraftRef.current = composerDraft;
+  }, [composer, composerDraft]);
 
   // Opening is triggered from two places — the highlight's own click handler
   // and the hover preview sitting on top of it — so the state transition lives
@@ -1458,14 +1495,78 @@ export function EditorPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openThread]);
 
-  // The thread belongs to one file: switching tabs or leaving review mode
-  // leaves a popover anchored to text that is no longer on screen.
+  // Cancelling asks before throwing away a body, and never asks when there is
+  // nothing to lose. In "edit" the baseline is the stored body, so closing an
+  // untouched edit is silent.
+  const requestCloseComposer = async () => {
+    const seed =
+      composer?.mode === "edit"
+        ? (comments.find((c) => c.id === composer.editingId)?.body ?? "")
+        : "";
+    if (composerDraft.trim() === seed.trim()) {
+      closeComposer();
+      return;
+    }
+    const ok = await confirm({
+      title: "コメントを破棄しますか？",
+      message: "入力中のコメントは保存されません。",
+      confirmLabel: "破棄する",
+      cancelLabel: "編集を続ける",
+    });
+    if (ok) closeComposer();
+  };
+  const requestCloseComposerRef = useRef(requestCloseComposer);
   useEffect(() => {
-    // Synchronous on purpose: the popover is anchored to a rect in the old
-    // file's layout, so it has to go in the same commit as the switch.
+    requestCloseComposerRef.current = requestCloseComposer;
+  });
+
+  // Same dismissal contract as the thread (#251): a click outside is ignored
+  // while there is unsent text, and Esc asks before discarding it.
+  useEffect(() => {
+    if (!composer) return;
+
+    const onDocMouseDown = (e: MouseEvent) => {
+      const el = e.target as HTMLElement | null;
+      if (el?.closest?.('[data-testid="comment-composer-popover"]')) return;
+      // Confirm dialogs and tooltips render in portals of their own.
+      if (el?.closest?.('[role="dialog"], [role="tooltip"]')) return;
+      if (composerDraftRef.current.trim()) {
+        showToast("入力中のコメントがあります。Esc で破棄できます", "info");
+        return;
+      }
+      closeComposer();
+    };
+
+    const onDocKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      void requestCloseComposerRef.current();
+    };
+
+    document.addEventListener("mousedown", onDocMouseDown, true);
+    document.addEventListener("keydown", onDocKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onDocMouseDown, true);
+      document.removeEventListener("keydown", onDocKeyDown);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [composer]);
+
+  // Both popovers belong to one file: switching tabs leaves them anchored to a
+  // rect in a layout that is gone. Keyed on the path rather than on review
+  // state — adding the first comment to a draft *ingests* it, and closing on
+  // that transition would shut the composer the ingest just opened.
+  useEffect(() => {
+    // Synchronous on purpose: it has to go in the same commit as the switch.
     // eslint-disable-next-line react-hooks/set-state-in-effect
+    closeComposer();
     closeThread();
-  }, [activePath, reviewState]);
+  }, [activePath]);
+
+  // Review state is deliberately *not* a trigger. Adding the first comment to
+  // a draft ingests the file, so the state flips while the composer is opening
+  // — closing on it shut the composer that same click. A thread whose comment
+  // disappears is already handled where the comment is looked up.
 
   const handleSelect = async (path: string) => {
     if (!activeRoot) return;
@@ -1792,7 +1893,21 @@ export function EditorPage() {
       "error"
     );
 
-  const openAnchoredCommentDialog = () => {
+  // Opening either floating surface closes the other: two cards over the same
+  // paragraph would fight for the same space and the same Esc.
+  const openComposer = (
+    next: NonNullable<typeof composer>,
+    initialDraft = ""
+  ) => {
+    setOpenThread(null);
+    setThreadDraft("");
+    hoverKey.current = null;
+    setHoverTarget(null);
+    setComposerDraft(initialDraft);
+    setComposer(next);
+  };
+
+  const openAnchoredComposer = (rect: DOMRect) => {
     if (!editor) return;
     const { from, to, empty } = editor.state.selection;
     if (empty || from === to) {
@@ -1800,40 +1915,40 @@ export function EditorPage() {
       return;
     }
     const selectedText = editor.state.doc.textBetween(from, to, " ");
-    setCommentDialog({
-      open: true,
+    openComposer({
       mode: "anchored",
       snippet: buildTargetSnippet(selectedText),
+      rect,
       range: { from, to },
     });
   };
 
-  const openGlobalCommentDialog = () =>
-    setCommentDialog({ open: true, mode: "global", snippet: "" });
+  const openGlobalComposer = (rect: DOMRect) =>
+    openComposer({ mode: "global", snippet: "", rect });
 
   // A comment implies the file is under review, so adding one silently ingests
   // when needed instead of making the user notice a separate "取り込む" step.
-  // The user just sees the comment dialog open normally. Ingest is idempotent.
+  // The user just sees the composer open normally. Ingest is idempotent.
   const ingestThenOpen = async (open: () => void) => {
     if (await handleIngest()) open();
   };
 
-  const handleAddCommentClick = () => {
+  const handleAddCommentClick = (rect: DOMRect) => {
     if (!editor) return;
     if (!reviewActive) {
-      void ingestThenOpen(openAnchoredCommentDialog);
+      void ingestThenOpen(() => openAnchoredComposer(rect));
       return;
     }
-    openAnchoredCommentDialog();
+    openAnchoredComposer(rect);
   };
 
-  const handleAddGlobalClick = () => {
+  const handleAddGlobalClick = (rect: DOMRect) => {
     if (!editor) return;
     if (!reviewActive) {
-      void ingestThenOpen(openGlobalCommentDialog);
+      void ingestThenOpen(() => openGlobalComposer(rect));
       return;
     }
-    openGlobalCommentDialog();
+    openGlobalComposer(rect);
   };
 
   // One menu, one trigger: whatever the pointer is resting on decides which
@@ -1865,24 +1980,8 @@ export function EditorPage() {
     if (openThread && !threadComment) closeThread();
   }, [openThread, threadComment]);
 
-  // Which side the popover opens on, and how tall it may grow: an expanded
-  // thread is taller than most gaps, and Popper only repositions — it will not
-  // shrink a card that does not fit, so the card is told its own ceiling.
-  const { threadPlacement, threadMaxHeight } = (() => {
-    if (!openThread) {
-      return { threadPlacement: "bottom-start" as const, threadMaxHeight: 0 };
-    }
-    const gap = 16;
-    const below = window.innerHeight - openThread.rect.bottom - gap;
-    const above = openThread.rect.top - gap;
-    const openDown = below >= above;
-    return {
-      threadPlacement: (openDown ? "bottom-start" : "top-start") as
-        | "bottom-start"
-        | "top-start",
-      threadMaxHeight: Math.max(240, Math.min(440, openDown ? below : above)),
-    };
-  })();
+  const threadFrame = popoverFrame(openThread?.rect ?? null);
+  const composerFrame = popoverFrame(composer?.rect ?? null);
 
   const threadEditDisabledReason =
     threadComment?.author === "ai"
@@ -1908,16 +2007,18 @@ export function EditorPage() {
   };
 
   const handleThreadEdit = () => {
-    if (!threadComment || threadEditDisabledReason) return;
+    if (!threadComment || !openThread || threadEditDisabledReason) return;
     const target = threadComment;
-    closeThread();
-    setCommentDialog({
-      open: true,
-      mode: "edit",
-      snippet: buildTargetSnippet(commentTargetText(target)),
-      editingId: target.id,
-      defaultBody: target.body,
-    });
+    // Same anchor the thread used, so editing happens where reading did.
+    openComposer(
+      {
+        mode: "edit",
+        snippet: buildTargetSnippet(commentTargetText(target)),
+        rect: openThread.rect,
+        editingId: target.id,
+      },
+      target.body
+    );
   };
 
   const handleThreadDelete = () => {
@@ -1943,31 +2044,23 @@ export function EditorPage() {
     })();
   };
 
-  const closeCommentDialog = () =>
-    setCommentDialog({ open: false, mode: "anchored", snippet: "" });
 
   // Submit a new comment to the sidecar. The anchor(s) are derived from the
   // live ProseMirror doc so they resolve identically server-side against the
   // clean canonical body.
-  const handleCommentSubmit = async ({
-    body,
-    scope,
-  }: {
-    body: string;
-    scope?: "inline" | "block" | "global";
-  }) => {
+  const handleCommentSubmit = async ({ body, scope }: ComposerSubmit) => {
     if (!editor || !activeFile) {
-      closeCommentDialog();
+      closeComposer();
       return;
     }
     // "edit" mode rewrites an existing body; the scope was fixed at creation
     // and the dialog emits none.
-    const editingId = commentDialog.editingId;
+    const editingId = composer?.editingId;
     if (editingId) {
       try {
         await handleEditComment(editingId, body);
       } finally {
-        closeCommentDialog();
+        closeComposer();
       }
       return;
     }
@@ -1981,13 +2074,13 @@ export function EditorPage() {
       } else {
         // anchored inline — anchor(s) cover every block the selection
         // touches (#162), not just the block holding the selection start.
-        const range = commentDialog.range;
+        const range = composer?.range;
         const anchors = range
           ? computeAnchorsFromSelection(editor.state.doc, range.from, range.to)
           : [];
         if (anchors.length === 0) {
           showToast("選択範囲のアンカーを特定できませんでした", "warning");
-          closeCommentDialog();
+          closeComposer();
           return;
         }
         await createComment(
@@ -2000,7 +2093,7 @@ export function EditorPage() {
     } catch (err) {
       commentErr("コメントの追加", err);
     } finally {
-      closeCommentDialog();
+      closeComposer();
     }
   };
 
@@ -2831,7 +2924,11 @@ export function EditorPage() {
                 // Keep the selection alive: focusing the button would collapse
                 // it in some browsers before the handler reads from/to.
                 onMouseDown={(e) => e.preventDefault()}
-                onClick={handleAddCommentClick}
+                // Anchored to the selection's own bubble, so the composer
+                // opens where the user was already looking.
+                onClick={(e) =>
+                  handleAddCommentClick(e.currentTarget.getBoundingClientRect())
+                }
                 data-testid="editor-menu-add-comment"
               >
                 コメント追加
@@ -2856,7 +2953,7 @@ export function EditorPage() {
       {openThread && threadComment && (
         <Popper
           open
-          placement={threadPlacement}
+          placement={threadFrame.placement}
           anchorEl={{ getBoundingClientRect: () => openThread.rect }}
           modifiers={[
             { name: "offset", options: { offset: [0, 8] } },
@@ -2867,7 +2964,7 @@ export function EditorPage() {
         >
           <CommentThreadPopover
             key={threadComment.id}
-            maxHeight={threadMaxHeight}
+            maxHeight={threadFrame.maxHeight}
             comment={threadComment}
             contextLabel={contextLabel(threadComment)}
             editDisabledReason={threadEditDisabledReason}
@@ -2883,14 +2980,29 @@ export function EditorPage() {
         </Popper>
       )}
 
-      <AddCommentDialog
-        open={commentDialog.open}
-        mode={commentDialog.mode}
-        targetSnippet={commentDialog.snippet}
-        defaultBody={commentDialog.defaultBody}
-        onClose={closeCommentDialog}
-        onSubmit={handleCommentSubmit}
-      />
+      {composer && (
+        <Popper
+          open
+          placement={composerFrame.placement}
+          anchorEl={{ getBoundingClientRect: () => composer.rect }}
+          modifiers={[
+            { name: "offset", options: { offset: [0, 8] } },
+            { name: "preventOverflow", options: { padding: 8 } },
+          ]}
+          sx={{ zIndex: (theme) => theme.zIndex.modal }}
+          data-testid="editor-comment-composer"
+        >
+          <CommentComposerPopover
+            mode={composer.mode}
+            targetSnippet={composer.snippet}
+            maxHeight={composerFrame.maxHeight}
+            draft={composerDraft}
+            onDraftChange={setComposerDraft}
+            onSubmit={handleCommentSubmit}
+            onCancel={requestCloseComposer}
+          />
+        </Popper>
+      )}
 
       <ConfirmDialog />
       <ToastViewport />
