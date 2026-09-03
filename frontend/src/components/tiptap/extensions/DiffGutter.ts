@@ -3,6 +3,7 @@ import { Plugin, PluginKey } from "@tiptap/pm/state";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
 import type { GutterMark } from "@/utils/diffGutterMarks";
+import { contentBlocks } from "./blockAlignment";
 
 // DiffGutter paints a VSCode-git-gutter-style colored bar in the left margin of
 // every top-level block that differs from the baseline revision (#121).
@@ -13,6 +14,8 @@ import type { GutterMark } from "@/utils/diffGutterMarks";
 // Safety: markdown-it (source of the marks) and the ProseMirror doc must agree
 // on top-level block count. If they don't (parsing quirk, e.g. an HTML block
 // tiptap collapsed away), we render nothing rather than misalign the bars.
+// Blank-line paragraphs (#261) never correspond to a markdown-it block, so
+// they're excluded from both sides of that comparison (see blockAlignment.ts).
 
 export interface DiffGutterPayload {
   marks: GutterMark[];
@@ -26,34 +29,19 @@ interface PluginState {
 
 const key = new PluginKey<PluginState>("diffGutter");
 
-// tiptap/ProseMirror appends a phantom empty paragraph when the document ends
-// with a non-textblock node (table, list, ...). markdown-it never emits an
-// empty paragraph block, so that trailing node is safe to ignore when
-// cross-checking counts — without this, any document ending in a table or
-// list always fails the check and the gutter silently disappears (#125).
-function effectiveChildCount(doc: ProseMirrorNode): number {
-  if (doc.childCount === 0) return 0;
-  const last = doc.child(doc.childCount - 1);
-  if (last.type.name === "paragraph" && last.content.size === 0) {
-    return doc.childCount - 1;
-  }
-  return doc.childCount;
-}
-
 function buildDeco(
   doc: ProseMirrorNode,
   payload: DiffGutterPayload
 ): DecorationSet {
   if (payload.marks.length === 0) return DecorationSet.empty;
-  if (effectiveChildCount(doc) !== payload.blockCount) return DecorationSet.empty;
+  const blocks = contentBlocks(doc);
+  if (blocks.length !== payload.blockCount) return DecorationSet.empty;
 
   const marksByIndex = new Map<number, GutterMark>();
   for (const m of payload.marks) marksByIndex.set(m.blockIndex, m);
 
   const decos: Decoration[] = [];
-  let pos = 0;
-  doc.forEach((node, offset, index) => {
-    pos = offset;
+  blocks.forEach(({ offset, node }, index) => {
     const mark = marksByIndex.get(index);
     if (mark) {
       const classes: string[] = [];
@@ -62,7 +50,7 @@ function buildDeco(
       if (mark.delAbove) classes.push("diff-gutter-del-above");
       if (classes.length > 0) {
         decos.push(
-          Decoration.node(pos, pos + node.nodeSize, {
+          Decoration.node(offset, offset + node.nodeSize, {
             class: classes.join(" "),
           })
         );

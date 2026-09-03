@@ -1,15 +1,19 @@
 import type { Editor } from "@tiptap/core";
 import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
 
-// getEditorMarkdown restores the blank-line counts BlankLines.ts stashed on
-// each top-level block's `blankLinesBefore` attribute, so saving doesn't
-// collapse a 5-blank-line gap back down to tiptap-markdown's default single
-// blank line (#259).
+// getEditorMarkdown restores blank lines around top-level blocks so saving
+// doesn't collapse a 5-blank-line gap back down to tiptap-markdown's default
+// single blank line (#259). Since #261, blank lines are real empty paragraph
+// nodes in the doc (see BlankLines.ts) rather than an attribute — the number
+// of blank lines before a block is simply however many empty paragraphs sit
+// immediately in front of it, counted fresh from the doc on every save so
+// typing Enter/Backspace on a blank line changes the output exactly like any
+// other edit.
 //
 // tiptap-markdown's MarkdownSerializer only exposes `serialize(doc)` for a
 // whole document — there's no per-node hook for the separator between
-// blocks. So each top-level child is serialized on its own (wrapped in a
-// throwaway doc built from the same schema) and the blocks are rejoined
+// blocks. So each top-level content block is serialized on its own (wrapped
+// in a throwaway doc built from the same schema) and the blocks are rejoined
 // with an explicit number of newlines. Serializing a document is otherwise
 // stateful (MarkdownSerializerState tracks `closed`/`delim` across blocks,
 // e.g. so a table's own trailing "\n" doesn't turn into a blank line), so
@@ -37,56 +41,75 @@ function serializeBlock(editor: Editor, node: ProseMirrorNode): string {
   return getMarkdownStorage(editor).serializer.serialize(wrapperDoc);
 }
 
+/** True for a paragraph with no content — a blank line (#261). */
+function isBlankLineParagraph(node: ProseMirrorNode): boolean {
+  return node.type.name === "paragraph" && node.content.size === 0;
+}
+
+interface ContentBlocks {
+  /** Top-level content blocks (blank-line paragraphs excluded), in doc order. */
+  nodes: ProseMirrorNode[];
+  /** Number of blank-line paragraphs immediately preceding `nodes[i]`,
+   *  aligned by index. `blanksBefore[0]` counts blank lines at the very
+   *  start of the document. */
+  blanksBefore: number[];
+}
+
 /**
- * Top-level children to serialize, dropping the phantom empty paragraph
- * tiptap appends after a trailing table/list/code block (same allowance
- * DiffGutter/LineNumberGutter/BlankLines make, #125). Serializing the whole
- * doc at once silently absorbs this phantom node (its own serialize output
- * is empty and there's no following block to force a blank-line delimiter
- * for it) — verified empirically against `serializer.serialize(doc)` — so
- * the per-block reconstruction below has to drop it explicitly to match.
+ * contentBlocksAndBlanks splits doc's top-level children into content
+ * blocks and the blank-line count before each one.
+ *
+ * Drops the phantom empty paragraph tiptap appends after a trailing
+ * table/list/code block (same allowance DiffGutter/LineNumberGutter/
+ * blockAlignment.ts make, #125) before counting — serializing the whole doc
+ * at once silently absorbs this phantom node (its own serialize output is
+ * empty and there's no following block to force a blank-line delimiter for
+ * it) — verified empirically against `serializer.serialize(doc)` — so it has
+ * to be excluded explicitly here too, the same as before this issue.
  */
-function contentBlocks(doc: ProseMirrorNode): ProseMirrorNode[] {
+function contentBlocksAndBlanks(doc: ProseMirrorNode): ContentBlocks {
+  const all: ProseMirrorNode[] = [];
+  doc.forEach((node) => all.push(node));
+  const last = all[all.length - 1];
+  if (last && isBlankLineParagraph(last)) all.pop();
+
   const nodes: ProseMirrorNode[] = [];
-  doc.forEach((node) => nodes.push(node));
-  const last = nodes[nodes.length - 1];
-  if (last && last.type.name === "paragraph" && last.content.size === 0) {
-    nodes.pop();
+  const blanksBefore: number[] = [];
+  let pending = 0;
+  for (const node of all) {
+    if (isBlankLineParagraph(node)) {
+      pending++;
+      continue;
+    }
+    nodes.push(node);
+    blanksBefore.push(pending);
+    pending = 0;
   }
-  return nodes;
+  return { nodes, blanksBefore };
 }
 
 /**
  * getEditorMarkdown serializes `editor`'s document to Markdown, restoring
- * any extra blank lines recorded on top-level blocks by the BlankLines
- * extension (see setBlankLinesBefore in BlankLines.ts).
+ * any blank lines represented by empty paragraphs before top-level blocks
+ * (see contentBlocksAndBlanks above).
  */
 export function getEditorMarkdown(editor: Editor): string {
-  const nodes = contentBlocks(editor.state.doc);
+  const { nodes, blanksBefore } = contentBlocksAndBlanks(editor.state.doc);
   if (nodes.length === 0) return "";
 
-  const raws: string[] = [];
-  const blankLinesBefore: number[] = [];
-  for (const node of nodes) {
-    raws.push(serializeBlock(editor, node));
-    blankLinesBefore.push(
-      typeof node.attrs.blankLinesBefore === "number"
-        ? node.attrs.blankLinesBefore
-        : 0
-    );
-  }
+  const raws = nodes.map((node) => serializeBlock(editor, node));
 
   // Strip each block's own trailing newline(s) before rejoining — the
   // number of newlines between blocks is decided entirely by us below, not
   // by whatever a given node's own serializer happened to emit.
   const trimmed = raws.map((raw) => raw.replace(/\n+$/, ""));
 
-  let out = "\n".repeat(blankLinesBefore[0] ?? 0);
+  let out = "\n".repeat(blanksBefore[0] ?? 0);
   trimmed.forEach((block, index) => {
     if (index > 0) {
-      // Normal separator is a single blank line ("\n\n"); each extra blank
-      // line adds one more "\n".
-      out += "\n".repeat(2 + (blankLinesBefore[index] ?? 0));
+      // Normal separator is a single blank line ("\n\n"); each blank-line
+      // paragraph before this block adds one more "\n".
+      out += "\n".repeat(2 + (blanksBefore[index] ?? 0));
     }
     out += block;
   });
