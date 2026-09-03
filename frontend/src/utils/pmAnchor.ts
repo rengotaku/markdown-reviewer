@@ -14,7 +14,10 @@
 import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
 
 export interface PmAnchor {
-  heading_path: string[];
+  // Anchors authored here always carry an array, but ones read back from a
+  // sidecar can be null when the document has no headings (#262), and the
+  // resolve path below has to accept both.
+  heading_path: string[] | null;
   snippet: string;
   occurrence: number;
 }
@@ -111,8 +114,9 @@ export function resolveAnchorInBlocks(
 ): { from: number; to: number } | null {
   if (!anchor.snippet) return null;
 
+  const headingPath = anchor.heading_path ?? [];
   const underHeading = (b: AnchorBlock) =>
-    !anchor.heading_path.length || suffixMatch(b.headingStack, anchor.heading_path);
+    !headingPath.length || suffixMatch(b.headingStack, headingPath);
 
   let groupsSeen = 0;
   let lastCountedGroup: number | null = null;

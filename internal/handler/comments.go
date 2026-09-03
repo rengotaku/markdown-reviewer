@@ -115,6 +115,12 @@ func buildCommentJSON(content string, c reviewstore.Comment) CommentJSON {
 		out.Orphan = true
 		return out
 	}
+	// A document with no headings resolves to a nil HeadingPath, which would
+	// serialize as `null` and break clients that take the declared
+	// `heading_path: string[]` contract at face value (#262).
+	if headingPath == nil {
+		headingPath = []string{}
+	}
 	out.Context = &CommentContext{HeadingPath: headingPath, LineRange: lineRange}
 	return out
 }

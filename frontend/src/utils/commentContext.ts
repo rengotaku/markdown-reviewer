@@ -4,8 +4,8 @@ import type { CommentJSON } from "@/api";
  *  anchor(s). Used to show what an orphaned comment pointed at, even after the
  *  canonical body changed and the live position can no longer be resolved. */
 function originalTarget(c: CommentJSON): string {
-  const fmt = (heading: string[], snippet: string) => {
-    const head = heading[heading.length - 1];
+  const fmt = (heading: string[] | null, snippet: string) => {
+    const head = (heading ?? []).at(-1);
     return head ? `${head} › ${snippet}` : snippet;
   };
   // A multi-line inline comment (#162) keeps its first block in `anchor` and
@@ -26,7 +26,7 @@ export function contextLabel(c: CommentJSON): string | null {
   // too (#162 made every anchor contribute, `anchors`-only included).
   if (c.scope === "cross_section" && c.anchors && c.anchors.length > 0) {
     return c.anchors
-      .map((a) => a.heading_path[a.heading_path.length - 1] ?? a.snippet)
+      .map((a) => (a.heading_path ?? []).at(-1) ?? a.snippet)
       .filter(Boolean)
       .join(" ・ ");
   }
@@ -35,14 +35,14 @@ export function contextLabel(c: CommentJSON): string | null {
   // heading + L74–80 form stays, instead of degrading to a list of repeated
   // heading names.
   if (c.context) {
-    const head = c.context.heading_path[c.context.heading_path.length - 1];
+    const head = (c.context.heading_path ?? []).at(-1);
     const [s, e] = c.context.line_range;
     const lines = s === e ? `L${s}` : `L${s}–${e}`;
     return head ? `${head} (${lines})` : lines;
   }
   if (c.anchors && c.anchors.length > 0) {
     return c.anchors
-      .map((a) => a.heading_path[a.heading_path.length - 1] ?? a.snippet)
+      .map((a) => (a.heading_path ?? []).at(-1) ?? a.snippet)
       .filter(Boolean)
       .join(" ・ ");
   }
