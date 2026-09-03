@@ -132,3 +132,18 @@ describe("DiffGutter", () => {
     expect(nodeAt(ed, ".diff-gutter-add")).toHaveLength(0);
   });
 });
+
+describe("DiffGutter with blank-line paragraphs (#261)", () => {
+  it("skips blank-line paragraphs when aligning payload indices to doc children", () => {
+    // Doc: [heading, blank, blank, paragraph] — 2 content blocks.
+    const ed = makeEditor("<h2>title</h2><p></p><p></p><p>body</p>");
+    ed.commands.setDiffGutter({
+      marks: [{ blockIndex: 1, kind: "add" }],
+      blockCount: 2,
+    });
+    const added = nodeAt(ed, ".diff-gutter-add");
+    expect(added).toHaveLength(1);
+    expect(added[0].tagName.toLowerCase()).toBe("p");
+    expect(added[0].textContent).toBe("body");
+  });
+});

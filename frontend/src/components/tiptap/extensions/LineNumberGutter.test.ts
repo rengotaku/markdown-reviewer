@@ -60,3 +60,17 @@ describe("LineNumberGutter", () => {
     expect(numbers(ed)).toEqual(["1", "3"]);
   });
 });
+
+describe("LineNumberGutter with blank-line paragraphs (#261)", () => {
+  it("skips blank-line paragraphs when aligning payload indices to doc children", () => {
+    // Doc: [blank, heading, blank, blank, paragraph] — 2 content blocks.
+    const ed = makeEditor("<p></p><h2>title</h2><p></p><p></p><p>body</p>");
+    ed.commands.setLineNumbers({ lines: [1, 4], blockCount: 2 });
+    const decorated = Array.from(
+      ed.view.dom.querySelectorAll("[data-line-number]")
+    );
+    expect(decorated.map((el) => el.tagName.toLowerCase())).toEqual(["h2", "p"]);
+    expect(decorated.map((el) => el.getAttribute("data-line-number"))).toEqual(["1", "4"]);
+    expect(decorated[1].textContent).toBe("body");
+  });
+});

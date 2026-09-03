@@ -2,6 +2,7 @@ import { Extension } from "@tiptap/core";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
+import { contentBlocks } from "./blockAlignment";
 
 // LineNumberGutter labels each top-level block with the Markdown source line
 // its first line sits on (#234), so "N 行目" in a review comment lines up with
@@ -14,6 +15,8 @@ import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
 //
 // Safety mirrors DiffGutter: if markdown-it and the ProseMirror doc disagree
 // on the top-level block count, render nothing rather than misaligned numbers.
+// Blank-line paragraphs (#261) are excluded from both sides of that count —
+// they never correspond to a markdown-it block (see blockAlignment.ts).
 
 export interface LineNumberPayload {
   /** Source line number (1-indexed) of each top-level block, in doc order. */
@@ -29,24 +32,13 @@ interface PluginState {
 
 const key = new PluginKey<PluginState>("lineNumberGutter");
 
-// Same phantom-trailing-paragraph allowance as DiffGutter (#125): tiptap
-// appends an empty paragraph after a trailing table/list that markdown-it
-// never emits.
-function effectiveChildCount(doc: ProseMirrorNode): number {
-  if (doc.childCount === 0) return 0;
-  const last = doc.child(doc.childCount - 1);
-  if (last.type.name === "paragraph" && last.content.size === 0) {
-    return doc.childCount - 1;
-  }
-  return doc.childCount;
-}
-
 function buildDeco(doc: ProseMirrorNode, payload: LineNumberPayload): DecorationSet {
   if (payload.lines.length === 0) return DecorationSet.empty;
-  if (effectiveChildCount(doc) !== payload.blockCount) return DecorationSet.empty;
+  const blocks = contentBlocks(doc);
+  if (blocks.length !== payload.blockCount) return DecorationSet.empty;
 
   const decos: Decoration[] = [];
-  doc.forEach((node, offset, index) => {
+  blocks.forEach(({ offset, node }, index) => {
     const line = payload.lines[index];
     if (line === undefined) return;
     decos.push(

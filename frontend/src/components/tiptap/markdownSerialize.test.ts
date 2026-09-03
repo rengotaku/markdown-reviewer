@@ -235,3 +235,68 @@ describe("loading a file with blank lines does not mark it dirty (#259 regressio
     expect(updateCalls).toBe(1);
   });
 });
+
+describe("blank lines are editable content (#261)", () => {
+  // Blank lines are real empty paragraph nodes once loaded (BlankLines.ts),
+  // so growing/shrinking their count is an ordinary doc edit — exactly what
+  // pressing Enter on a blank line (adds one) or Backspace at its start
+  // (removes one) does. These tests drive the same structural change
+  // directly via a transaction, since headless Editor.commands don't expose
+  // a literal "press Enter"/"press Backspace" affordance, but the resulting
+  // doc shape (one more/one fewer empty paragraph) is identical.
+
+  function blankParagraphOffsets(ed: Editor): number[] {
+    const offsets: number[] = [];
+    ed.state.doc.forEach((node, offset) => {
+      if (node.type.name === "paragraph" && node.content.size === 0) {
+        offsets.push(offset);
+      }
+    });
+    return offsets;
+  }
+
+  it("Enter on a blank line: inserting one more empty paragraph adds one blank line to the output", () => {
+    const ed = makeEditor();
+    const body = "Paragraph one.\n\n\nParagraph two.\n"; // 2 blank lines
+    load(ed, body);
+    expect(getEditorMarkdown(ed)).toBe(NO_TRAILING_NEWLINE(body));
+
+    const [blankOffset] = blankParagraphOffsets(ed);
+    const paragraphType = ed.schema.nodes.paragraph;
+    ed.view.dispatch(ed.state.tr.insert(blankOffset, paragraphType.create()));
+
+    expect(getEditorMarkdown(ed)).toBe(
+      NO_TRAILING_NEWLINE("Paragraph one.\n\n\n\nParagraph two.\n")
+    );
+  });
+
+  it("Backspace on a blank line: removing one empty paragraph removes one blank line from the output", () => {
+    const ed = makeEditor();
+    const body = "Paragraph one.\n\n\n\nParagraph two.\n"; // 3 blank lines
+    load(ed, body);
+    expect(getEditorMarkdown(ed)).toBe(NO_TRAILING_NEWLINE(body));
+
+    const [blankOffset] = blankParagraphOffsets(ed);
+    const blankNode = ed.state.doc.nodeAt(blankOffset)!;
+    ed.view.dispatch(ed.state.tr.delete(blankOffset, blankOffset + blankNode.nodeSize));
+
+    expect(getEditorMarkdown(ed)).toBe(
+      NO_TRAILING_NEWLINE("Paragraph one.\n\n\nParagraph two.\n")
+    );
+  });
+
+  it("removing every blank paragraph collapses the gap back to the normal single blank line", () => {
+    const ed = makeEditor();
+    const body = "Paragraph one.\n\n\n\n\nParagraph two.\n"; // 4 blank lines
+    load(ed, body);
+
+    for (const offset of blankParagraphOffsets(ed).slice().reverse()) {
+      const node = ed.state.doc.nodeAt(offset)!;
+      ed.view.dispatch(ed.state.tr.delete(offset, offset + node.nodeSize));
+    }
+
+    expect(getEditorMarkdown(ed)).toBe(
+      NO_TRAILING_NEWLINE("Paragraph one.\n\nParagraph two.\n")
+    );
+  });
+});
