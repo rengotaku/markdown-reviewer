@@ -43,3 +43,16 @@ export function contentBlocks(doc: ProseMirrorNode): ContentBlock[] {
   });
   return blocks;
 }
+
+/**
+ * Number of blocks contentBlocks() would return, without building the array.
+ * The gutter plugins only need the count on their per-keystroke path (#270),
+ * where allocating one object per top-level block is the thing being avoided.
+ */
+export function contentBlockCount(doc: ProseMirrorNode): number {
+  let n = 0;
+  doc.forEach((node) => {
+    if (!isBlankLineParagraph(node)) n += 1;
+  });
+  return n;
+}

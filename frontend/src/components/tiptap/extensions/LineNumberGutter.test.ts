@@ -74,3 +74,29 @@ describe("LineNumberGutter with blank-line paragraphs (#261)", () => {
     expect(decorated[1].textContent).toBe("body");
   });
 });
+
+// #270: same contract as DiffGutter — numbers stay glued to their block for an
+// in-block edit and vanish as soon as the block count stops matching.
+describe("LineNumberGutter — doc changes (#270)", () => {
+  it("keeps the number on its block while editing inside that block", () => {
+    const ed = makeEditor("<h2>title</h2><p>body</p>");
+    ed.commands.setLineNumbers({ lines: [1, 3], blockCount: 2 });
+    ed.commands.insertContentAt(ed.state.doc.content.size - 1, " more");
+
+    const numbered = Array.from(
+      ed.view.dom.querySelectorAll("[data-line-number]")
+    );
+    expect(numbered).toHaveLength(2);
+    expect(numbered[1].getAttribute("data-line-number")).toBe("3");
+    expect(numbered[1].textContent).toBe("body more");
+  });
+
+  it("clears the numbers once a new top-level block appears", () => {
+    const ed = makeEditor("<h2>title</h2><p>body</p>");
+    ed.commands.setLineNumbers({ lines: [1, 3], blockCount: 2 });
+    expect(ed.view.dom.querySelectorAll("[data-line-number]")).toHaveLength(2);
+
+    ed.commands.insertContentAt(ed.state.doc.content.size, "<p>third</p>");
+    expect(ed.view.dom.querySelectorAll("[data-line-number]")).toHaveLength(0);
+  });
+});

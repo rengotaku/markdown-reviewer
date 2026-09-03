@@ -344,3 +344,89 @@ describe("commentIdsInRange (#238)", () => {
     expect(commentIdsInRange(ed.state, 0, ed.state.doc.content.size)).toEqual([]);
   });
 });
+
+// #270: per-keystroke transactions map the existing decorations through the
+// change instead of re-resolving every anchor against a freshly flattened
+// document. The full re-resolve still happens, just on the resync command that
+// TiptapEditor fires from its 250ms markdown debounce.
+describe("CommentHighlight — mapping vs resync (#270)", () => {
+  const anchor = { heading_path: [], snippet: "target", occurrence: 0 };
+
+  it("keeps the highlight on its text when an edit lands elsewhere", () => {
+    const ed = makeEditor("<p>some target text</p><p>tail</p>");
+    ed.commands.setCommentHighlights([{ id: "c1", status: "open", anchor }]);
+    expect(marks(ed)).toHaveLength(1);
+
+    // Type into the *second* paragraph — the anchored text is untouched.
+    ed.commands.insertContentAt(ed.state.doc.content.size - 1, "!!");
+
+    const m = marks(ed);
+    expect(m).toHaveLength(1);
+    expect(m[0].textContent).toBe("target");
+  });
+
+  it("shifts the highlight with text inserted before it", () => {
+    const ed = makeEditor("<p>some target text</p>");
+    ed.commands.setCommentHighlights([{ id: "c1", status: "open", anchor }]);
+    ed.commands.insertContentAt(1, "XX");
+
+    const m = marks(ed);
+    expect(m).toHaveLength(1);
+    expect(m[0].textContent).toBe("target");
+  });
+
+  it("does not re-resolve anchors on a plain doc change", () => {
+    const ed = makeEditor("<p>some target text</p>");
+    ed.commands.setCommentHighlights([{ id: "c1", status: "open", anchor }]);
+
+    // Introduce an *earlier* occurrence of the snippet. occurrence 0 now means
+    // this new one, but a docChanged must not pay for finding that out.
+    ed.commands.insertContentAt(1, "target ");
+
+    const m = marks(ed);
+    expect(m).toHaveLength(1);
+    // Still the original occurrence, merely shifted along.
+    expect(m[0].textContent).toBe("target");
+    expect(ed.state.doc.textBetween(1, 8)).toBe("target ");
+    // The mark sits after the inserted copy, not on it.
+    const marked = m[0] as HTMLElement;
+    expect(marked.previousSibling?.textContent).toContain("target some ");
+  });
+
+  it("re-resolves anchors when resyncCommentHighlights runs", () => {
+    const ed = makeEditor("<p>some target text</p>");
+    ed.commands.setCommentHighlights([{ id: "c1", status: "open", anchor }]);
+    ed.commands.insertContentAt(1, "target ");
+    ed.commands.resyncCommentHighlights();
+
+    const m = marks(ed);
+    expect(m).toHaveLength(1);
+    // occurrence 0 is now the newly inserted copy at the head of the block.
+    expect(m[0].textContent).toBe("target");
+    expect((m[0] as HTMLElement).previousSibling).toBeNull();
+  });
+
+  it("drops the highlight on resync once its snippet is gone", () => {
+    const ed = makeEditor("<p>some target text</p>");
+    ed.commands.setCommentHighlights([{ id: "c1", status: "open", anchor }]);
+    expect(marks(ed)).toHaveLength(1);
+
+    // Delete the anchored word. Mapping alone leaves a collapsed decoration;
+    // the resync is what recognises the anchor as unresolvable (orphan).
+    const from = ed.state.doc.textContent.indexOf("target") + 1;
+    ed.commands.deleteRange({ from, to: from + "target".length });
+    ed.commands.resyncCommentHighlights();
+
+    expect(marks(ed)).toHaveLength(0);
+  });
+
+  it("still tracks the active thread across a doc change", () => {
+    const ed = makeEditor("<p>some target text</p>");
+    ed.commands.setCommentHighlights([{ id: "c1", status: "open", anchor }]);
+    ed.commands.setActiveComment("c1");
+    ed.commands.insertContentAt(1, "XX");
+    expect(
+      ed.view.dom.querySelectorAll(".comment-mark.is-active")
+    ).toHaveLength(1);
+  });
+});

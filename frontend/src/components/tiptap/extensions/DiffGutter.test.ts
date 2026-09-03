@@ -147,3 +147,34 @@ describe("DiffGutter with blank-line paragraphs (#261)", () => {
     expect(added[0].textContent).toBe("body");
   });
 });
+
+// #270 moved the per-keystroke path from "rebuild every decoration" to "map the
+// existing ones through the change". These lock the behaviour that has to
+// survive that swap: bars stay put while the block structure holds, and still
+// disappear the moment it stops matching the payload.
+describe("DiffGutter — doc changes (#270)", () => {
+  it("keeps the bar on its block while editing inside that block", () => {
+    const ed = makeEditor("<h2>title</h2><p>body</p>");
+    ed.commands.setDiffGutter({
+      marks: [{ blockIndex: 1, kind: "add" }],
+      blockCount: 2,
+    });
+    ed.commands.insertContentAt(ed.state.doc.content.size - 1, " more");
+
+    const added = nodeAt(ed, ".diff-gutter-add");
+    expect(added).toHaveLength(1);
+    expect(added[0].textContent).toBe("body more");
+  });
+
+  it("clears the bars once a new top-level block appears", () => {
+    const ed = makeEditor("<h2>title</h2><p>body</p>");
+    ed.commands.setDiffGutter({
+      marks: [{ blockIndex: 1, kind: "add" }],
+      blockCount: 2,
+    });
+    expect(nodeAt(ed, ".diff-gutter-add")).toHaveLength(1);
+
+    ed.commands.insertContentAt(ed.state.doc.content.size, "<p>third</p>");
+    expect(nodeAt(ed, ".diff-gutter-add")).toHaveLength(0);
+  });
+});
