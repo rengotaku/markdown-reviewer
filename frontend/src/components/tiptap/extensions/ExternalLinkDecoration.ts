@@ -23,6 +23,11 @@ interface PluginState {
 
 const key = new PluginKey<PluginState>("externalLinkDecoration");
 
+/** Meta value asking for a full re-scan (see the apply() comment). */
+const RESYNC = Symbol("resyncLinkDecorations");
+
+type PluginMeta = string | typeof RESYNC;
+
 function isExternal(href: string, basePath: string): boolean {
   if (!href) return false;
   if (href.startsWith("#")) return false;
@@ -51,6 +56,8 @@ declare module "@tiptap/core" {
        *  link's href is resolved relative to this before deciding whether
        *  it's external (mirrors TiptapEditor's click/hover handlers). */
       setLinkBasePath: (basePath: string) => ReturnType;
+      /** Re-scan the document for external links (#270). */
+      resyncLinkDecorations: () => ReturnType;
     };
   }
 }
@@ -68,14 +75,26 @@ export const ExternalLinkDecoration = Extension.create({
             deco: buildDeco(state.doc, ""),
           }),
           apply(tr, value, _oldState, newState) {
-            const meta = tr.getMeta(key) as string | undefined;
-            if (meta !== undefined) {
+            const meta = tr.getMeta(key) as PluginMeta | undefined;
+            if (typeof meta === "string") {
               return { basePath: meta, deco: buildDeco(newState.doc, meta) };
             }
-            if (tr.docChanged) {
+            if (meta === RESYNC) {
               return {
                 basePath: value.basePath,
                 deco: buildDeco(newState.doc, value.basePath),
+              };
+            }
+            if (tr.docChanged) {
+              // buildDeco walks every text node in the document, so running it
+              // per keystroke dominated typing on a long file (#270). Map the
+              // existing icons through the change instead; a link that is newly
+              // created or retargeted while typing (autolink, paste, edit of an
+              // href) is picked up by the RESYNC pass that TiptapEditor fires
+              // from the 250ms markdown debounce (#265).
+              return {
+                basePath: value.basePath,
+                deco: value.deco.map(tr.mapping, newState.doc),
               };
             }
             return value;
@@ -96,6 +115,12 @@ export const ExternalLinkDecoration = Extension.create({
         (basePath: string) =>
         ({ tr, dispatch }) => {
           if (dispatch) dispatch(tr.setMeta(key, basePath));
+          return true;
+        },
+      resyncLinkDecorations:
+        () =>
+        ({ tr, dispatch }) => {
+          if (dispatch) dispatch(tr.setMeta(key, RESYNC));
           return true;
         },
     };

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useMemo, useState } from "react";
 import Box from "@mui/material/Box";
 import { useEditor, EditorContent } from "@tiptap/react";
+import type { Editor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { CodeBlockLowlight } from "@tiptap/extension-code-block-lowlight";
 import Placeholder from "@tiptap/extension-placeholder";
@@ -59,6 +60,18 @@ const MARKDOWN_SYNC_DEBOUNCE_MS = 250;
 // Built once per module: registering the grammars is pure setup and the
 // instance is stateless across editors.
 const codeLowlight = createCodeLowlight();
+
+/**
+ * Re-run the decoration passes that the per-keystroke path only maps through
+ * the change rather than recomputing (#270): comment-anchor resolution and the
+ * external-link scan. Called from the same 250ms debounce that re-serializes
+ * the Markdown, so both settle one typing pause after the last keystroke.
+ */
+function resyncDecorations(ed: Editor): void {
+  if (ed.isDestroyed) return;
+  ed.commands.resyncCommentHighlights();
+  ed.commands.resyncLinkDecorations();
+}
 
 export function TiptapEditor() {
   const centered = useEditorPrefs((s) => s.centered);
@@ -184,6 +197,7 @@ export function TiptapEditor() {
         if (!root) return;
         if (!useOpenFiles.getState().activeIdByRoot[root]) return;
         updateActiveMarkdown(root, preambleRef.current + getEditorMarkdown(ed));
+        resyncDecorations(ed);
       }, MARKDOWN_SYNC_DEBOUNCE_MS);
     },
   });
@@ -206,6 +220,7 @@ export function TiptapEditor() {
     if (!root) return;
     if (!useOpenFiles.getState().activeIdByRoot[root]) return;
     updateActiveMarkdown(root, preambleRef.current + getEditorMarkdown(editor));
+    resyncDecorations(editor);
   }, [editor, updateActiveMarkdown]);
 
   useEffect(() => {

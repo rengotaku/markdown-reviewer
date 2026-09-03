@@ -78,3 +78,44 @@ describe("ExternalLinkDecoration", () => {
     expect(ed.getText()).toBe("ext");
   });
 });
+
+// #270: the full doc.descendants() scan no longer runs per keystroke. Existing
+// icons are mapped through the change; a link that appears or changes target
+// while typing is picked up by the resync that TiptapEditor fires from its
+// 250ms markdown debounce.
+describe("ExternalLinkDecoration — mapping vs resync (#270)", () => {
+  it("keeps an existing icon on its link across an unrelated edit", () => {
+    const ed = makeEditor('<p><a href="https://example.com">ext</a></p><p>x</p>');
+    expect(iconEls(ed)).toHaveLength(1);
+
+    ed.commands.insertContentAt(ed.state.doc.content.size - 1, "yz");
+
+    expect(iconEls(ed)).toHaveLength(1);
+    expect(iconEls(ed)[0].textContent).toBe("ext");
+  });
+
+  it("picks up a link added after load once resync runs", () => {
+    const ed = makeEditor("<p>plain</p>");
+    expect(iconEls(ed)).toHaveLength(0);
+
+    ed.commands.insertContentAt(
+      ed.state.doc.content.size - 1,
+      '<a href="https://example.com">ext</a>'
+    );
+    ed.commands.resyncLinkDecorations();
+
+    expect(iconEls(ed)).toHaveLength(1);
+    expect(iconEls(ed)[0].textContent).toBe("ext");
+  });
+
+  it("drops the icon on resync once the link becomes internal", () => {
+    const ed = makeEditor('<p><a href="https://example.com">ext</a></p>');
+    expect(iconEls(ed)).toHaveLength(1);
+
+    ed.commands.setTextSelection({ from: 1, to: 4 });
+    ed.commands.setLink({ href: "./sibling.md" });
+    ed.commands.resyncLinkDecorations();
+
+    expect(iconEls(ed)).toHaveLength(0);
+  });
+});

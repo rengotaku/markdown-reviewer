@@ -3,7 +3,7 @@ import { Plugin, PluginKey } from "@tiptap/pm/state";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
 import type { GutterMark } from "@/utils/diffGutterMarks";
-import { contentBlocks } from "./blockAlignment";
+import { contentBlocks, contentBlockCount } from "./blockAlignment";
 
 // DiffGutter paints a VSCode-git-gutter-style colored bar in the left margin of
 // every top-level block that differs from the baseline revision (#121).
@@ -89,9 +89,23 @@ export const DiffGutter = Extension.create({
               };
             }
             if (tr.docChanged) {
+              // Per-keystroke path (#270): rebuilding placed one Decoration per
+              // top-level block on every transaction. The payload itself cannot
+              // have changed here — EditorPage recomputes it from the markdown,
+              // which is only re-serialized on the 250ms debounce (#265) and
+              // arrives as a meta above — so mapping the existing decorations
+              // through the change gives the same placement far more cheaply.
+              //
+              // The block-count cross-check is kept: once the edit adds or
+              // removes a top-level block the payload no longer lines up with
+              // the doc, and rendering nothing (as before) beats rendering
+              // misaligned bars until the next payload lands.
+              if (contentBlockCount(newState.doc) !== value.payload.blockCount) {
+                return { payload: value.payload, deco: DecorationSet.empty };
+              }
               return {
                 payload: value.payload,
-                deco: buildDeco(newState.doc, value.payload),
+                deco: value.deco.map(tr.mapping, newState.doc),
               };
             }
             return value;

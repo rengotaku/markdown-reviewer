@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { commentsEqual } from "@/utils/commentsEqual";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { HTTPError } from "ky";
 import Box from "@mui/material/Box";
@@ -678,7 +679,15 @@ export function EditorPage() {
       try {
         const res = await listComments(activePath, activeFileRoot);
         if (!cancelled) {
-          setComments(res.comments);
+          // Keep the previous array when the sidecar came back unchanged
+          // (#270). A comment write triggers this fetch twice — once from the
+          // mutation handler, once from the SSE echo of our own review.json
+          // write — and without this the identical second response still
+          // re-ran every `comments` consumer, including the full re-resolve of
+          // every comment anchor over the whole document.
+          setComments((prev) =>
+            commentsEqual(prev, res.comments) ? prev : res.comments
+          );
           setCommentsLoadedForPath(activePath);
         }
       } catch {

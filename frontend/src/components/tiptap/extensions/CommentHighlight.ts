@@ -53,7 +53,8 @@ type PluginMeta =
   | { type: "setComments"; comments: HighlightComment[] }
   | { type: "setActive"; activeId: string | null }
   | { type: "flash"; ranges: FlashRange[] }
-  | { type: "clearFlash" };
+  | { type: "clearFlash" }
+  | { type: "resync" };
 
 function buildDeco(
   doc: ProseMirrorNode,
@@ -166,6 +167,12 @@ declare module "@tiptap/core" {
       flashCommentRanges: (ranges: FlashRange[]) => ReturnType;
       /** Remove any decorations painted by flashCommentRanges. */
       clearCommentFlash: () => ReturnType;
+      /**
+       * Re-resolve every comment anchor against the current document. Cheap
+       * mapping keeps highlights in place per keystroke; this puts them back
+       * on their true anchor once typing pauses (#270).
+       */
+      resyncCommentHighlights: () => ReturnType;
     };
   }
 }
@@ -212,11 +219,32 @@ export const CommentHighlight = Extension.create({
             if (meta?.type === "clearFlash") {
               return { ...value, flashDeco: DecorationSet.empty };
             }
-            if (tr.docChanged) {
+            if (meta?.type === "resync") {
               return {
                 ...value,
-                comments: value.comments,
                 deco: buildDeco(newState.doc, value.comments, value.activeId),
+                flashDeco: value.flashDeco.map(tr.mapping, newState.doc),
+              };
+            }
+            if (tr.docChanged) {
+              // Per-keystroke path: map the existing decorations through the
+              // change instead of re-resolving every anchor against a freshly
+              // flattened document (#270). buildDeco is O(doc size + anchors)
+              // and ran on every transaction, which is what made typing and
+              // comment writes drag on a large file. Mapping is O(number of
+              // decorations) and keeps highlights glued to their text for any
+              // edit that does not rewrite the anchored snippet itself.
+              //
+              // Anchors are content-addressed (heading path + snippet +
+              // occurrence), so an edit *inside* an anchored range can move a
+              // highlight somewhere mapping cannot predict. That is repaired by
+              // the "resync" meta above, which TiptapEditor fires from the same
+              // 250ms debounce that re-serializes the markdown (#265) — so the
+              // full re-resolve still happens, just once per typing pause
+              // rather than once per keystroke.
+              return {
+                ...value,
+                deco: value.deco.map(tr.mapping, newState.doc),
                 flashDeco: value.flashDeco.map(tr.mapping, newState.doc),
               };
             }
@@ -261,6 +289,12 @@ export const CommentHighlight = Extension.create({
         () =>
         ({ tr, dispatch }) => {
           if (dispatch) dispatch(tr.setMeta(key, { type: "clearFlash" }));
+          return true;
+        },
+      resyncCommentHighlights:
+        () =>
+        ({ tr, dispatch }) => {
+          if (dispatch) dispatch(tr.setMeta(key, { type: "resync" }));
           return true;
         },
     };
