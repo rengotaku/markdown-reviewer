@@ -5,7 +5,9 @@ import { apiClient } from "./client";
 
 /** Content-derived anchor locating a comment in the clean canonical body. */
 export interface CommentAnchor {
-  heading_path: string[];
+  // Older sidecars and documents with no headings can omit this or send
+  // `null`, so readers must tolerate both (#262).
+  heading_path: string[] | null;
   snippet: string;
   occurrence: number;
 }
@@ -18,7 +20,7 @@ export interface CommentReply {
 
 /** Resolved on-disk location of an anchored comment (null = global/orphan). */
 export interface CommentContext {
-  heading_path: string[];
+  heading_path: string[] | null;
   line_range: [number, number];
 }
 

@@ -305,6 +305,37 @@ func TestBuildCommentJSON_C5_GlobalUnaffected(t *testing.T) {
 	assert.False(t, created.Orphan)
 }
 
+// C6: A document with no headings resolves an anchor but has no heading
+// stack. heading_path must still serialize as `[]`, never `null` — the
+// frontend takes the declared `string[]` contract at face value and crashed on
+// null (#262).
+func TestBuildCommentJSON_C6_HeadinglessDocEmitsEmptyHeadingPath(t *testing.T) {
+	useTempReviewStore(t)
+	h, root := setupFilesHandler(t)
+	const headingless = "- \u30b9\u30b1\u30b8\u30e5\u30fc\u30eb\u3092\u78ba\u5b9a\u3055\u305b\u308b\n- \u6b8b\u3063\u3066\u3044\u308b\u4f5c\u696d\u3092\u7d42\u308f\u3089\u305b\u308b\n"
+	require.NoError(t, os.WriteFile(filepath.Join(root, "doc.md"), []byte(headingless), 0o644))
+	require.Equal(t, http.StatusOK, serve(h, httptest.NewRequest(http.MethodPost, "/api/ingest/doc.md", nil)).Code)
+
+	rec := postJSON(t, h, http.MethodPost, "/api/comments/doc.md", handler.CreateCommentRequest{
+		Scope: "inline", Body: "x", Anchor: anchor("", "\u30b9\u30b1\u30b8\u30e5\u30fc\u30eb\u3092\u78ba\u5b9a"),
+	})
+	require.Equal(t, http.StatusCreated, rec.Code)
+
+	// Decode into the wire shape: a typed decode would turn both null and []
+	// into a nil slice and hide the regression.
+	var wire struct {
+		Context *struct {
+			HeadingPath *[]string `json:"heading_path"`
+		} `json:"context"`
+		Orphan bool `json:"orphan"`
+	}
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&wire))
+	assert.False(t, wire.Orphan)
+	require.NotNil(t, wire.Context)
+	require.NotNil(t, wire.Context.HeadingPath, "heading_path must not be null")
+	assert.Empty(t, *wire.Context.HeadingPath)
+}
+
 func TestComments_NonMarkdownRejected(t *testing.T) {
 	useTempReviewStore(t)
 	h, _ := setupFilesHandler(t)
