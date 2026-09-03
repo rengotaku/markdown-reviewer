@@ -55,6 +55,32 @@ describe("useOpenFiles", () => {
     expect(active?.isDirty).toBe(false);
   });
 
+  // #265: markActiveDirty flips isDirty without touching `markdown` -- used
+  // by TiptapEditor's onUpdate so the unsaved indicator reacts on every
+  // keystroke even though the (expensive, on large docs) full Markdown
+  // resync via updateActiveMarkdown is debounced.
+  it("marks the active file dirty without changing markdown", () => {
+    useOpenFiles.getState().addFiles([{ name: "a.md", root: ROOT, markdown: "# A" }]);
+    useOpenFiles.getState().markActiveDirty(ROOT);
+    const active = useOpenFiles.getState().files.find((f) => f.id === activeId());
+    expect(active?.isDirty).toBe(true);
+    expect(active?.markdown).toBe("# A");
+  });
+
+  it("markActiveDirty is a no-op (same object identity) once already dirty", () => {
+    useOpenFiles.getState().addFiles([{ name: "a.md", root: ROOT, markdown: "# A" }]);
+    useOpenFiles.getState().updateActiveMarkdown(ROOT, "# Changed");
+    const filesBefore = useOpenFiles.getState().files;
+    useOpenFiles.getState().markActiveDirty(ROOT);
+    expect(useOpenFiles.getState().files).toBe(filesBefore);
+  });
+
+  it("markActiveDirty is a no-op when there is no active file for the root", () => {
+    const before = useOpenFiles.getState();
+    useOpenFiles.getState().markActiveDirty("no-such-root");
+    expect(useOpenFiles.getState()).toBe(before);
+  });
+
   it("switches active file", () => {
     useOpenFiles.getState().addFiles([
       { name: "a.md", root: ROOT, markdown: "# A" },

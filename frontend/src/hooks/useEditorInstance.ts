@@ -24,6 +24,17 @@ interface EditorInstanceState {
   /** Clear the pending request once EditorPage has acted on it, so the same
    *  request object doesn't re-fire on an unrelated re-render. */
   clearOpenPathRequest: () => void;
+  /**
+   * Flush the active editor's debounced Markdown resync into `useOpenFiles`
+   * immediately (#265). A no-op until TiptapEditor mounts and registers its
+   * real implementation via `setFlushPendingMarkdown`. Callers that need the
+   * store's `markdown` field to be current -- save, tab switch, close tab,
+   * page unload -- call this first.
+   */
+  flushPendingMarkdown: () => void;
+  /** Registered by TiptapEditor so other components can force a flush
+   *  without owning the editor instance themselves. */
+  setFlushPendingMarkdown: (fn: () => void) => void;
 }
 
 export const useEditorInstance = create<EditorInstanceState>((set) => ({
@@ -38,4 +49,6 @@ export const useEditorInstance = create<EditorInstanceState>((set) => ({
       openPathRequest: { path, token: state.openPathRequest ? state.openPathRequest.token + 1 : 1 },
     })),
   clearOpenPathRequest: () => set({ openPathRequest: null }),
+  flushPendingMarkdown: () => {},
+  setFlushPendingMarkdown: (fn) => set({ flushPendingMarkdown: fn }),
 }));

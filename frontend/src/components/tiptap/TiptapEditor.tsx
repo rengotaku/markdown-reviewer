@@ -42,6 +42,20 @@ const LINK_PREVIEW_HOVER_DELAY_MS = 300;
  *  before the preview card actually closes (#215). */
 const LINK_PREVIEW_CLOSE_GRACE_MS = 250;
 
+/**
+ * Debounce window (ms) between the last keystroke and re-serializing the
+ * whole document to Markdown (#265). getEditorMarkdown() walks every
+ * top-level block and re-runs tiptap-markdown's serializer on each one --
+ * on a document with thousands of blocks that single call dominates
+ * onUpdate (measured ~140ms/keystroke on a 2,600-block doc vs ~10ms with
+ * the resync skipped). isDirty is set synchronously in onUpdate regardless
+ * (see markActiveDirty) so the unsaved indicator and discard-changes
+ * prompts never lag; only the exported `markdown` string is debounced.
+ * Save / tab-switch / tab-close / page-unload all flush synchronously
+ * first (see flushPendingMarkdown below) so nothing is ever lost.
+ */
+const MARKDOWN_SYNC_DEBOUNCE_MS = 250;
+
 // Built once per module: registering the grammars is pure setup and the
 // instance is stateless across editors.
 const codeLowlight = createCodeLowlight();
@@ -99,6 +113,18 @@ export function TiptapEditor() {
    * the freshly-opened file dirty even though the user didn't edit. Issue #20.
    */
   const settleUntilRef = useRef(0);
+  /**
+   * Latest `activeRoot`, mirrored into a ref so the debounced flush (fired
+   * from a setTimeout, or invoked by EditorPage well after this render)
+   * always targets the file that was actually being edited rather than a
+   * value captured by a stale closure (#265).
+   */
+  const activeRootRef = useRef(activeRoot);
+  useEffect(() => {
+    activeRootRef.current = activeRoot;
+  }, [activeRoot]);
+  /** Pending debounced Markdown resync, if any (#265). */
+  const pendingSyncTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const editor = useEditor({
     extensions: [
@@ -139,19 +165,76 @@ export function TiptapEditor() {
       // Drop updates fired by post-setContent extension transactions
       // (e.g. autolink) so an untouched file isn't flagged dirty.
       if (Date.now() < settleUntilRef.current) return;
-      // Re-attach the stripped preamble (AI hint + frontmatter) so the saved
-      // markdown matches what was loaded and frontmatter is never lost.
-      updateActiveMarkdown(activeRoot, preambleRef.current + getEditorMarkdown(ed));
+      // isDirty must react on every keystroke (unsaved dot, discard-changes
+      // confirm) — only the expensive Markdown resync below is debounced
+      // (#265). No-ops once already dirty, so this doesn't add a
+      // store update (and re-render) per keystroke beyond the first.
+      useOpenFiles.getState().markActiveDirty(activeRoot);
+      if (pendingSyncTimeoutRef.current !== null) {
+        clearTimeout(pendingSyncTimeoutRef.current);
+      }
+      pendingSyncTimeoutRef.current = setTimeout(() => {
+        pendingSyncTimeoutRef.current = null;
+        // Re-attach the stripped preamble (AI hint + frontmatter) so the
+        // saved markdown matches what was loaded and frontmatter is never
+        // lost. `ed` (not the possibly-stale `editor` from the outer
+        // closure) is used deliberately: it is the exact editor instance
+        // this onUpdate fired for.
+        const root = activeRootRef.current;
+        if (!root) return;
+        if (!useOpenFiles.getState().activeIdByRoot[root]) return;
+        updateActiveMarkdown(root, preambleRef.current + getEditorMarkdown(ed));
+      }, MARKDOWN_SYNC_DEBOUNCE_MS);
     },
   });
 
+  /**
+   * Flush a pending debounced Markdown resync into the store immediately
+   * (#265). Idempotent / safe to call with nothing pending. Registered on
+   * `useEditorInstance` so callers outside this component (EditorPage's
+   * save / tab-switch / tab-close handlers) can force the store's
+   * `markdown` field current before reading it, and also used locally for
+   * the beforeunload/visibilitychange safety net below.
+   */
+  const flushPendingMarkdown = useCallback(() => {
+    if (pendingSyncTimeoutRef.current !== null) {
+      clearTimeout(pendingSyncTimeoutRef.current);
+      pendingSyncTimeoutRef.current = null;
+    }
+    if (!editor) return;
+    const root = activeRootRef.current;
+    if (!root) return;
+    if (!useOpenFiles.getState().activeIdByRoot[root]) return;
+    updateActiveMarkdown(root, preambleRef.current + getEditorMarkdown(editor));
+  }, [editor, updateActiveMarkdown]);
+
   useEffect(() => {
     useEditorInstance.getState().setEditor(editor ?? null);
+    useEditorInstance.getState().setFlushPendingMarkdown(flushPendingMarkdown);
     return () => {
+      // Flush before tearing the editor down (e.g. StrictMode dev
+      // unmount-remount, HMR) so an in-flight debounced edit isn't
+      // silently dropped (#265).
+      flushPendingMarkdown();
       useEditorInstance.getState().setEditor(null);
+      useEditorInstance.getState().setFlushPendingMarkdown(() => {});
       editor?.destroy();
     };
-  }, [editor]);
+  }, [editor, flushPendingMarkdown]);
+
+  // Safety net for the two ways a debounced edit could otherwise be lost
+  // outside of EditorPage's explicit save/tab-switch/tab-close flush calls
+  // (#265): the tab losing visibility (backgrounded, OS app-switch) and the
+  // page actually unloading (reload, close tab/window, navigate away).
+  useEffect(() => {
+    const flush = () => flushPendingMarkdown();
+    window.addEventListener("beforeunload", flush);
+    document.addEventListener("visibilitychange", flush);
+    return () => {
+      window.removeEventListener("beforeunload", flush);
+      document.removeEventListener("visibilitychange", flush);
+    };
+  }, [flushPendingMarkdown]);
 
   useEffect(() => {
     if (!editor) return;

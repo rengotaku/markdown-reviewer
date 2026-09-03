@@ -79,6 +79,16 @@ interface OpenFilesState {
   addFiles: (incoming: IncomingFile[]) => void;
   overwriteFiles: (root: string, incoming: IncomingFile[]) => void;
   updateActiveMarkdown: (root: string, markdown: string) => void;
+  /**
+   * Mark the active file dirty without touching `markdown` (#265). The
+   * editor's full-document Markdown resync is debounced for perf on large
+   * documents, but "there are unsaved changes" must react on every
+   * keystroke -- the unsaved dot, the discard-changes confirm on tab
+   * switch, etc. all read `isDirty`, not `markdown`. No-ops once already
+   * dirty so it doesn't cause a state update (and re-render) per keystroke
+   * beyond the first.
+   */
+  markActiveDirty: (root: string) => void;
   setActive: (root: string, id: string) => void;
   /**
    * Reorder the tab at `fromIndex` to `toIndex` within a single root's tab
@@ -219,6 +229,18 @@ export const useOpenFiles = create<OpenFilesState>()((set) => ({
             file.id === activeId
               ? { ...file, markdown, isDirty: markdown !== file.savedMarkdown }
               : file
+          );
+          return { files };
+        }),
+
+      markActiveDirty: (root) =>
+        set((state) => {
+          const activeId = state.activeIdByRoot[root];
+          if (!activeId) return state;
+          const active = state.files.find((file) => file.id === activeId);
+          if (!active || active.isDirty) return state;
+          const files = state.files.map((file) =>
+            file.id === activeId ? { ...file, isDirty: true } : file
           );
           return { files };
         }),

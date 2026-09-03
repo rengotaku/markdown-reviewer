@@ -405,11 +405,15 @@ export function EditorPage() {
   // later would inherit a stale "give up on this one" mark from before the
   // close, permanently hiding its badge even though it's a fresh tab.
   const closeFile = (id: string) => {
+    // Flush before closing (#265) so a tab closed within the debounce
+    // window doesn't lose its last keystroke from the store.
+    useEditorInstance.getState().flushPendingMarkdown();
     const target = useOpenFiles.getState().files.find((f) => f.id === id);
     closeFileRaw(id);
     if (target) missingStatFilesRef.current.delete(keyOf(target.root, target.path));
   };
   const closeOthers = (id: string) => {
+    useEditorInstance.getState().flushPendingMarkdown();
     const target = useOpenFiles.getState().files.find((f) => f.id === id);
     const closed = target
       ? useOpenFiles.getState().files.filter((f) => f.root === target.root && f.id !== id)
@@ -418,6 +422,8 @@ export function EditorPage() {
     for (const f of closed) missingStatFilesRef.current.delete(keyOf(f.root, f.path));
   };
   const closeToRight = (id: string) => {
+    // See closeFile (#265).
+    useEditorInstance.getState().flushPendingMarkdown();
     const target = useOpenFiles.getState().files.find((f) => f.id === id);
     const closed = (() => {
       if (!target) return [];
@@ -1030,11 +1036,25 @@ export function EditorPage() {
 
   // Revisions that actually differ from the last-saved content. Same rationale
   // as diffLatestText: compare against savedMarkdown, not the live buffer.
-  const currentEditorText = activeFile ? stripHint(activeFile.savedMarkdown) : "";
-  const meaningfulRevisions = revisions.filter((r) => {
-    const c = revContents[r.id];
-    return c !== undefined && hasChanges(lineDiff(c, currentEditorText));
-  });
+  // memoized (#265 follow-up): lineDiff is an O(n·m) LCS over every line of
+  // the document, run once per revision. Unmemoized, this reran on *every*
+  // EditorPage render — not just on save — because nothing here changes
+  // only when `revisions`/`revContents`/`diffLatestText` actually change.
+  // On a multi-thousand-line document (a real meeting transcript, not the
+  // small synthetic fixtures this went unnoticed with) that is a 1000ms+
+  // stall per render, and dwarfed the TiptapEditor onUpdate debounce this
+  // issue otherwise fixed: typing still re-renders EditorPage (e.g. the
+  // isDirty flip), so debouncing the *editor's* update doesn't touch this
+  // page-level cost. See also diffLatestText / diffGutterPayload above,
+  // which already avoid this by memoizing.
+  const meaningfulRevisions = useMemo(
+    () =>
+      revisions.filter((r) => {
+        const c = revContents[r.id];
+        return c !== undefined && hasChanges(lineDiff(c, diffLatestText));
+      }),
+    [revisions, revContents, diffLatestText]
+  );
 
   // #143 round 3: newest revision's raw content (hint-stripped), used by
   // computeDisplayVersion to tell the external-edit path (content already
@@ -1060,7 +1080,7 @@ export function EditorPage() {
   // nothing to wait on beyond versionReady itself.
   const displayVersion =
     versionReady && (revisions.length === 0 || newestRevisionContent !== undefined)
-      ? computeDisplayVersion(revisions, newestRevisionContent, currentEditorText)
+      ? computeDisplayVersion(revisions, newestRevisionContent, diffLatestText)
       : undefined;
 
   // Why the diff toggle can't be used right now, or null when it can (#194).
@@ -1570,6 +1590,10 @@ export function EditorPage() {
 
   const handleSelect = async (path: string) => {
     if (!activeRoot) return;
+    // Flush the debounced Markdown resync (#265) before reading `isDirty` /
+    // deciding whether to prompt to discard — a switch fired within the
+    // debounce window must not race the resync it triggers.
+    useEditorInstance.getState().flushPendingMarkdown();
     const state = useOpenFiles.getState();
     const currentActiveId = state.activeIdByRoot[activeRoot];
     const active = state.files.find((f) => f.id === currentActiveId);
@@ -1640,6 +1664,8 @@ export function EditorPage() {
   // traffic for a tab we already know is current.
   const handleTabChange = (_: React.SyntheticEvent, v: string) => {
     if (!activeRoot) return;
+    // See handleSelect (#265).
+    useEditorInstance.getState().flushPendingMarkdown();
     const changed = v !== (activeFile?.id ?? null);
     setActive(activeRoot, v);
     // Activating a tab is "opening" it just as much as a sidebar click, so
@@ -1804,6 +1830,13 @@ export function EditorPage() {
 
   const handleSave = async () => {
     if (!activeFile) return;
+    // The editor's Markdown resync is debounced for perf on large documents
+    // (#265) — force it current before reading `markdown` below so a save
+    // fired within the debounce window still includes the latest keystroke.
+    useEditorInstance.getState().flushPendingMarkdown();
+    const activeMarkdown =
+      useOpenFiles.getState().files.find((f) => f.id === activeFile.id)?.markdown ??
+      activeFile.markdown;
     // #202: the 412 path below is what normally forces an explicit overwrite
     // decision, but it only exists when we have a baseline sha to send as
     // If-Match. A tab with none (rehydrated from a pre-sha session, or a
@@ -1817,7 +1850,7 @@ export function EditorPage() {
     try {
       const res = await writeFile.mutateAsync({
         path: activeFile.path,
-        content: activeFile.markdown,
+        content: activeMarkdown,
         root: activeFile.root,
         ifMatch: activeFile.serverSha,
       });
@@ -1839,7 +1872,7 @@ export function EditorPage() {
         try {
           const res = await writeFile.mutateAsync({
             path: activeFile.path,
-            content: activeFile.markdown,
+            content: activeMarkdown,
             root: activeFile.root,
           });
           markActiveSaved(activeFile.root, res.modified, res.created, res.sha);
@@ -1867,7 +1900,13 @@ export function EditorPage() {
   // elsewhere (e.g. into a chat) without the internal hint comment.
   const handleCopyMarkdown = async () => {
     if (!activeFile) return;
-    const raw = stripHint(activeFile.markdown);
+    // See handleSave: the debounced resync (#265) may not have caught up
+    // with the very latest keystroke yet.
+    useEditorInstance.getState().flushPendingMarkdown();
+    const activeMarkdown =
+      useOpenFiles.getState().files.find((f) => f.id === activeFile.id)?.markdown ??
+      activeFile.markdown;
+    const raw = stripHint(activeMarkdown);
     try {
       await navigator.clipboard.writeText(raw);
       showToast("素の Markdown をコピーしました", "success");
