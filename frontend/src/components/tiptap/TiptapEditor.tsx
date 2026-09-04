@@ -119,6 +119,26 @@ export function TiptapEditor() {
    */
   const preambleRef = useRef("");
   /**
+   * Whether the file as loaded from disk ended with a trailing newline.
+   * tiptap-markdown's serializer never emits one, so without re-appending it
+   * the flushed Markdown differs from `savedMarkdown` for essentially every
+   * file on disk — which marked untouched files dirty and popped the
+   * "unsaved changes" dialog on the next tab switch (and silently dropped
+   * the final newline on save).
+   */
+  const trailingNewlineRef = useRef(false);
+  /**
+   * Editor body serialized back to the file's on-disk shape: preamble
+   * re-attached and the trailing newline restored when the loaded file had
+   * one.
+   */
+  const composeMarkdown = useCallback((ed: Editor): string => {
+    const text = preambleRef.current + getEditorMarkdown(ed);
+    if (trailingNewlineRef.current && !text.endsWith("\n")) return text + "\n";
+    return text;
+  }, []);
+
+  /**
    * Timestamp (ms) until which onUpdate should be ignored. setContent's
    * `emitUpdate: false` only suppresses the direct dispatch; extensions like
    * autolink fire follow-up transactions via appendTransaction that re-emit
@@ -196,7 +216,7 @@ export function TiptapEditor() {
         const root = activeRootRef.current;
         if (!root) return;
         if (!useOpenFiles.getState().activeIdByRoot[root]) return;
-        updateActiveMarkdown(root, preambleRef.current + getEditorMarkdown(ed));
+        updateActiveMarkdown(root, composeMarkdown(ed));
         resyncDecorations(ed);
       }, MARKDOWN_SYNC_DEBOUNCE_MS);
     },
@@ -211,17 +231,20 @@ export function TiptapEditor() {
    * the beforeunload/visibilitychange safety net below.
    */
   const flushPendingMarkdown = useCallback(() => {
-    if (pendingSyncTimeoutRef.current !== null) {
-      clearTimeout(pendingSyncTimeoutRef.current);
-      pendingSyncTimeoutRef.current = null;
-    }
+    // Nothing scheduled means nothing changed since the last resync.
+    // Re-serializing anyway rewrote `markdown` on every tab switch / app
+    // switch, and any serializer drift from the on-disk text then read as an
+    // unsaved change on a file the user never touched.
+    if (pendingSyncTimeoutRef.current === null) return;
+    clearTimeout(pendingSyncTimeoutRef.current);
+    pendingSyncTimeoutRef.current = null;
     if (!editor) return;
     const root = activeRootRef.current;
     if (!root) return;
     if (!useOpenFiles.getState().activeIdByRoot[root]) return;
-    updateActiveMarkdown(root, preambleRef.current + getEditorMarkdown(editor));
+    updateActiveMarkdown(root, composeMarkdown(editor));
     resyncDecorations(editor);
-  }, [editor, updateActiveMarkdown]);
+  }, [editor, updateActiveMarkdown, composeMarkdown]);
 
   useEffect(() => {
     useEditorInstance.getState().setEditor(editor ?? null);
@@ -273,6 +296,7 @@ export function TiptapEditor() {
       // re-prepended on save (see onUpdate).
       const { preamble, body } = splitPreamble(file.markdown);
       preambleRef.current = preamble;
+      trailingNewlineRef.current = file.markdown.endsWith("\n");
       // emitUpdate: false → don't fire onUpdate for the programmatic load.
       // TipTap's Markdown roundtrip can produce a slightly normalized string
       // (e.g. trailing newline tweaks) which would otherwise set isDirty=true
