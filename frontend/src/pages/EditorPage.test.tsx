@@ -489,6 +489,87 @@ describe("EditorPage", () => {
     expect(screen.getByTestId("comment-side-pane")).toBeInTheDocument();
   });
 
+  // #276: closed pane still has to answer "is anything waiting on me here?"
+  // and let a reader comment on the file as a whole.
+  it("shows the same counts on the collapsed rail as the pane's filter", async () => {
+    const { http, HttpResponse } = await import("msw");
+    const { server } = await import("@/test/mocks/server");
+    const comment = (id: string, status: "open" | "resolved") => ({
+      id,
+      scope: "inline",
+      author: "alice",
+      date: "2026-05-20",
+      body: `body of ${id}`,
+      status,
+      anchor: { heading_path: [], snippet: "mock", occurrence: 0 },
+      context: { heading_path: [], line_range: [1, 1] },
+      orphan: false,
+    });
+    server.use(
+      http.get("http://localhost:8080/api/stat/*", ({ request }) => {
+        const url = new URL(request.url);
+        return HttpResponse.json({
+          path: url.pathname.replace(/^\/api\/stat\//, ""),
+          root: "mock-root",
+          modified: "2026-05-20T00:00:00Z",
+          created: "2026-05-19T00:00:00Z",
+          state: "review",
+          hasOpenComments: true,
+        });
+      }),
+      http.get("http://localhost:8080/api/comments/*", ({ request }) => {
+        const url = new URL(request.url);
+        return HttpResponse.json({
+          file: url.pathname.replace(/^\/api\/comments\//, ""),
+          root: "mock-root",
+          summary: { total: 3, by_scope: {}, by_status: {} },
+          comments: [
+            comment("c1", "open"),
+            comment("c2", "open"),
+            comment("c3", "resolved"),
+          ],
+        });
+      })
+    );
+    const user = userEvent.setup();
+    renderPage();
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
+    );
+    await user.click(screen.getByTestId("sidebar-file-README.md"));
+
+    // The pane's own filter is the reference the rail has to agree with.
+    await waitFor(() =>
+      expect(screen.getByTestId("comment-filter-all")).toHaveTextContent("すべて 3")
+    );
+    expect(screen.getByTestId("comment-filter-open")).toHaveTextContent("未解決 2");
+    expect(screen.getByTestId("comment-filter-resolved")).toHaveTextContent("解決済 1");
+
+    await user.click(screen.getByTestId("comment-pane-close"));
+
+    expect(screen.getByTestId("comment-rail-count-all")).toHaveTextContent("3");
+    expect(screen.getByTestId("comment-rail-count-open")).toHaveTextContent("2");
+    expect(screen.getByTestId("comment-rail-count-resolved")).toHaveTextContent("1");
+  });
+
+  it("offers the file-wide comment button while the pane is closed (#276)", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
+    );
+    await user.click(screen.getByTestId("sidebar-file-README.md"));
+    await user.click(screen.getByTestId("comment-pane-close"));
+
+    expect(screen.queryByTestId("comment-side-pane")).not.toBeInTheDocument();
+    expect(screen.getByTestId("rail-add-global-comment")).toBeInTheDocument();
+    // The composer itself can't open here: TiptapEditor is mocked, and
+    // handleAddGlobalClick bails when there is no editor instance (the pane's
+    // own button has the same limitation in this file). The rail's half of the
+    // wiring is covered in CommentRail.test.tsx; the end-to-end path was
+    // checked in a real browser.
+  });
+
   it("shows a placeholder when no file is selected", () => {
     renderPage();
     expect(screen.getByTestId("editor-active-path")).toHaveTextContent(

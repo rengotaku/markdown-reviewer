@@ -35,6 +35,7 @@ import {
   ToastViewport,
   ConfirmDialog,
   CommentSidePane,
+  CommentRail,
   CommentThreadPopover,
   CommentComposerPopover,
   CommentHoverPreview,
@@ -2938,32 +2939,12 @@ export function EditorPage() {
           />
         </Box>
       ) : (
-        <Box
-          component="aside"
-          sx={{
-            width: 40,
-            flexShrink: 0,
-            borderLeft: "1px solid",
-            borderColor: "divider",
-            bgcolor: "background.paper",
-            display: "flex",
-            alignItems: "flex-start",
-            justifyContent: "flex-end",
-            pr: 0.5,
-            pt: 0.75,
-          }}
-        >
-          <Tooltip title="コメントペインを開く" placement="left">
-            <IconButton
-              size="small"
-              onClick={toggleCommentPane}
-              aria-label="open comment pane"
-              data-testid="editor-toggle-comments"
-            >
-              <CommentIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-        </Box>
+        <CommentRail
+          comments={comments}
+          reviewActive={reviewActive}
+          onOpen={toggleCommentPane}
+          onAddGlobal={handleAddGlobalClick}
+        />
       )}
 
       {menuOpen && menuAnchor && (
