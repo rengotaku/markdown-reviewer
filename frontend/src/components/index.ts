@@ -3,6 +3,7 @@ export { RootSelect } from "./RootSelect";
 export { ToastViewport } from "./ToastViewport";
 export { ConfirmDialog } from "./ConfirmDialog";
 export { CommentSidePane } from "./CommentSidePane";
+export { CommentRail } from "./CommentRail";
 export { CommentThreadPopover } from "./CommentThreadPopover";
 export { CommentComposerPopover } from "./CommentComposerPopover";
 export { CommentHoverPreview } from "./CommentHoverPreview";
