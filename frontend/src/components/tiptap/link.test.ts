@@ -1,16 +1,21 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { Editor } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
-import Link from "@tiptap/extension-link";
 import { Markdown } from "tiptap-markdown";
 import { ExternalLinkDecoration } from "./extensions/ExternalLinkDecoration";
+import { MarkdownLink } from "./extensions/MarkdownLink";
 
 function createEditor(initialContent = "") {
   return new Editor({
     extensions: [
       StarterKit.configure({ link: false }),
-      Link.configure({ openOnClick: true, autolink: true, linkOnPaste: true }),
+      MarkdownLink.configure({
+        openOnClick: true,
+        autolink: true,
+        linkOnPaste: true,
+      }),
       Markdown.configure({
+        linkify: true,
         transformPastedText: true,
         transformCopiedText: false,
       }),
@@ -141,5 +146,91 @@ describe("external-link decoration does not affect markdown round-trip", () => {
     editor.commands.setContent(source);
     editor.commands.setLinkBasePath("docs/intro.md");
     expect(getMarkdown(editor)).toBe(source);
+  });
+});
+
+// Bare URLs (#274). markdown-it's linkify turns them into links so a reader
+// can click them; the serializer has to hand them back to the file byte for
+// byte, or opening and saving a document would rewrite its body.
+describe("bare URL text (linkify)", () => {
+  let editor: Editor;
+  afterEach(() => editor.destroy());
+
+  it("links a bare https:// URL in the source", () => {
+    editor = createEditor();
+    editor.commands.setContent("see https://example.com for details");
+    expect(findLinkMark(editor, "https://example.com")).toBe(true);
+  });
+
+  it("writes a bare URL back without angle brackets or link syntax", () => {
+    const source = "see https://example.com for details";
+    editor = createEditor();
+    editor.commands.setContent(source);
+    expect(getMarkdown(editor)).toBe(source);
+  });
+
+  it("keeps query strings and underscores literal in a bare URL", () => {
+    const source = "https://example.com/a_b?x=1&y=2";
+    editor = createEditor();
+    editor.commands.setContent(source);
+    expect(getMarkdown(editor)).toBe(source);
+  });
+
+  it("keeps an angle-bracketed autolink angle-bracketed", () => {
+    const source = "see <https://example.com> for details";
+    editor = createEditor();
+    editor.commands.setContent(source);
+    expect(getMarkdown(editor)).toBe(source);
+  });
+
+  it("leaves a bare URL at the end of a sentence's trailing period alone", () => {
+    const source = "docs: https://example.com/page";
+    editor = createEditor();
+    editor.commands.setContent(source);
+    expect(getMarkdown(editor)).toBe(source);
+  });
+
+  it("does not link www. hosts (fuzzy matching is off)", () => {
+    const source = "see www.example.com for details";
+    editor = createEditor();
+    editor.commands.setContent(source);
+    expect(findLinkMark(editor, "http://www.example.com")).toBe(false);
+    expect(getMarkdown(editor)).toBe(source);
+  });
+
+  it("does not link bare e-mail addresses (fuzzy matching is off)", () => {
+    const source = "mail me at someone@example.com please";
+    editor = createEditor();
+    editor.commands.setContent(source);
+    expect(getMarkdown(editor)).toBe(source);
+  });
+
+  it("still writes an ordinary [text](url) link in inline form", () => {
+    const source = "[example](https://example.com)";
+    editor = createEditor();
+    editor.commands.setContent(source);
+    expect(getMarkdown(editor)).toBe(source);
+  });
+
+  it("writes a link whose text happens to equal a relative path in inline form", () => {
+    const source = "[./sibling.md](./sibling.md)";
+    editor = createEditor();
+    editor.commands.setContent(source);
+    expect(getMarkdown(editor)).toBe(source);
+  });
+
+  it("treats a linkified bare URL as external", () => {
+    editor = createEditor();
+    editor.commands.setContent("see https://example.com for details");
+    editor.commands.setLinkBasePath("docs/intro.md");
+    const icons = editor.view.dom.querySelectorAll(".ext-link-icon");
+    expect(icons).toHaveLength(1);
+    expect(icons[0].textContent).toBe("https://example.com");
+  });
+
+  it("does not leak the autolink attribute into the rendered anchor", () => {
+    editor = createEditor();
+    editor.commands.setContent("<https://example.com>");
+    expect(editor.getHTML()).not.toContain("autolink");
   });
 });

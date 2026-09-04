@@ -5,7 +5,6 @@ import type { Editor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { CodeBlockLowlight } from "@tiptap/extension-code-block-lowlight";
 import Placeholder from "@tiptap/extension-placeholder";
-import Link from "@tiptap/extension-link";
 import { Table } from "@tiptap/extension-table";
 import { TableRow } from "@tiptap/extension-table-row";
 import { TableCell } from "@tiptap/extension-table-cell";
@@ -31,6 +30,7 @@ import { DiffGutter } from "./extensions/DiffGutter";
 import { LineNumberGutter } from "./extensions/LineNumberGutter";
 import { BlankLines } from "./extensions/BlankLines";
 import { ExternalLinkDecoration } from "./extensions/ExternalLinkDecoration";
+import { MarkdownLink } from "./extensions/MarkdownLink";
 import { LinkPreviewCard } from "../LinkPreviewCard";
 import { LinkHoverGuard } from "./linkHoverGuard";
 import { getEditorMarkdown } from "./markdownSerialize";
@@ -170,8 +170,15 @@ export function TiptapEditor() {
       Placeholder.configure({
         placeholder: "Start writing, or type / for commands...",
       }),
-      Link.configure({ openOnClick: true, autolink: true, linkOnPaste: true }),
+      MarkdownLink.configure({
+        openOnClick: true,
+        autolink: true,
+        linkOnPaste: true,
+      }),
       Markdown.configure({
+        // Render a bare `https://…` in the source as a link (#274). Round-trip
+        // safety for that is MarkdownLink's job.
+        linkify: true,
         transformPastedText: true,
         transformCopiedText: false,
       }),
