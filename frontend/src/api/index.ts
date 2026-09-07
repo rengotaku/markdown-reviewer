@@ -11,6 +11,7 @@ export {
   ingestFile,
   listRevisions,
   getRevision,
+  createRevision,
   type ConfigResponse,
   type DirEntry as DirEntryApi,
   type DirListResponse,
@@ -27,6 +28,7 @@ export {
   type RevisionMeta,
   type RevisionListResponse,
   type RevisionResponse,
+  type CreateRevisionResponse,
 } from "./files";
 export {
   listComments,

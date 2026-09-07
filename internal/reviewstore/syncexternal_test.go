@@ -237,3 +237,62 @@ func TestStripAIHint(t *testing.T) {
 		t.Errorf("mid-file comment stripped: %q", got)
 	}
 }
+
+// #280: saves no longer snapshot revisions, so SyncExternalEdit has to know
+// which content this app wrote itself. Without the marker, every autosave
+// looks like an external edit and the next comment read snapshots it —
+// putting one revision per save back into history under the "external" label
+// and evicting the baseline the diff needs. Caught in a real browser run.
+func TestSyncExternalEdit_OwnAppWrite_NoSnapshot(t *testing.T) {
+	root, rel := setupSyncStore(t)
+	body := "# doc\n\nautosaved by the editor\n"
+
+	if err := RecordAppWrite(root, rel, syncTestHint+body); err != nil {
+		t.Fatalf("record app write: %v", err)
+	}
+
+	synced, err := SyncExternalEdit(root, rel, syncTestHint+body)
+	if err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if synced {
+		t.Errorf("synced = true, want false for our own write")
+	}
+	revs, err := ListRevisions(root, rel)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(revs) != 0 {
+		t.Errorf("revisions = %d, want 0 — an autosave must not create one", len(revs))
+	}
+}
+
+// A genuinely external edit after one of our own writes must still snapshot:
+// the marker names one specific content, not "stop tracking this file".
+func TestSyncExternalEdit_ExternalAfterAppWrite_Snapshots(t *testing.T) {
+	root, rel := setupSyncStore(t)
+	ours := "# doc\n\nautosaved by the editor\n"
+	if err := RecordAppWrite(root, rel, syncTestHint+ours); err != nil {
+		t.Fatalf("record app write: %v", err)
+	}
+	if _, err := SyncExternalEdit(root, rel, syncTestHint+ours); err != nil {
+		t.Fatalf("sync own write: %v", err)
+	}
+
+	// Now the AI rewrites the file on disk.
+	theirs := "# doc\n\nrewritten by the AI\n"
+	if _, err := SyncExternalEdit(root, rel, syncTestHint+theirs); err != nil {
+		t.Fatalf("sync external: %v", err)
+	}
+
+	revs, err := ListRevisions(root, rel)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(revs) != 1 {
+		t.Fatalf("revisions = %d, want 1", len(revs))
+	}
+	if revs[0].Author != "external" {
+		t.Errorf("author = %q, want external", revs[0].Author)
+	}
+}

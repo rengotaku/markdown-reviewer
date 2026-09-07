@@ -172,3 +172,66 @@ func writeReviewComment(b *strings.Builder, content string, cm reviewstore.Comme
 	}
 	b.WriteString("\n")
 }
+
+// CreateRevisionResponse is the body for POST /api/revisions/*path.
+type CreateRevisionResponse struct {
+	Revision *reviewstore.RevisionMeta `json:"revision,omitempty"`
+	Path     string                    `json:"path"`
+	Root     string                    `json:"root"`
+	// Created is false when the current content already matches the newest
+	// revision, i.e. nothing changed since the last handoff.
+	Created bool `json:"created"`
+}
+
+// CreateRevision snapshots the file's *current* on-disk content as a new
+// revision (#280).
+//
+// Revisions mark handoffs to the AI, not saves. Autosave writes the file every
+// few seconds, so snapshotting per save would burn through MaxRevisions in
+// minutes and evict the very baseline the diff gutter needs — the state the AI
+// last read. The client calls this once, when the user copies the
+// `mr comments <path>` command, so the newest revision is always "what the AI
+// is about to read": the diff is empty right after the copy and then fills up
+// with the human's subsequent edits.
+//
+// Reading from disk rather than from a request body keeps the snapshot honest:
+// the client flushes its pending save first, so what we store is exactly what
+// the AI will read through the CLI.
+func (h *Handler) CreateRevision(c *gin.Context) {
+	full, rel, name, ok := h.resolveRequest(c)
+	if !ok {
+		return
+	}
+	raw, err := os.ReadFile(full)
+	if err != nil {
+		if os.IsNotExist(err) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "file not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read file"})
+		return
+	}
+	// Ingest first: a draft file has no history to append to, and copying the
+	// review command is at least as strong a signal of intent as a save.
+	if ierr := reviewstore.Ingest(name, rel); ierr != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to ingest"})
+		return
+	}
+	author := c.Query("author")
+	if author == "" {
+		author = "human"
+	}
+	// Strip the AI hint so the per-save hint churn never shows up as a diff.
+	rev, created, err := reviewstore.AppendRevision(name, rel, author, reviewstore.StripAIHint(string(raw)))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to append revision"})
+		return
+	}
+	res := CreateRevisionResponse{Path: rel, Root: name, Created: created}
+	if created {
+		res.Revision = &reviewstore.RevisionMeta{
+			ID: rev.ID, Ts: rev.Ts, Author: rev.Author,
+		}
+	}
+	c.JSON(http.StatusOK, res)
+}

@@ -233,6 +233,19 @@ export const handlers = [
     return HttpResponse.json({ path, root, revisions: [] });
   }),
 
+  http.post(`${API_BASE}/api/revisions/*`, ({ request }) => {
+    const url = new URL(request.url);
+    const path = url.pathname.replace(/^\/api\/revisions\//, "");
+    const root = url.searchParams.get("root") ?? "mock-root";
+    const author = url.searchParams.get("author") ?? "human";
+    return HttpResponse.json({
+      path,
+      root,
+      created: true,
+      revision: { id: "r-001", ts: "2026-05-20T00:00:00Z", author },
+    });
+  }),
+
   http.get(`${API_BASE}/api/comments/*`, ({ request }) => {
     const url = new URL(request.url);
     const path = url.pathname.replace(/^\/api\/comments\//, "");

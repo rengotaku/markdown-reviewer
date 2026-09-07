@@ -156,6 +156,13 @@ describe("EditorPage changed-paths integration (#178)", () => {
       expect(screen.getByTestId("editor-active-path")).toHaveTextContent("README.md")
     );
     useOpenFiles.getState().updateActiveMarkdown("mock-root", "dirty edits");
+    // #280: autosave normally writes the buffer on switch, so the only way
+    // the discard prompt still fires is a buffer autosave refuses to write —
+    // one carrying an external change the user chose to keep their edits over.
+    const readmeId = useOpenFiles.getState().activeIdByRoot["mock-root"]!;
+    useOpenFiles
+      .getState()
+      .ignoreExternalChange(readmeId, "2026-05-20T00:00:00Z", "other-sha");
 
     useChangedPaths.getState().mark("mock-root", "docs/intro.md");
     await user.click(screen.getByTestId("sidebar-dir-docs"));
