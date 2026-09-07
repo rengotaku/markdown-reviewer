@@ -31,6 +31,7 @@ import { LineNumberGutter } from "./extensions/LineNumberGutter";
 import { BlankLines } from "./extensions/BlankLines";
 import { ExternalLinkDecoration } from "./extensions/ExternalLinkDecoration";
 import { MarkdownLink } from "./extensions/MarkdownLink";
+import { IndentKeymap } from "./extensions/IndentKeymap";
 import { LinkPreviewCard } from "../LinkPreviewCard";
 import { LinkHoverGuard } from "./linkHoverGuard";
 import { getEditorMarkdown } from "./markdownSerialize";
@@ -166,6 +167,10 @@ export function TiptapEditor() {
       // stylesheet colours. Registering it twice would throw on duplicate node
       // names, hence the StarterKit opt-out.
       StarterKit.configure({ link: false, codeBlock: false }),
+      // Tab inside code blocks + indent-preserving Backspace on emptied list
+      // items (#278). Registered with a higher priority than StarterKit so
+      // its Backspace handler runs before the default list keymap.
+      IndentKeymap,
       CodeBlockLowlight.configure({ lowlight: codeLowlight }),
       Placeholder.configure({
         placeholder: "Start writing, or type / for commands...",
