@@ -312,7 +312,7 @@ describe("EditorPage", () => {
     expect(opened?.markdown).toContain("mock content");
   });
 
-  it("prompts for confirmation before switching away from a dirty file", async () => {
+  it("autosaves instead of prompting when switching away from a dirty file", async () => {
     const user = userEvent.setup();
     renderPage();
 
@@ -330,28 +330,29 @@ describe("EditorPage", () => {
     });
     useOpenFiles.getState().updateActiveMarkdown("mock-root", "edited content");
 
-    // Expand docs/ and attempt to switch to a different file
+    // Expand docs/ and switch to a different file
     await user.click(screen.getByTestId("sidebar-dir-docs"));
     await waitFor(() =>
       expect(screen.getByTestId("sidebar-file-docs/intro.md")).toBeInTheDocument()
     );
     await user.click(screen.getByTestId("sidebar-file-docs/intro.md"));
 
-    // Confirm dialog should appear
-    await waitFor(() =>
-      expect(screen.getByText("未保存の変更があります")).toBeInTheDocument()
-    );
+    // #280: the switch flushes the buffer to disk instead of asking whether to
+    // discard it — with autosave on, the edits are on their way to disk anyway,
+    // so a discard prompt has nothing left to offer.
+    await waitFor(() => {
+      const readme = useOpenFiles
+        .getState()
+        .files.find((f) => f.path === "README.md");
+      expect(readme?.isDirty).toBe(false);
+      expect(readme?.savedMarkdown).toBe("edited content");
+    });
+    expect(screen.queryByText("未保存の変更があります")).not.toBeInTheDocument();
 
-    // Cancel — the active file should remain README.md
-    await user.click(screen.getByRole("button", { name: "キャンセル" }));
-
-    await waitFor(() =>
-      expect(useConfirm.getState().pending).toBeNull()
-    );
-    const stillActive = useOpenFiles
+    const active = useOpenFiles
       .getState()
       .files.find((f) => f.id === useOpenFiles.getState().activeIdByRoot["mock-root"]);
-    expect(stillActive?.path).toBe("README.md");
+    expect(active?.path).toBe("docs/intro.md");
   });
 
   it("saves the active file via PUT and clears the dirty flag", async () => {

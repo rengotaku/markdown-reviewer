@@ -58,6 +58,15 @@ export interface RevisionMeta {
   author: string;
 }
 
+/** Result of snapshotting the current content as a new revision (#280). */
+export interface CreateRevisionResponse {
+  path: string;
+  root: string;
+  /** False when the content is unchanged since the previous revision. */
+  created: boolean;
+  revision?: RevisionMeta;
+}
+
 export interface RevisionListResponse {
   path: string;
   root: string;
@@ -268,4 +277,27 @@ export async function getRevision(
       `api/revisions/${encodePath(path)}${rootQuery(root, "?")}${sep}id=${encodeURIComponent(id)}`
     )
     .json<RevisionResponse>();
+}
+
+/**
+ * createRevision snapshots the file's current on-disk content as the newest
+ * revision (#280).
+ *
+ * Revisions mark handoffs to the AI, not saves — autosave writes every few
+ * seconds, and one revision per save would evict the diff baseline (the state
+ * the AI last read) within minutes. Call this once the save has landed, at the
+ * moment the user copies the `mr comments` command. `created` is false when
+ * nothing changed since the previous handoff.
+ */
+export async function createRevision(
+  path: string,
+  root?: string,
+  author = "human"
+): Promise<CreateRevisionResponse> {
+  const sep = root ? "&" : "?";
+  return apiClient
+    .post(
+      `api/revisions/${encodePath(path)}${rootQuery(root, "?")}${sep}author=${encodeURIComponent(author)}`
+    )
+    .json<CreateRevisionResponse>();
 }

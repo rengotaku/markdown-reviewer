@@ -110,6 +110,22 @@ interface OpenFilesState {
     created?: string,
     sha?: string
   ) => void;
+  /**
+   * Mark one file (by id) saved, recording exactly which content was
+   * persisted (#280). Autosave runs in the background, so the buffer may have
+   * moved on between the request going out and its response arriving —
+   * `savedMarkdown` therefore takes the content the server actually got, and
+   * the file stays dirty when the buffer has since advanced past it. Passing
+   * the buffer wholesale (as markActiveSaved does) would clear the dirty flag
+   * on keystrokes that never reached disk.
+   */
+  markFileSaved: (
+    id: string,
+    savedMarkdown: string,
+    modified?: string,
+    created?: string,
+    sha?: string
+  ) => void;
   /** Revert the given root's active file's markdown back to its last-saved state. */
   discardActiveChanges: (root: string) => void;
   /**
@@ -401,6 +417,23 @@ export const useOpenFiles = create<OpenFilesState>()((set) => ({
             ),
           };
         }),
+
+      markFileSaved: (id, savedMarkdown, modified, created, sha) =>
+        set((state) => ({
+          files: state.files.map((file) =>
+            file.id === id
+              ? {
+                  ...file,
+                  savedMarkdown,
+                  isDirty: file.markdown !== savedMarkdown,
+                  serverModified: modified ?? file.serverModified,
+                  serverCreated: created ?? file.serverCreated,
+                  serverSha: sha ?? file.serverSha,
+                  ignoredExternal: undefined,
+                }
+              : file
+          ),
+        })),
 
       discardActiveChanges: (root) =>
         set((state) => {

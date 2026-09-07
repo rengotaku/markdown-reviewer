@@ -50,6 +50,12 @@ func SyncExternalEdit(root, relPath, rawContent string) (synced bool, err error)
 	}
 
 	stripped := StripAIHint(rawContent)
+	// Our own (auto)save, not an external edit (#280): its comments were
+	// already re-anchored on the write path, and snapshotting it here would
+	// put one revision per save back into history under the "external" label.
+	if isAppWrite(dir, shortSha(stripped)) {
+		return false, nil
+	}
 	if len(revs) == 0 {
 		_, _, aerr := AppendRevision(root, relPath, externalAuthor, stripped)
 		return false, aerr

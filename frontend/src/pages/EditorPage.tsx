@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { commentsEqual } from "@/utils/commentsEqual";
 import { useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { HTTPError } from "ky";
@@ -65,6 +65,7 @@ import {
   statBatch,
   ingestFile,
   listRevisions,
+  createRevision,
   getRevision,
   listComments,
   createComment,
@@ -137,6 +138,11 @@ const APP_TITLE = "markdown-reviewer";
 // How often to re-poll the active review file's comments for out-of-band
 // changes (mr CLI / API / other viewers). Matches the file-tree cadence.
 const COMMENTS_POLL_MS = 30_000;
+// Idle time before an edited buffer is written to disk (#280). Long enough
+// that a pause mid-sentence doesn't churn the file (every write re-injects the
+// AI hint and wakes the file watcher), short enough that a crash or a closed
+// laptop loses at most a few seconds of typing.
+const AUTOSAVE_IDLE_MS = 10_000;
 
 /** One-line preview of a comment body, for naming what is about to be deleted. */
 function commentSummary(body: string): string {
@@ -248,6 +254,7 @@ export function EditorPage() {
   );
   const openServerFile = useOpenFiles((s) => s.openServerFile);
   const markActiveSaved = useOpenFiles((s) => s.markActiveSaved);
+  const markFileSaved = useOpenFiles((s) => s.markFileSaved);
   const discardActiveChanges = useOpenFiles((s) => s.discardActiveChanges);
   const setActive = useOpenFiles((s) => s.setActive);
   const closeFileRaw = useOpenFiles((s) => s.closeFile);
@@ -406,11 +413,74 @@ export function EditorPage() {
   // set (#114 review follow-up). Without this, re-opening the same path
   // later would inherit a stale "give up on this one" mark from before the
   // close, permanently hiding its badge even though it's a fresh tab.
+  // --- Autosave (#280) ----------------------------------------------------
+  // Ids with an autosave request in flight, so a scheduled save and a flush
+  // (tab switch / close) can't both write the same buffer concurrently.
+  const autosaveInFlight = useRef<Set<string>>(new Set());
+
+  /**
+   * Persist one file's buffer without any dialog. Returns true when the file
+   * ends up clean on disk (including "was already clean").
+   *
+   * Deliberately silent on success: a toast every 10 seconds is noise, and the
+   * tab's dirty marker already reports the state. The only thing it speaks up
+   * about is a write it refused or failed.
+   */
+  const autosave = useCallback(async (fileId: string): Promise<boolean> => {
+    const file = useOpenFiles.getState().files.find((f) => f.id === fileId);
+    if (!file) return false;
+    if (!file.isDirty) return true;
+    if (autosaveInFlight.current.has(fileId)) return false;
+    // An un-reconciled external change means there is no baseline we can
+    // honestly claim to be building on. Overwriting it is a decision, so leave
+    // it to the explicit save (which prompts) and keep the buffer dirty.
+    if (file.ignoredExternal) return false;
+    const content = file.markdown;
+    autosaveInFlight.current.add(fileId);
+    try {
+      const res = await writeFile.mutateAsync({
+        path: file.path,
+        content,
+        root: file.root,
+        ifMatch: file.serverSha,
+      });
+      // `content`, not the current buffer: the user may have typed on while
+      // this request was out, and those keystrokes are not on disk yet.
+      markFileSaved(file.id, content, res.modified, res.created, res.sha);
+      // This write is our own; don't let the tree watcher report its echo as
+      // an external change (see handleSave).
+      clearChanged(file.root, file.path);
+      registerSelfWrite(file.root, file.path, res.modified);
+      return true;
+    } catch (err) {
+      if (err instanceof HTTPError && err.response.status === 412) {
+        // No modal mid-typing: say what happened and let the user decide via
+        // the save button (which prompts for the overwrite).
+        showToast(
+          `「${file.name}」はエディタ外で変更されているため自動保存を中止しました。保存ボタンで上書きできます`,
+          "warning"
+        );
+        return false;
+      }
+      showToast(
+        `自動保存に失敗しました: ${(err as Error).message ?? "unknown error"}`,
+        "error"
+      );
+      return false;
+    } finally {
+      autosaveInFlight.current.delete(fileId);
+    }
+  }, [writeFile, markFileSaved, clearChanged, registerSelfWrite, showToast]);
+
+
   const closeFile = (id: string) => {
     // Flush before closing (#265) so a tab closed within the debounce
     // window doesn't lose its last keystroke from the store.
     useEditorInstance.getState().flushPendingMarkdown();
     const target = useOpenFiles.getState().files.find((f) => f.id === id);
+    // Autosave (#280) reads the buffer synchronously before the await, so
+    // firing it here still sees the tab that is about to be dropped.
+    void autosave(id);
     closeFileRaw(id);
     if (target) missingStatFilesRef.current.delete(keyOf(target.root, target.path));
   };
@@ -420,6 +490,8 @@ export function EditorPage() {
     const closed = target
       ? useOpenFiles.getState().files.filter((f) => f.root === target.root && f.id !== id)
       : [];
+    // See closeFile (#280).
+    for (const f of closed) void autosave(f.id);
     closeOthersRaw(id);
     for (const f of closed) missingStatFilesRef.current.delete(keyOf(f.root, f.path));
   };
@@ -433,6 +505,8 @@ export function EditorPage() {
       const index = sameRoot.findIndex((f) => f.id === id);
       return index === -1 ? [] : sameRoot.slice(index + 1);
     })();
+    // See closeFile (#280).
+    for (const f of closed) void autosave(f.id);
     closeToRightRaw(id);
     for (const f of closed) missingStatFilesRef.current.delete(keyOf(f.root, f.path));
   };
@@ -1604,6 +1678,11 @@ export function EditorPage() {
     // deciding whether to prompt to discard — a switch fired within the
     // debounce window must not race the resync it triggers.
     useEditorInstance.getState().flushPendingMarkdown();
+    // Autosave the outgoing buffer first (#280), so the discard prompt below
+    // only fires for a buffer autosave actually refused to write (an
+    // un-reconciled external change) rather than for ordinary unsaved edits.
+    const outgoingId = useOpenFiles.getState().activeIdByRoot[activeRoot];
+    if (outgoingId) await autosave(outgoingId);
     const state = useOpenFiles.getState();
     const currentActiveId = state.activeIdByRoot[activeRoot];
     const active = state.files.find((f) => f.id === currentActiveId);
@@ -1676,6 +1755,10 @@ export function EditorPage() {
     if (!activeRoot) return;
     // See handleSelect (#265).
     useEditorInstance.getState().flushPendingMarkdown();
+    const outgoingId = useOpenFiles.getState().activeIdByRoot[activeRoot];
+    // Fire-and-forget (#280): no prompt hangs off this path, so there is
+    // nothing to await before switching.
+    if (outgoingId && outgoingId !== v) void autosave(outgoingId);
     const changed = v !== (activeFile?.id ?? null);
     setActive(activeRoot, v);
     // Activating a tab is "opening" it just as much as a sidebar click, so
@@ -1838,6 +1921,23 @@ export function EditorPage() {
       cancelLabel: "キャンセル",
     });
 
+  // Write the active buffer once it has been still for AUTOSAVE_IDLE_MS. The
+  // timer restarts on every buffer change, so this fires after typing stops,
+  // not on a fixed wall-clock cadence. Edits reach `markdown` through the
+  // debounced resync (#265), so the effective delay is that debounce + this.
+  const activeFileMarkdown = activeFile?.markdown;
+  const activeFileDirty = activeFile?.isDirty ?? false;
+  const activeFileIdForSave = activeFile?.id;
+  useEffect(() => {
+    if (!activeFileIdForSave || !activeFileDirty) return;
+    const id = activeFileIdForSave;
+    const timer = window.setTimeout(() => {
+      void autosave(id);
+    }, AUTOSAVE_IDLE_MS);
+    return () => window.clearTimeout(timer);
+  }, [activeFileIdForSave, activeFileDirty, activeFileMarkdown, autosave]);
+
+
   const handleSave = async () => {
     if (!activeFile) return;
     // The editor's Markdown resync is debounced for perf on large documents
@@ -1865,8 +1965,9 @@ export function EditorPage() {
         ifMatch: activeFile.serverSha,
       });
       markActiveSaved(activeFile.root, res.modified, res.created, res.sha);
-      // A save snapshots the previous content into history (review state only),
-      // so refresh the revision list backing the diff picker.
+      // A save can flip a draft file to review state (auto-ingest), so the
+      // revision list backing the diff picker is worth re-reading. The save
+      // itself no longer adds a revision (#280).
       setReviewRefresh((n) => n + 1);
       // The save itself shouldn't leave the file "unread" (#178), and its
       // resulting mtime is this app's own write — the tree watcher's next
@@ -1939,6 +2040,37 @@ export function EditorPage() {
     const base = rootPath.replace(/\/+$/, "");
     const abs = base ? `${base}/${activeFile.path}` : activeFile.path;
     const cmd = `mr comments ${abs}`;
+    // Copying this command is the handoff to the AI, so it is also the version
+    // boundary (#280). Get the buffer on disk first, then snapshot it: the
+    // newest revision is then exactly what the AI is about to read, which
+    // makes the diff empty right now and fills it with whatever the human
+    // edits next. Saves themselves no longer snapshot — autosave would burn
+    // through the 20-revision cap and evict this very baseline.
+    useEditorInstance.getState().flushPendingMarkdown();
+    const saved = await autosave(activeFile.id);
+    if (saved) {
+      try {
+        const res = await createRevision(activeFile.path, activeFile.root);
+        // Only worth re-reading the list when a version actually landed.
+        if (res.created) setReviewRefresh((n) => n + 1);
+      } catch (err) {
+        // The command itself is still valid and still worth copying — the AI
+        // reads the file, not the history. Report the missing baseline and
+        // carry on.
+        showToast(
+          `バージョンの記録に失敗しました（コマンドはコピーします）: ${(err as Error).message ?? "unknown error"}`,
+          "warning"
+        );
+      }
+    } else {
+      // Autosave refused (external change) or failed: the AI would read
+      // something other than what is on screen, and a snapshot here would
+      // record the wrong baseline. It has already said why in its own toast.
+      showToast(
+        "未保存の変更があるため、バージョンは記録していません（保存してから再度コピーしてください）",
+        "warning"
+      );
+    }
     try {
       await navigator.clipboard.writeText(cmd);
       showToast("コメント確認コマンドをコピーしました", "success");

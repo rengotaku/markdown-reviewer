@@ -7,7 +7,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -70,61 +69,119 @@ func TestIngest_MissingFile_404(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, rec.Code)
 }
 
-func TestRevisions_SaveAutoIngestsDraft(t *testing.T) {
+func TestRevisions_SaveAutoIngestsDraftWithoutSnapshot(t *testing.T) {
 	useTempReviewStore(t)
 	h, root := setupFilesHandler(t)
 	require.NoError(t, os.WriteFile(filepath.Join(root, "doc.md"), []byte("# hi\n"), 0o644))
 
-	// Saving a draft file now auto-ingests it (a save is a stronger signal of
-	// intent than merely opening), so the pre-overwrite content is snapshotted
-	// as the first revision.
+	// A save still auto-ingests (a save is a stronger signal of intent than
+	// merely opening the file) but no longer snapshots a revision (#280):
+	// autosave writes every few seconds and would evict the diff baseline.
 	require.Equal(t, http.StatusOK, putFile(t, h, "# changed\n").Code)
 
-	// The file transitioned draft -> review.
 	rec := serve(h, httptest.NewRequest(http.MethodGet, "/api/files/doc.md", nil))
 	require.Equal(t, http.StatusOK, rec.Code)
 	var read handler.FileReadResponse
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&read))
 	assert.Equal(t, "review", read.State)
 
-	// History holds the pre-overwrite content.
 	rec = serve(h, httptest.NewRequest(http.MethodGet, "/api/revisions/doc.md", nil))
 	require.Equal(t, http.StatusOK, rec.Code)
 	var resp handler.RevisionListResponse
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
-	require.Len(t, resp.Revisions, 1)
+	assert.Empty(t, resp.Revisions, "saves must not accrue revision history")
 }
 
-func TestRevisions_SnapshotsOnWrite(t *testing.T) {
+func TestRevisions_SavesNeverSnapshot(t *testing.T) {
 	useTempReviewStore(t)
 	h, root := setupFilesHandler(t)
 	require.NoError(t, os.WriteFile(filepath.Join(root, "doc.md"), []byte("# v0\n"), 0o644))
-
-	// Ingest so subsequent writes are snapshotted.
 	require.Equal(t, http.StatusOK, serve(h, httptest.NewRequest(http.MethodPost, "/api/ingest/doc.md", nil)).Code)
 
-	// First write snapshots the on-disk "# v0" (pre-overwrite).
-	require.Equal(t, http.StatusOK, putFile(t, h, "# v1\n").Code)
-	// Second write snapshots "# v1" (which now carries an AI hint on disk —
-	// the snapshot must strip it).
-	require.Equal(t, http.StatusOK, putFile(t, h, "# v2\n").Code)
+	// Stand in for autosave: many writes in a row, none of which may create a
+	// revision. Before #280 this produced one revision per save.
+	for _, body := range []string{"# v1\n", "# v2\n", "# v3\n"} {
+		require.Equal(t, http.StatusOK, putFile(t, h, body).Code)
+	}
 
 	rec := serve(h, httptest.NewRequest(http.MethodGet, "/api/revisions/doc.md", nil))
 	require.Equal(t, http.StatusOK, rec.Code)
 	var list handler.RevisionListResponse
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&list))
-	require.Len(t, list.Revisions, 2)
-	// Newest first.
-	assert.Equal(t, "r-002", list.Revisions[0].ID)
-	assert.Equal(t, "r-001", list.Revisions[1].ID)
+	assert.Empty(t, list.Revisions)
+}
 
-	// Fetch the newest revision's content — it must be the hint-stripped "# v1".
-	rec = serve(h, httptest.NewRequest(http.MethodGet, "/api/revisions/doc.md?id=r-002", nil))
+func TestCreateRevision_SnapshotsCurrentContent(t *testing.T) {
+	useTempReviewStore(t)
+	h, root := setupFilesHandler(t)
+	require.NoError(t, os.WriteFile(filepath.Join(root, "doc.md"), []byte("# v0\n"), 0o644))
+
+	// The handoff point: the client saves, then asks for a snapshot of what
+	// the AI is about to read. The file on disk carries the AI hint by then,
+	// so the snapshot must strip it.
+	require.Equal(t, http.StatusOK, putFile(t, h, "# v1\n").Code)
+	rec := serve(h, httptest.NewRequest(http.MethodPost, "/api/revisions/doc.md", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	var created handler.CreateRevisionResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&created))
+	require.True(t, created.Created)
+	require.NotNil(t, created.Revision)
+	assert.Equal(t, "r-001", created.Revision.ID)
+	assert.Equal(t, "human", created.Revision.Author)
+
+	rec = serve(h, httptest.NewRequest(http.MethodGet, "/api/revisions/doc.md?id=r-001", nil))
 	require.Equal(t, http.StatusOK, rec.Code)
 	var rev handler.RevisionResponse
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&rev))
-	assert.Equal(t, "# v1\n", rev.Content)
+	assert.Equal(t, "# v1\n", rev.Content, "the snapshot is the content at handoff time, not the pre-save one")
 	assert.NotContains(t, rev.Content, "markdown-reviewer", "hint must be stripped from snapshots")
+}
+
+func TestCreateRevision_IngestsDraft(t *testing.T) {
+	useTempReviewStore(t)
+	h, root := setupFilesHandler(t)
+	require.NoError(t, os.WriteFile(filepath.Join(root, "doc.md"), []byte("# hi\n"), 0o644))
+
+	// Never saved, never commented: still gets a baseline on handoff.
+	rec := serve(h, httptest.NewRequest(http.MethodPost, "/api/revisions/doc.md?author=someone", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	var created handler.CreateRevisionResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&created))
+	require.True(t, created.Created)
+	assert.Equal(t, "someone", created.Revision.Author)
+
+	rec = serve(h, httptest.NewRequest(http.MethodGet, "/api/files/doc.md", nil))
+	var read handler.FileReadResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&read))
+	assert.Equal(t, "review", read.State)
+}
+
+func TestCreateRevision_DedupesUnchangedHandoff(t *testing.T) {
+	useTempReviewStore(t)
+	h, root := setupFilesHandler(t)
+	require.NoError(t, os.WriteFile(filepath.Join(root, "doc.md"), []byte("# v0\n"), 0o644))
+
+	// Copying the review command twice without editing in between must not
+	// move the diff baseline.
+	require.Equal(t, http.StatusOK, serve(h, httptest.NewRequest(http.MethodPost, "/api/revisions/doc.md", nil)).Code)
+	rec := serve(h, httptest.NewRequest(http.MethodPost, "/api/revisions/doc.md", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	var second handler.CreateRevisionResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&second))
+	assert.False(t, second.Created)
+	assert.Nil(t, second.Revision)
+
+	rec = serve(h, httptest.NewRequest(http.MethodGet, "/api/revisions/doc.md", nil))
+	var list handler.RevisionListResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&list))
+	require.Len(t, list.Revisions, 1)
+}
+
+func TestCreateRevision_MissingFile_404(t *testing.T) {
+	useTempReviewStore(t)
+	h, _ := setupFilesHandler(t)
+	rec := serve(h, httptest.NewRequest(http.MethodPost, "/api/revisions/nope.md", nil))
+	assert.Equal(t, http.StatusNotFound, rec.Code)
 }
 
 func TestRevisions_UnknownID_404(t *testing.T) {
@@ -135,23 +192,4 @@ func TestRevisions_UnknownID_404(t *testing.T) {
 
 	rec := serve(h, httptest.NewRequest(http.MethodGet, "/api/revisions/doc.md?id=r-999", nil))
 	assert.Equal(t, http.StatusNotFound, rec.Code)
-}
-
-func TestRevisions_DedupeUnchangedSaves(t *testing.T) {
-	useTempReviewStore(t)
-	h, root := setupFilesHandler(t)
-	require.NoError(t, os.WriteFile(filepath.Join(root, "doc.md"), []byte("# v0\n"), 0o644))
-	require.Equal(t, http.StatusOK, serve(h, httptest.NewRequest(http.MethodPost, "/api/ingest/doc.md", nil)).Code)
-
-	// Two identical saves of the same new content: the second save's
-	// pre-overwrite snapshot equals the first's, so it dedupes.
-	require.Equal(t, http.StatusOK, putFile(t, h, "# same\n").Code)
-	require.Equal(t, http.StatusOK, putFile(t, h, "# same\n").Code)
-
-	rec := serve(h, httptest.NewRequest(http.MethodGet, "/api/revisions/doc.md", nil))
-	var list handler.RevisionListResponse
-	require.NoError(t, json.NewDecoder(rec.Body).Decode(&list))
-	// r-001 = "# v0" snapshot; the "# same" snapshot only lands once.
-	require.Len(t, list.Revisions, 2)
-	require.False(t, strings.HasPrefix(list.Revisions[0].ID, "r-003"))
 }

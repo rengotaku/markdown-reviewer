@@ -249,6 +249,32 @@ describe("useOpenFiles", () => {
     );
   });
 
+  it("markFileSaved keeps the file dirty when the buffer moved on mid-save", () => {
+    useOpenFiles.getState().addFiles([{ name: "a.md", root: ROOT, markdown: "# A" }]);
+    const id = activeId()!;
+    useOpenFiles.getState().updateActiveMarkdown(ROOT, "# v1");
+    // Autosave sends "# v1"; the user types on while it is in flight (#280).
+    useOpenFiles.getState().updateActiveMarkdown(ROOT, "# v2");
+
+    useOpenFiles.getState().markFileSaved(id, "# v1", "2026-06-03T00:00:00Z", undefined, "sha-v1");
+
+    const file = useOpenFiles.getState().files.find((f) => f.id === id)!;
+    expect(file.savedMarkdown).toBe("# v1");
+    expect(file.serverSha).toBe("sha-v1");
+    // "# v2" never reached disk, so the file must not read as clean.
+    expect(file.isDirty).toBe(true);
+  });
+
+  it("markFileSaved clears the dirty flag when the buffer matches what was written", () => {
+    useOpenFiles.getState().addFiles([{ name: "a.md", root: ROOT, markdown: "# A" }]);
+    const id = activeId()!;
+    useOpenFiles.getState().updateActiveMarkdown(ROOT, "# v1");
+
+    useOpenFiles.getState().markFileSaved(id, "# v1");
+
+    expect(useOpenFiles.getState().files.find((f) => f.id === id)!.isDirty).toBe(false);
+  });
+
   // --- multi-root ---------------------------------------------------------
 
   it("tracks active id independently per root", () => {

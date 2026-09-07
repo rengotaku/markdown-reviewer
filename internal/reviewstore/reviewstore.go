@@ -34,6 +34,10 @@ const MaxRevisions = 20
 const (
 	reviewFile  = "review.json"
 	historyFile = "history.jsonl"
+	// appWriteFile holds the short sha of the last content this app itself
+	// wrote through PUT /api/files, so SyncExternalEdit can tell the editor's
+	// own (auto)saves apart from a genuinely external edit (#280).
+	appWriteFile = "lastappwrite"
 
 	// configDirEnv lets tests (and unusual deployments) point the store at an
 	// arbitrary directory instead of the real user config dir.
@@ -384,4 +388,38 @@ func PurgeRoot(root string) error {
 		return fmt.Errorf("reviewstore: purge root %q: %w", root, err)
 	}
 	return nil
+}
+
+// RecordAppWrite remembers that this app just wrote `content` through the
+// write path, keyed by its hint-stripped short sha (#280).
+//
+// Saves no longer snapshot revisions, so without this marker the editor's own
+// autosaves are indistinguishable from an external edit: the next comment read
+// would call SyncExternalEdit, find the file drifted from the newest revision,
+// and snapshot it as an "external" revision — reintroducing one revision per
+// save through the back door. Comments on the write path are already
+// re-anchored by ReanchorOnSave, so there is nothing else for
+// SyncExternalEdit to do for our own writes.
+//
+// No-ops for un-ingested files (nothing reads the marker for those).
+func RecordAppWrite(root, relPath, content string) error {
+	if !HasEntry(root, relPath) {
+		return nil
+	}
+	dir, err := EntryDir(root, relPath)
+	if err != nil {
+		return err
+	}
+	return atomicWrite(filepath.Join(dir, appWriteFile), []byte(shortSha(StripAIHint(content))))
+}
+
+// isAppWrite reports whether `strippedSha` is the content this app last wrote
+// itself. A missing or unreadable marker means "assume external" — the
+// conservative answer, since it only costs an extra snapshot.
+func isAppWrite(dir, strippedSha string) bool {
+	raw, err := os.ReadFile(filepath.Join(dir, appWriteFile))
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(raw)) == strippedSha
 }

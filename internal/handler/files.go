@@ -450,17 +450,12 @@ func (h *Handler) WriteFile(c *gin.Context) {
 		}
 	}
 
-	// Snapshot the about-to-be-overwritten content into revision history
-	// before the atomic rename destroys it. Strip the AI hint first so the
-	// per-save hint churn never pollutes a diff. AppendRevision no-ops for
-	// draft (un-ingested) files, so only managed files accrue history. A
-	// snapshot failure must never block the save — log and continue.
-	if oldErr == nil {
-		snap := reviewstore.StripAIHint(string(oldRaw))
-		if _, _, aerr := reviewstore.AppendRevision(name, rel, c.Query("author"), snap); aerr != nil {
-			slog.Warn("revision snapshot failed", "root", name, "path", rel, "err", aerr)
-		}
-	}
+	// Deliberately no revision snapshot here (#280). Saves used to append one,
+	// but autosave writes every few seconds and would burn through
+	// MaxRevisions in minutes, evicting the baseline the diff gutter needs —
+	// the state the AI last read. Revisions now mark handoffs to the AI
+	// instead: POST /api/revisions (fired when the user copies the
+	// `mr comments` command) and SyncExternalEdit (the AI's own edits).
 
 	// Force-inject the AI hint comment so AI clients reading this file
 	// can self-discover the comment-extraction API. Replacing instead of
@@ -495,6 +490,13 @@ func (h *Handler) WriteFile(c *gin.Context) {
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to write file"})
 		return
+	}
+
+	// Mark this content as our own write (#280) so the next comment read does
+	// not mistake the editor's autosave for an external edit and snapshot it
+	// as a revision. Best-effort: a lost marker only costs an extra snapshot.
+	if werr := reviewstore.RecordAppWrite(name, rel, content); werr != nil {
+		slog.Warn("recording app write failed", "root", name, "path", rel, "err", werr)
 	}
 
 	var modified, created string

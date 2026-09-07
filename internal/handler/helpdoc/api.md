@@ -155,9 +155,10 @@ open コメントを **AI 向けに整形した Markdown** で返す（`?status=
 保存は tmp ファイル + rename によるアトミック書き込み。レスポンスには `state`（`"draft"` | `"review"`）と
 `sha`（実際に書き込んだ最終バイト列の sha256 hex）が含まれる。
 
-**保存時に「前回保存内容」をリビジョン履歴へスナップショット**する（`review` 状態のファイルのみ）:
-hint を除去した上で `~/.config/reviewer/<root>/<path>/history.jsonl` へ追記し、直前と同一内容なら dedupe、上限 20 件。
-`?author=ai`（または `human`）でスナップショットの作成者を記録できる（省略時 `unknown`）。
+**保存はリビジョン履歴を作らない。** 未 ingest のファイルはここで ingest される（`review` へ遷移する）が、
+スナップショットは取らない。リビジョンは AI への受け渡しの記録なので、作成は
+`POST /api/revisions/*path`（Web UI が `mr comments` コマンドのコピー時に叩く）と
+AI の外部編集の取り込み（`SyncExternalEdit`）に限られる。
 
 ### 競合検知（任意・`If-Match`）
 
@@ -293,6 +294,26 @@ diff はクライアント側で計算する（サーバは版の中身を返す
 | Status | 条件 |
 |--------|------|
 | 404 | `id` 指定だが該当リビジョンなし |
+
+## POST /api/revisions/*path
+
+ディスク上の**現在の本文**を新しいリビジョンとして記録する（hint 除去済み）。未 ingest なら先に ingest する。
+
+Query: `author`（既定 `human`）
+
+Response: `{ "path": "...", "root": "...", "created": true, "revision": { "id": "r-003", "ts": "...", "author": "human" } }`
+
+前回のリビジョンと内容が同じ場合は追加せず `{ "created": false }` を返す。
+
+**リビジョンは保存の記録ではなく、AI への受け渡しの記録である。** `PUT /api/files` は
+リビジョンを作らない（自動保存が数秒ごとに走るため、保存ごとに積むと上限 20 件を
+すぐ使い切り、diff の基準＝AI が最後に読んだ状態が押し出されて消える）。
+Web UI は「`mr comments` コマンドのコピー」時にこのエンドポイントを叩く。
+AI が直接編集した内容は従来どおり自動で取り込まれる（`SyncExternalEdit`）。
+
+| Status | 条件 |
+|--------|------|
+| 404 | 正典ファイルが存在しない |
 
 ---
 
