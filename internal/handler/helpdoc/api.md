@@ -315,6 +315,33 @@ AI が直接編集した内容は従来どおり自動で取り込まれる（`S
 |--------|------|
 | 404 | 正典ファイルが存在しない |
 
+## POST /api/revisions/*path?id=\<rev\>&action=restore
+
+指定した revision の本文（hint 除去済み）を正典へ書き戻す（issue #282）。`PUT /api/files` と
+同じパスロック・atomic write を使い、書き込み後に `RecordAppWrite` する（自動保存を外部編集と
+誤検知させないため）。
+
+書き戻し前に**現在の本文を新しい revision として自動で積む**（`POST /api/revisions` と同じ
+`AppendRevision`）。これで復元自体を取り消せるし、履歴も失わない。コメントの anchor は
+「書き戻し前の本文 → 復元後の本文」で再解決する（`ReanchorReview`。解決できないものは orphan
+のまま残る）。正典先頭の hint ブロックは保持する（revision の本文には hint が無いので、書き戻し
+時に現在の本文の hint を前置する）。
+
+Query: `id`（必須・書き戻す revision）、`author`（既定 `human`。書き戻し前に積む revision の author）
+
+`mr restore` はこのエンドポイントの薄いラッパーではなく `internal/reviewstore.Restore` を直接呼ぶが、
+挙動は同じ。ただし author の既定値は異なる: CLI 経由の復元はディスク上の現在の本文を誰が書いたか
+（Web UI の保存か、外部エディタか、AI か）を判別できないため、既定を `external`（`SyncExternalEdit`
+と同じラベル）にしている。Web UI からの復元は直前の本文を人が保存しているのが通常なので、この
+エンドポイントの既定は `human` のままでよい。
+
+Response は `PUT /api/files` と同じ形: `{ "path": "...", "content": "...", "modified": "...", "created": "...", "root": "...", "state": "review", "sha": "..." }`
+
+| Status | 条件 |
+|--------|------|
+| 400 | `id` 未指定 |
+| 404 | 正典ファイルが存在しない、または `id` に該当する revision がない（未 ingest・履歴なしを含む） |
+
 ---
 
 ## AI 向けの使い方

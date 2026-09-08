@@ -12,6 +12,9 @@
 //	mr resolve  <path> <id>       mark a comment resolved
 //	mr reopen   <path> <id>       reopen a resolved comment
 //	mr open     <path> [--comment ID] [--print]  open the file in the web UI
+//	mr revisions <path> [--json]  list revision history, newest first
+//	mr restore  <path> <id> [--author NAME]  restore the canonical body to
+//	                                          revision id (default author "external")
 //
 // <path> may be absolute or relative to the current directory. It normally
 // lives under one of the configured REVIEW_ROOTS. A path outside all of them
@@ -57,6 +60,10 @@ func main() {
 		err = cmdSetStatus(args, reviewstore.StatusOpen)
 	case "open":
 		err = cmdOpen(args)
+	case "revisions":
+		err = cmdRevisions(args)
+	case "restore":
+		err = cmdRestore(args)
 	case "-h", "--help", "help":
 		usage()
 		return
@@ -82,6 +89,8 @@ Usage:
   mr resolve  <path> <id>              mark a comment resolved
   mr reopen   <path> <id>              reopen a resolved comment
   mr open     <path> [--comment ID] [--print]  open the file in the web UI (--print: URL only)
+  mr revisions <path> [--json]         list revision history, newest first
+  mr restore  <path> <id> [--author NAME]  restore the canonical body to revision id (default author "external")
 
 <path> is absolute or relative to cwd, normally under a configured root.
 A path outside every root is registered as a one-off review by "mr open"; the

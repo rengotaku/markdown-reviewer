@@ -67,6 +67,7 @@ import {
   listRevisions,
   createRevision,
   getRevision,
+  restoreRevision,
   listComments,
   createComment,
   setCommentStatus,
@@ -174,6 +175,18 @@ function commentTargetText(c: CommentJSON): string {
 
 export function EditorPage() {
   const { active: activeRoot, roots, activePath: activeRootPath } = useActiveRoot();
+  // Mirrors `activeRoot` into a ref so async handlers created at click time
+  // (e.g. handleRestoreRevision's isStillActiveTab guard) can read the root
+  // the page is *currently* showing after an await, rather than the stale
+  // value closed over at the moment they were defined. Same rationale as
+  // TiptapEditor's own `activeRootRef` (#282 follow-up P2: switching to a
+  // different root doesn't clear the old root's `activeIdByRoot` entry, so
+  // an id-only check can't tell "still this tab" apart from "switched root
+  // entirely, but that root's map still happens to point at the same id").
+  const activeRootRef = useRef(activeRoot);
+  useEffect(() => {
+    activeRootRef.current = activeRoot;
+  }, [activeRoot]);
   // The ad-hoc root (#240) holds exactly one file, so there is no tree to
   // browse: the sidebar stays collapsed and its hover/open affordances are
   // switched off rather than opening an empty panel.
@@ -255,6 +268,7 @@ export function EditorPage() {
   const openServerFile = useOpenFiles((s) => s.openServerFile);
   const markActiveSaved = useOpenFiles((s) => s.markActiveSaved);
   const markFileSaved = useOpenFiles((s) => s.markFileSaved);
+  const applyExternalReload = useOpenFiles((s) => s.applyExternalReload);
   const discardActiveChanges = useOpenFiles((s) => s.discardActiveChanges);
   const setActive = useOpenFiles((s) => s.setActive);
   const closeFileRaw = useOpenFiles((s) => s.closeFile);
@@ -339,6 +353,10 @@ export function EditorPage() {
   const [diffMode, setDiffMode] = useState(false);
   const [selectedRevId, setSelectedRevId] = useState<string | null>(null);
   const [diffBaseText, setDiffBaseText] = useState<string>("");
+  // True while a restore-to-this-version request (#282) is in flight for the
+  // active file. Drives DiffView's restoring prop so the button can't be
+  // double-clicked into two concurrent writes.
+  const [restoringRevision, setRestoringRevision] = useState(false);
   // Files known to be in "review" state, by `${root}:${path}` — drives the
   // per-tab review badge. Populated as files are visited / ingested (there is
   // no batch state endpoint, so unvisited tabs stay unmarked until activated).
@@ -1034,6 +1052,133 @@ export function EditorPage() {
         `リビジョンの取得に失敗しました: ${(err as Error).message ?? "unknown error"}`,
         "error"
       );
+    }
+  };
+
+  // Restore-to-this-version (#282), wired from DiffView's confirm dialog.
+  // The server writes the revision's content back onto the canonical file
+  // and snapshots what was there before as a new revision, so this is treated
+  // exactly like the app's own write: reload the tab's buffer from the
+  // response (same shape as PUT /api/files) rather than re-fetching, tag the
+  // resulting mtime as a self-write so the external-change watcher doesn't
+  // immediately re-prompt about it, and re-pull the revision list so the
+  // picker/diff gutter see the new snapshot.
+  const handleRestoreRevision = async (id: string) => {
+    if (!activeFile) return;
+    // Capture identity up front and re-check it (via the store, not this
+    // closure) after every await below. Revision ids are per-file, so a
+    // slow response landing after the user has switched to a different tab
+    // must not clobber that tab's diff-view state (revisions/revContents/
+    // selectedRevId/diffBaseText) — otherwise file B's screen ends up
+    // showing file A's baseline, and pressing "戻す" again restores the
+    // wrong file's revision (codex review, #282 follow-up P1). Mirrors the
+    // "re-read from the store instead of trusting captured state" pattern
+    // `autosave` already uses above.
+    const fileId = activeFile.id;
+    const filePath = activeFile.path;
+    const fileRoot = activeFile.root;
+    // Root must match too (#282 follow-up P2): `activeIdByRoot` keeps a
+    // separate entry per root and switching roots doesn't clear the old
+    // one, so an id-only check still reports "still active" after the user
+    // has navigated to an entirely different root whose own active tab
+    // happens to share this file's id.
+    const isStillActiveTab = () =>
+      activeRootRef.current === fileRoot &&
+      useOpenFiles.getState().activeIdByRoot[fileRoot] === fileId;
+
+    setRestoringRevision(true);
+    // #282 follow-up P1: lock the editor read-only for this exact file for
+    // the duration of the request (see TiptapEditor's restoringFileId
+    // effect) so a keystroke made while waiting on the response can't be
+    // silently discarded when applyExternalReload lands.
+    useEditorInstance.getState().setRestoringFileId(fileId);
+    try {
+      // Restoring overwrites the whole document, and the server only ever
+      // snapshots what's currently *on disk* as the "before" revision —
+      // applyExternalReload below then discards whatever is in the buffer
+      // unconditionally. An unsaved edit sitting on top of the last save
+      // would otherwise vanish with no trace, contradicting the confirm
+      // dialog's "戻す前の内容は新しいリビジョンとして残ります" (codex
+      // review, #282 follow-up P1). Flush + autosave first so any pending
+      // edit lands on disk — and therefore in that snapshot — before restore
+      // runs. Bail out without restoring if the save itself didn't land.
+      useEditorInstance.getState().flushPendingMarkdown();
+      const saved = await autosave(fileId);
+      if (!saved) {
+        showToast(
+          "未保存の変更を保存できなかったため、復元を中止しました",
+          "error"
+        );
+        return;
+      }
+
+      const res = await restoreRevision(filePath, id, fileRoot);
+      applyExternalReload(fileId, res.content, res.modified, res.created, res.sha);
+      clearChanged(fileRoot, filePath);
+      registerSelfWrite(fileRoot, filePath, res.modified);
+      showToast(`リビジョン ${id} の内容へ戻しました`, "success");
+
+      // The restore itself always lands (the write above already applied it
+      // to the correct file by id, regardless of which tab is active now).
+      // Only the diff-view reselection below is tab-scoped UI state, so it's
+      // the part that needs the active-tab guard.
+      if (!isStillActiveTab()) return;
+
+      // The restore snapshots what was on disk *before* it as a new revision
+      // (server-side), so the list just grew by one and `selectedRevId`
+      // (the baseline the user restored *from*) may no longer be the most
+      // useful thing to show — or, once the reviewRefresh-triggered relist
+      // below lands, may not even still resolve to a picker option the user
+      // recognizes as "what just happened". Fetch the fresh list here and
+      // reselect the newest "meaningful" revision — the same rule
+      // handleToggleDiff uses (first revision whose content still differs
+      // from what's now on screen) — so the picker always lands on a
+      // revision that exists and the diff reads as "what did restoring just
+      // change" (#282 follow-up).
+      const latestText = stripHint(res.content);
+      const rl = await listRevisions(filePath, fileRoot);
+      if (!isStillActiveTab()) return;
+      const contents: Record<string, string> = { ...revContents };
+      const meaningful: RevisionMeta[] = [];
+      for (const r of rl.revisions) {
+        let content = contents[r.id];
+        if (content === undefined) {
+          try {
+            const rev = await getRevision(filePath, r.id, fileRoot);
+            if (!isStillActiveTab()) return;
+            content = rev.content;
+            contents[r.id] = content;
+          } catch {
+            continue;
+          }
+        }
+        if (hasChanges(lineDiff(content, latestText))) meaningful.push(r);
+      }
+      if (!isStillActiveTab()) return;
+      setRevisions(rl.revisions);
+      setRevContents(contents);
+      // Prefer the newest revision that actually differs from the restored
+      // content; fall back to the newest revision at all (e.g. restoring
+      // happened to land back on content identical to the newest snapshot)
+      // so the picker is never left pointing at nothing.
+      const reselected = meaningful[0] ?? rl.revisions[0];
+      if (reselected) {
+        setSelectedRevId(reselected.id);
+        setDiffBaseText(contents[reselected.id] ?? "");
+      } else {
+        setSelectedRevId(null);
+        setDiffBaseText("");
+      }
+
+      setReviewRefresh((n) => n + 1);
+    } catch (err) {
+      showToast(
+        `この版への復元に失敗しました: ${(err as Error).message ?? "unknown error"}`,
+        "error"
+      );
+    } finally {
+      setRestoringRevision(false);
+      useEditorInstance.getState().setRestoringFileId(null);
     }
   };
 
@@ -3015,6 +3160,8 @@ export function EditorPage() {
               revisions={meaningfulRevisions}
               selectedRevId={selectedRevId}
               onSelectRevision={(id) => void loadRevision(id)}
+              onRestoreRevision={(id) => handleRestoreRevision(id)}
+              restoring={restoringRevision}
             />
           ) : activeFile ? (
             <TiptapEditor />

@@ -5,6 +5,7 @@ import {
   ingestFile,
   listRevisions,
   getRevision,
+  restoreRevision,
   statFile,
   statBatch,
   STAT_BATCH_LIMIT,
@@ -42,6 +43,43 @@ describe("review API client", () => {
   it("getRevision works without an explicit root", async () => {
     const rev = await getRevision("README.md", "r-002");
     expect(rev.id).toBe("r-002");
+  });
+
+  it("restoreRevision posts action=restore with the revision id and root", async () => {
+    let captured = "";
+    server.use(
+      http.post(`${API_BASE}/api/revisions/*`, ({ request }) => {
+        captured = request.url;
+        return HttpResponse.json({
+          path: "docs/intro.md",
+          content: "# docs/intro.md\n\nrestored",
+          modified: "2026-05-21T00:00:00Z",
+          created: "2026-05-19T00:00:00Z",
+          root: "mock-root",
+          state: "review",
+          sha: "restored-sha",
+        });
+      })
+    );
+
+    const res = await restoreRevision("docs/intro.md", "r-001", "mock-root");
+
+    expect(captured).toContain("/api/revisions/docs/intro.md");
+    expect(captured).toContain("action=restore");
+    expect(captured).toContain("id=r-001");
+    expect(captured).toContain("root=mock-root");
+    expect(res.content).toBe("# docs/intro.md\n\nrestored");
+    expect(res.sha).toBe("restored-sha");
+  });
+
+  it("restoreRevision surfaces a 404 when the revision id doesn't exist", async () => {
+    server.use(
+      http.post(`${API_BASE}/api/revisions/*`, () =>
+        HttpResponse.json({ error: "revision not found" }, { status: 404 })
+      )
+    );
+
+    await expect(restoreRevision("docs/intro.md", "r-999", "mock-root")).rejects.toThrow();
   });
 
   it("writeFile tags the save with author=human alongside root", async () => {

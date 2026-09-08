@@ -237,6 +237,22 @@ export const handlers = [
     const url = new URL(request.url);
     const path = url.pathname.replace(/^\/api\/revisions\//, "");
     const root = url.searchParams.get("root") ?? "mock-root";
+    const action = url.searchParams.get("action");
+    if (action === "restore") {
+      const id = url.searchParams.get("id");
+      if (!id) {
+        return HttpResponse.json({ error: "id is required" }, { status: 404 });
+      }
+      return HttpResponse.json({
+        path,
+        content: `# ${path}\n\nprevious content`,
+        modified: "2026-05-21T00:00:00Z",
+        created: "2026-05-19T00:00:00Z",
+        root,
+        state: "review",
+        sha: "restored-sha",
+      });
+    }
     const author = url.searchParams.get("author") ?? "human";
     return HttpResponse.json({
       path,
