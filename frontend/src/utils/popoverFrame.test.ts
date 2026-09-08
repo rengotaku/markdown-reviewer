@@ -20,45 +20,55 @@ describe("popoverFrame", () => {
     });
   });
 
-  it("opens downwards when the card fits below, even with more room above", () => {
-    // below = 1000 - 540 - 16 = 444 (fits) vs above = 504 — the roomier side
-    // is up, but the card has no reason to leave the anchor. This is what
-    // #284 got wrong.
+  it("opens downwards past the middle of the viewport, where there is more room above", () => {
+    // below = 1000 - 540 - 16 = 444, above = 504. The roomier side is up, but
+    // the card fits below and belongs next to the anchor. This is what #284
+    // got wrong.
     const frame = popoverFrame(anchor(520), VIEWPORT);
     expect(frame.placement).toBe("bottom-start");
     expect(frame.maxHeight).toBe(POPOVER_MAX_HEIGHT);
   });
 
-  it("opens downwards with exactly enough room below", () => {
-    // bottom = 544 → below = 1000 - 544 - 16 = 440
-    expect(popoverFrame(anchor(524), VIEWPORT).placement).toBe("bottom-start");
+  it("still opens downwards when the room below only fits a short card", () => {
+    // below = 1000 - 744 - 16 = 240 — exactly a usable card — vs 708 above.
+    const frame = popoverFrame(anchor(724), VIEWPORT);
+    expect(frame.placement).toBe("bottom-start");
+    expect(frame.maxHeight).toBe(POPOVER_MIN_HEIGHT);
   });
 
-  it("flips up when the card cannot fit below and there is more room above", () => {
-    // bottom = 545 → below = 439, above = 509
-    const frame = popoverFrame(anchor(525), VIEWPORT);
+  it("flips up once the room below cannot hold a usable card", () => {
+    // below = 239, above = 709
+    const frame = popoverFrame(anchor(725), VIEWPORT);
     expect(frame.placement).toBe("top-start");
     expect(frame.maxHeight).toBe(POPOVER_MAX_HEIGHT);
   });
 
-  it("stays down when neither side fits but below is roomier", () => {
-    // below = 1000 - 700 - 16 = 284, above = 100 - 16 = 84
-    const frame = popoverFrame({ top: 100, bottom: 700 }, VIEWPORT);
+  it("stays down when neither side is usable but below is roomier", () => {
+    // below = 1000 - 830 - 16 = 154, above = 130 - 16 = 114
+    const frame = popoverFrame({ top: 130, bottom: 830 }, VIEWPORT);
     expect(frame.placement).toBe("bottom-start");
-    expect(frame.maxHeight).toBe(284);
+    expect(frame.maxHeight).toBe(POPOVER_MIN_HEIGHT);
   });
 
-  it("reports the real room of the side it picked", () => {
-    // below = 284, above = 384 — neither fits, so the roomier side wins and
-    // the card is capped at what that side actually offers.
-    const frame = popoverFrame({ top: 400, bottom: 700 }, VIEWPORT);
+  it("caps the card at the room the chosen side actually offers", () => {
+    // below = 1000 - 850 - 16 = 134, above = 700 - 16 = 684 → up, capped at
+    // the ceiling rather than the full 684.
+    const frame = popoverFrame({ top: 700, bottom: 850 }, VIEWPORT);
     expect(frame.placement).toBe("top-start");
-    expect(frame.maxHeight).toBe(384);
+    expect(frame.maxHeight).toBe(POPOVER_MAX_HEIGHT);
   });
 
   it("keeps a floor under the height when both sides are cramped", () => {
     // A tall anchor filling the viewport: below = -6, above = 4.
     const frame = popoverFrame({ top: 20, bottom: 990 }, VIEWPORT);
     expect(frame.maxHeight).toBe(POPOVER_MIN_HEIGHT);
+  });
+
+  it("reports a partial ceiling between the floor and the cap", () => {
+    // below = 1000 - 700 - 16 = 284
+    expect(popoverFrame({ top: 100, bottom: 700 }, VIEWPORT)).toEqual({
+      placement: "bottom-start",
+      maxHeight: 284,
+    });
   });
 });
