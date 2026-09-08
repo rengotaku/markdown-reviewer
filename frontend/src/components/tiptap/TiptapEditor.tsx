@@ -81,6 +81,11 @@ export function TiptapEditor() {
     activeRoot ? (s.activeIdByRoot[activeRoot] ?? null) : null
   );
   const scrollToTopToken = useEditorInstance((s) => s.scrollToTopToken);
+  // #282 follow-up P1: read-only while this exact tab's content is being
+  // rewritten by an in-flight restore-to-this-version request, so a
+  // keystroke made while waiting on the response can't be silently
+  // discarded when applyExternalReload lands.
+  const restoringFileId = useEditorInstance((s) => s.restoringFileId);
   const containerRef = useRef<HTMLDivElement>(null);
   const activeReloadToken = useOpenFiles((s) => {
     const id = activeRoot ? s.activeIdByRoot[activeRoot] : null;
@@ -271,6 +276,17 @@ export function TiptapEditor() {
       editor?.destroy();
     };
   }, [editor, flushPendingMarkdown]);
+
+  // #282 follow-up P1: lock the editor read-only for exactly as long as
+  // this active tab's content is mid-restore. `restoringFileId` is set by
+  // EditorPage.handleRestoreRevision for the file it's restoring and
+  // cleared once the request settles either way; comparing against
+  // `activeId` (not a bare boolean) means switching to an unrelated file
+  // while a restore is still in flight elsewhere doesn't lock that one too.
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) return;
+    editor.setEditable(restoringFileId === null || restoringFileId !== activeId);
+  }, [editor, restoringFileId, activeId]);
 
   // Safety net for the two ways a debounced edit could otherwise be lost
   // outside of EditorPage's explicit save/tab-switch/tab-close flush calls

@@ -43,6 +43,8 @@ mr reply    <path> <id> <text> [--author NAME]           # スレッド返信（
 mr resolve  <path> <id>                                  # resolved にする
 mr reopen   <path> <id>                                  # resolved を open に戻す
 mr open     <path> [--comment ID] [--print]              # Web UI で開く（--print: URL のみ出力）
+mr revisions <path> [--json]                              # 履歴一覧（新しい順・id / 日時 / author）
+mr restore  <path> <id> [--author NAME]                   # その版へ書き戻す（既定 author=external）
 ```
 
 パスは絶対 / cwd 相対のどちらでもよい。サーバ未起動でも動作する（`mr open` の URL 出力も同様。ブラウザで開くにはサーバが必要）。

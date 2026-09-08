@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"markdown-reviewer/internal/files"
 	"markdown-reviewer/internal/reviewstore"
 )
 
@@ -198,6 +199,14 @@ type CreateRevisionResponse struct {
 // the client flushes its pending save first, so what we store is exactly what
 // the AI will read through the CLI.
 func (h *Handler) CreateRevision(c *gin.Context) {
+	// `action=restore` shares this route (POST /api/revisions/*path) rather
+	// than a separate one, per issue #282 — restore fully replaces the
+	// "current content" a plain POST would have snapshotted, so it makes
+	// sense as a variant of the same endpoint instead of a sibling.
+	if c.Query("action") == "restore" {
+		h.RestoreRevision(c)
+		return
+	}
 	full, rel, name, ok := h.resolveRequest(c)
 	if !ok {
 		return
@@ -234,4 +243,88 @@ func (h *Handler) CreateRevision(c *gin.Context) {
 		}
 	}
 	c.JSON(http.StatusOK, res)
+}
+
+// RestoreRevision handles POST /api/revisions/*path?id=<rev>&action=restore
+// (issue #282). It shares the route with CreateRevision (dispatched by
+// Routes on the `action` query param) and, like WriteFile, takes the same
+// per-path lock, does an atomic write, and records the write via
+// RecordAppWrite so the next comment read does not mistake this write for an
+// external edit.
+//
+// The response mirrors FileReadResponse (same shape PUT /api/files returns)
+// so the client can apply it the same way it applies a save response —
+// content, sha, and the (unchanged) review lifecycle state.
+func (h *Handler) RestoreRevision(c *gin.Context) {
+	full, rel, name, ok := h.resolveRequest(c)
+	if !ok {
+		return
+	}
+	id := c.Query("id")
+	if id == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "id required"})
+		return
+	}
+
+	// Same per-path lock as WriteFile: the current body is read then a new
+	// body is written back, and a concurrent PUT/restore for the same file
+	// must not interleave with this read-modify-write.
+	unlock := h.lockPath(full)
+	defer unlock()
+
+	raw, err := os.ReadFile(full)
+	if err != nil {
+		if os.IsNotExist(err) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "file not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read file"})
+		return
+	}
+
+	restored, found, err := reviewstore.Restore(name, rel, id, restoreAuthor(c), string(raw))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to restore revision"})
+		return
+	}
+	if !found {
+		c.JSON(http.StatusNotFound, gin.H{"error": "revision not found"})
+		return
+	}
+
+	if werr := atomicWrite(full, []byte(restored)); werr != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to write file"})
+		return
+	}
+	if werr := reviewstore.RecordAppWrite(name, rel, restored); werr != nil {
+		slog.Warn("recording app write failed", "root", name, "path", rel, "err", werr)
+	}
+
+	var modified, created string
+	if info, ierr := os.Stat(full); ierr == nil {
+		modified, created = fileTimes(info)
+	}
+	c.JSON(http.StatusOK, FileReadResponse{
+		Path:     rel,
+		Content:  restored,
+		Modified: modified,
+		Created:  created,
+		Root:     name,
+		State:    reviewState(name, rel),
+		Sha:      files.Sha256Hex([]byte(restored)),
+	})
+}
+
+// restoreAuthor labels the "before restore" revision Restore appends as a
+// side effect. Defaults to "human" for the same reason CreateRevision does —
+// the Web UI is the primary caller and does not send ?author, and unlike the
+// CLI it typically restores right after the user's own save, so "human" is
+// the accurate default here (contrast `mr restore`, which defaults to
+// "external" because the CLI has no way to know who last wrote the file on
+// disk).
+func restoreAuthor(c *gin.Context) string {
+	if a := c.Query("author"); a != "" {
+		return a
+	}
+	return "human"
 }

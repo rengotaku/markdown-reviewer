@@ -1,9 +1,14 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
 import Select from "@mui/material/Select";
 import MenuItem from "@mui/material/MenuItem";
 import Button from "@mui/material/Button";
+import Dialog from "@mui/material/Dialog";
+import DialogTitle from "@mui/material/DialogTitle";
+import DialogContent from "@mui/material/DialogContent";
+import DialogContentText from "@mui/material/DialogContentText";
+import DialogActions from "@mui/material/DialogActions";
 import {
   lineDiff,
   hasChanges,
@@ -31,6 +36,19 @@ interface DiffViewProps {
   selectedRevId: string | null;
   /** Called when the user picks a different baseline revision. */
   onSelectRevision: (id: string) => void;
+  /**
+   * Restores the selected baseline revision onto the canonical file (#282).
+   * DiffView never calls the API itself — restoring rewrites the document
+   * wholesale, which is squarely the managed-review write path the editor
+   * page (and its autosave/dirty bookkeeping) owns. Omit to hide the button
+   * entirely (e.g. read-only surfaces that only ever want the viewer).
+   */
+  onRestoreRevision?: (id: string) => Promise<void> | void;
+  /**
+   * True while a restore triggered from this view is in flight. Disables the
+   * restore button so a slow request can't be fired twice.
+   */
+  restoring?: boolean;
 }
 
 const rowStyles: Record<
@@ -58,11 +76,25 @@ export function DiffView({
   revisions,
   selectedRevId,
   onSelectRevision,
+  onRestoreRevision,
+  restoring = false,
 }: DiffViewProps) {
   const rows = useMemo(() => lineDiff(oldText, newText), [oldText, newText]);
   const segsByRow = useMemo(() => intraLineSegments(rows), [rows]);
   const changed = hasChanges(rows);
   const { added, removed } = useMemo(() => countChanges(rows), [rows]);
+  // Confirming inline (rather than delegating to the app-wide useConfirm
+  // queue) keeps this component a drop-in, self-contained viewer: it already
+  // owns "purely a viewer" semantics in its doc comment, and restoring is the
+  // one action serious enough to need a guard rail before it ever reaches
+  // the onRestoreRevision callback.
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const selectedRevision = revisions.find((r) => r.id === selectedRevId) ?? null;
+
+  const handleConfirmRestore = () => {
+    setConfirmOpen(false);
+    if (selectedRevId) void onRestoreRevision?.(selectedRevId);
+  };
 
   return (
     <Box
@@ -181,7 +213,57 @@ export function DiffView({
             このバージョンと現在の内容に差分はありません
           </Typography>
         )}
+
+        {onRestoreRevision && (
+          <Button
+            size="small"
+            variant="outlined"
+            color="warning"
+            data-testid="diff-btn-restore"
+            disabled={!selectedRevId || restoring}
+            onClick={() => setConfirmOpen(true)}
+            sx={{ flexShrink: 0, minWidth: "auto", ml: "auto" }}
+          >
+            この版に戻す
+          </Button>
+        )}
       </Box>
+
+      <Dialog
+        open={confirmOpen}
+        onClose={() => setConfirmOpen(false)}
+        aria-labelledby="diff-restore-dialog-title"
+        data-testid="diff-restore-dialog"
+      >
+        <DialogTitle id="diff-restore-dialog-title">この版に戻しますか？</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            {selectedRevision ? (
+              <>
+                現在の本文を、選択中のリビジョン {selectedRevision.id} ・{" "}
+                {formatLocalTimestamp(selectedRevision.ts)} ・{" "}
+                {authorLabel(selectedRevision.author)} の内容へ書き戻します。
+                <br />
+                戻す前の内容は新しいリビジョンとして残ります。
+              </>
+            ) : (
+              "戻す版が選択されていません。"
+            )}
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfirmOpen(false)}>キャンセル</Button>
+          <Button
+            onClick={handleConfirmRestore}
+            variant="contained"
+            color="warning"
+            autoFocus
+            data-testid="diff-restore-confirm"
+          >
+            戻す
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {rows.map((row, idx) => {
         const s = rowStyles[row.type];

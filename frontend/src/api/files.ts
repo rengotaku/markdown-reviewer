@@ -301,3 +301,25 @@ export async function createRevision(
     )
     .json<CreateRevisionResponse>();
 }
+
+/**
+ * restoreRevision writes the given revision's (hint-stripped) content back
+ * onto the canonical file (#282). The server snapshots what was on disk
+ * *before* the restore as a new revision first, so restoring is itself
+ * reversible and history is never lost — the response therefore has the
+ * same shape as a `PUT /api/files` write (including the fresh `sha`).
+ *
+ * 404s when `id` doesn't name an existing revision for this file.
+ */
+export async function restoreRevision(
+  path: string,
+  id: string,
+  root?: string
+): Promise<FileReadResponse> {
+  const sep = root ? "&" : "?";
+  return apiClient
+    .post(
+      `api/revisions/${encodePath(path)}${rootQuery(root, "?")}${sep}id=${encodeURIComponent(id)}&action=restore`
+    )
+    .json<FileReadResponse>();
+}

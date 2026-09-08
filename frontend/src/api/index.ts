@@ -12,6 +12,7 @@ export {
   listRevisions,
   getRevision,
   createRevision,
+  restoreRevision,
   type ConfigResponse,
   type DirEntry as DirEntryApi,
   type DirListResponse,

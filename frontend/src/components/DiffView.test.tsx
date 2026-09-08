@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { DiffView } from "./DiffView";
 import type { RevisionMeta } from "../api";
@@ -217,5 +217,112 @@ describe("DiffView – Issue #88 quick-select buttons", () => {
     );
     const btnFirst = screen.getByTestId("diff-btn-first");
     expect(btnFirst).toBeDisabled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #282: restore-to-this-version button + confirm dialog
+// ---------------------------------------------------------------------------
+
+describe("DiffView – Issue #282 restore button", () => {
+  it("does not render the restore button when onRestoreRevision is omitted", () => {
+    render(
+      <DiffView
+        oldText="old"
+        newText="new"
+        revisions={multiRevs}
+        selectedRevId="r-002"
+        onSelectRevision={vi.fn()}
+      />
+    );
+    expect(screen.queryByTestId("diff-btn-restore")).toBeNull();
+  });
+
+  it("clicking the restore button opens a confirm dialog naming the selected revision", async () => {
+    const user = userEvent.setup();
+    render(
+      <DiffView
+        oldText="old"
+        newText="new"
+        revisions={multiRevs}
+        selectedRevId="r-002"
+        onSelectRevision={vi.fn()}
+        onRestoreRevision={vi.fn()}
+      />
+    );
+    await user.click(screen.getByTestId("diff-btn-restore"));
+    const dialog = screen.getByTestId("diff-restore-dialog");
+    expect(dialog).toBeInTheDocument();
+    expect(dialog.textContent).toContain("r-002");
+    expect(dialog.textContent).toContain("外部編集");
+  });
+
+  it("canceling the confirm dialog does not call onRestoreRevision", async () => {
+    const user = userEvent.setup();
+    const onRestore = vi.fn();
+    render(
+      <DiffView
+        oldText="old"
+        newText="new"
+        revisions={multiRevs}
+        selectedRevId="r-002"
+        onSelectRevision={vi.fn()}
+        onRestoreRevision={onRestore}
+      />
+    );
+    await user.click(screen.getByTestId("diff-btn-restore"));
+    await user.click(screen.getByText("キャンセル"));
+    expect(onRestore).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(screen.queryByTestId("diff-restore-dialog")).not.toBeInTheDocument()
+    );
+  });
+
+  it("confirming the dialog calls onRestoreRevision with the selected revision id", async () => {
+    const user = userEvent.setup();
+    const onRestore = vi.fn();
+    render(
+      <DiffView
+        oldText="old"
+        newText="new"
+        revisions={multiRevs}
+        selectedRevId="r-002"
+        onSelectRevision={vi.fn()}
+        onRestoreRevision={onRestore}
+      />
+    );
+    await user.click(screen.getByTestId("diff-btn-restore"));
+    await user.click(screen.getByTestId("diff-restore-confirm"));
+    expect(onRestore).toHaveBeenCalledWith("r-002");
+    expect(onRestore).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables the restore button when no baseline revision is selected", () => {
+    render(
+      <DiffView
+        oldText="old"
+        newText="new"
+        revisions={multiRevs}
+        selectedRevId={null}
+        onSelectRevision={vi.fn()}
+        onRestoreRevision={vi.fn()}
+      />
+    );
+    expect(screen.getByTestId("diff-btn-restore")).toBeDisabled();
+  });
+
+  it("disables the restore button while a restore is in flight", () => {
+    render(
+      <DiffView
+        oldText="old"
+        newText="new"
+        revisions={multiRevs}
+        selectedRevId="r-002"
+        onSelectRevision={vi.fn()}
+        onRestoreRevision={vi.fn()}
+        restoring
+      />
+    );
+    expect(screen.getByTestId("diff-btn-restore")).toBeDisabled();
   });
 });

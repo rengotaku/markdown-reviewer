@@ -193,3 +193,88 @@ func TestRevisions_UnknownID_404(t *testing.T) {
 	rec := serve(h, httptest.NewRequest(http.MethodGet, "/api/revisions/doc.md?id=r-999", nil))
 	assert.Equal(t, http.StatusNotFound, rec.Code)
 }
+
+func TestRestoreRevision_WritesBackAndSnapshotsCurrent(t *testing.T) {
+	useTempReviewStore(t)
+	h, root := setupFilesHandler(t)
+	require.NoError(t, os.WriteFile(filepath.Join(root, "doc.md"), []byte("# v0\n"), 0o644))
+
+	// v0 becomes r-001.
+	rec := serve(h, httptest.NewRequest(http.MethodPost, "/api/revisions/doc.md", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	// Move on to v1 (current content when we restore below).
+	require.Equal(t, http.StatusOK, putFile(t, h, "# v1\n").Code)
+
+	rec = serve(h, httptest.NewRequest(http.MethodPost, "/api/revisions/doc.md?id=r-001&action=restore", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	var restored handler.FileReadResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&restored))
+	assert.Contains(t, restored.Content, "# v0\n")
+	assert.Contains(t, restored.Content, "markdown-reviewer")
+	assert.Equal(t, "review", restored.State)
+
+	// The on-disk file must actually have been overwritten.
+	rec = serve(h, httptest.NewRequest(http.MethodGet, "/api/files/doc.md", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	var read handler.FileReadResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&read))
+	assert.Contains(t, read.Content, "# v0\n")
+
+	// The pre-restore body (v1) must have been appended as a new revision —
+	// the restore is undoable.
+	rec = serve(h, httptest.NewRequest(http.MethodGet, "/api/revisions/doc.md", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	var list handler.RevisionListResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&list))
+	require.Len(t, list.Revisions, 2, "restoring must snapshot the pre-restore body")
+}
+
+func TestRestoreRevision_PreservesHintBlock(t *testing.T) {
+	useTempReviewStore(t)
+	h, root := setupFilesHandler(t)
+	require.NoError(t, os.WriteFile(filepath.Join(root, "doc.md"), []byte("# v0\n"), 0o644))
+
+	rec := serve(h, httptest.NewRequest(http.MethodPost, "/api/revisions/doc.md", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	// A save injects the AI hint block at the top of the canonical file.
+	require.Equal(t, http.StatusOK, putFile(t, h, "# v1\n").Code)
+	rec = serve(h, httptest.NewRequest(http.MethodGet, "/api/files/doc.md", nil))
+	var beforeRestore handler.FileReadResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&beforeRestore))
+	require.Contains(t, beforeRestore.Content, "markdown-reviewer", "precondition: save must inject the hint block")
+
+	rec = serve(h, httptest.NewRequest(http.MethodPost, "/api/revisions/doc.md?id=r-001&action=restore", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	var restored handler.FileReadResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&restored))
+	assert.Contains(t, restored.Content, "markdown-reviewer", "restore must keep the canonical file's hint block")
+	assert.Contains(t, restored.Content, "# v0", "restore must still contain the target revision's body")
+}
+
+func TestRestoreRevision_MissingID_400(t *testing.T) {
+	useTempReviewStore(t)
+	h, root := setupFilesHandler(t)
+	require.NoError(t, os.WriteFile(filepath.Join(root, "doc.md"), []byte("# v0\n"), 0o644))
+
+	rec := serve(h, httptest.NewRequest(http.MethodPost, "/api/revisions/doc.md?action=restore", nil))
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func TestRestoreRevision_UnknownID_404(t *testing.T) {
+	useTempReviewStore(t)
+	h, root := setupFilesHandler(t)
+	require.NoError(t, os.WriteFile(filepath.Join(root, "doc.md"), []byte("# v0\n"), 0o644))
+	require.Equal(t, http.StatusOK, serve(h, httptest.NewRequest(http.MethodPost, "/api/ingest/doc.md", nil)).Code)
+
+	rec := serve(h, httptest.NewRequest(http.MethodPost, "/api/revisions/doc.md?id=r-999&action=restore", nil))
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+func TestRestoreRevision_MissingFile_404(t *testing.T) {
+	useTempReviewStore(t)
+	h, _ := setupFilesHandler(t)
+	rec := serve(h, httptest.NewRequest(http.MethodPost, "/api/revisions/nope.md?id=r-001&action=restore", nil))
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
