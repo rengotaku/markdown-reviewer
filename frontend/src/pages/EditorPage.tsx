@@ -94,6 +94,7 @@ import {
   type HighlightComment,
 } from "@/components/tiptap/extensions/CommentHighlight";
 import { contextLabel } from "@/utils/commentContext";
+import { popoverFrame } from "@/utils/popoverFrame";
 import type {
   ComposerMode,
   ComposerSubmit,
@@ -103,24 +104,6 @@ import { BAR_HEIGHT, TAB_CONTENT_HEIGHT } from "@/theme/dimensions";
 function basename(path: string): string {
   const idx = path.lastIndexOf("/");
   return idx === -1 ? path : path.slice(idx + 1);
-}
-
-/** Which side a comment popover opens on, and how tall it may grow. Popper
- *  repositions but never shrinks a card that does not fit, so the card is told
- *  its own ceiling — an expanded thread is taller than most gaps. */
-function popoverFrame(rect: DOMRect | null): {
-  placement: "bottom-start" | "top-start";
-  maxHeight: number;
-} {
-  if (!rect) return { placement: "bottom-start", maxHeight: 0 };
-  const gap = 16;
-  const below = window.innerHeight - rect.bottom - gap;
-  const above = rect.top - gap;
-  const openDown = below >= above;
-  return {
-    placement: openDown ? "bottom-start" : "top-start",
-    maxHeight: Math.max(240, Math.min(440, openDown ? below : above)),
-  };
 }
 
 const TARGET_SNIPPET_LENGTH = 60;
