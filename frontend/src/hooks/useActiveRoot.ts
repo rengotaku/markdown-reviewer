@@ -3,6 +3,16 @@ import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { useConfig } from "@/hooks/useConfig";
 import type { ReviewRootEntry } from "@/api";
 
+/**
+ * Repeated `open=<rel>` query param naming extra files to open as background
+ * tabs alongside the path-addressed main file (#289). Root-relative, so it
+ * only makes sense for the root the URL's path segment names — `setActive`
+ * below strips it on every root switch. Owned here (not EditorPage, which
+ * only reads it) because this module is what decides which query params
+ * survive a root switch.
+ */
+export const OPEN_PARAM = "open";
+
 interface UseActiveRootResult {
   /** Name of the active root, or "" while /api/config is still loading. */
   active: string;
@@ -73,7 +83,15 @@ export function useActiveRoot(): UseActiveRootResult {
     // EditorPage's own path-sync effect already preserves it across file
     // switches, so root switches must match (#236 codex review round 2: a
     // bare string `navigate` here silently dropped it).
-    navigate({ pathname: `/${encodeURIComponent(name)}`, search: location.search });
+    //
+    // `open=` is the one exception (#289 follow-up 2): it names root-relative
+    // paths, so carrying it into a different root's URL points at files
+    // under the *new* root's paths, not the ones the user actually asked
+    // for — silently opening the wrong file(s) if they happen to exist, or
+    // erroring if they don't. Must not survive a root switch.
+    const next = new URLSearchParams(location.search);
+    next.delete(OPEN_PARAM);
+    navigate({ pathname: `/${encodeURIComponent(name)}`, search: next.toString() });
   };
 
   const activePath = roots.find((r) => r.name === active)?.path ?? "";

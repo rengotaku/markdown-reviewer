@@ -42,7 +42,7 @@ mr review   <path> [--all] [--since ID] [--unanswered]   # open コメントを�
 mr reply    <path> <id> <text> [--author NAME]           # スレッド返信（既定 author=ai）
 mr resolve  <path> <id>                                  # resolved にする
 mr reopen   <path> <id>                                  # resolved を open に戻す
-mr open     <path> [--comment ID] [--print]              # Web UI で開く（--print: URL のみ出力）
+mr open     <path> [<extra-path>...] [--comment ID] [--print]  # Web UI で開く（--print: URL のみ出力）
 mr revisions <path> [--json]                              # 履歴一覧（新しい順・id / 日時 / author）
 mr restore  <path> <id> [--author NAME]                   # その版へ書き戻す（既定 author=external）
 ```
@@ -50,6 +50,8 @@ mr restore  <path> <id> [--author NAME]                   # その版へ書き�
 パスは絶対 / cwd 相対のどちらでもよい。サーバ未起動でも動作する（`mr open` の URL 出力も同様。ブラウザで開くにはサーバが必要）。
 
 人間に「この画面を見てほしい」と伝えるときは `mr open <path> --print` の URL を貼る（deeplink を手で組まない）。特定のコメント1件を指したいときは `mr open <path> --comment <id> --print` で、そのコメントへ自動スクロールするリンクを貼れる（`id` は `mr comments <path> --json` で確認できる）。指定した `id` がそのファイルに存在しない場合はエラーになる。
+
+`<path>` の後ろに追加パスを並べると、それらを背景タブとして開いた状態の URL になる（`?open=<rel>` を繰り返し）。追加パスは `<path>` と同じルート配下であること。別ルート・ルート外のパスは警告のうえ無視され、`<path>` だけの URL になる。ルート外（anonymous スロット行き）のパスは全体で1つまで（`<path>` 自身がルート外の場合を含む）で、2つ目以降を渡すとエラーで終了する。
 
 ### コメントを API で自作するときの注意（anchor 契約）
 

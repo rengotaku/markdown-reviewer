@@ -171,6 +171,27 @@ describe("useActiveRoot", () => {
     expect(probe.dataset.pathname).toBe("/works");
   });
 
+  // #289 follow-up 2: `open=` names root-relative paths, so carrying it
+  // into a different root's URL points at that root's own paths — not the
+  // files the user actually asked for. A root-non-specific param (`filter`)
+  // must still survive alongside it being dropped.
+  it("setActive strips open= on a root switch but keeps other query params", () => {
+    const Wrapper = makeWrapper({
+      initialEntries: ["/works/main.md?open=docs/spec.md&open=docs/intro.md&filter=docs"],
+    });
+    const { getByTestId } = render(
+      <Wrapper>
+        <Probe targetRoot="rooms" />
+      </Wrapper>
+    );
+    const probe = getByTestId("probe");
+    expect(probe.dataset.search).toBe("?open=docs/spec.md&open=docs/intro.md&filter=docs");
+    act(() => probe.click());
+    expect(probe.dataset.active).toBe("rooms");
+    expect(probe.dataset.pathname).toBe("/rooms");
+    expect(probe.dataset.search).toBe("?filter=docs");
+  });
+
   it("setActive is a no-op for unknown names", () => {
     const wrapper = makeWrapper({});
     const { result } = renderHook(() => useActiveRoot(), { wrapper });
