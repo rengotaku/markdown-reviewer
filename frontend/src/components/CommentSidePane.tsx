@@ -36,6 +36,7 @@ import { markdownBodySx } from "./markdownBodySx";
 import { contextLabel } from "@/utils/commentContext";
 import { isAiAuthored } from "@/utils/commentPresentation";
 import { CommentAuthor } from "./CommentAuthor";
+import { CommentId } from "./CommentId";
 
 /** AI-authored comments/replies are read-only to the human reviewer: they can
  *  reply, resolve, and jump to them, but not edit the body or delete them. */
@@ -521,6 +522,7 @@ function CommentCard({
       }}
     >
       <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 0.5 }}>
+        <CommentId id={c.id} />
         <CommentAuthor author={c.author} date={c.date} />
         <Box sx={{ flexGrow: 1 }} />
         {badge && (
@@ -697,6 +699,7 @@ function CommentRow({
             flexShrink: 0,
           }}
         />
+        <CommentId id={c.id} />
         {badge && (
           <Chip
             label={badge.label}
@@ -1210,6 +1213,7 @@ function CommentDetailDialog({
             flexShrink: 0,
           }}
         />
+        <CommentId id={c.id} />
         {badge && (
           <Chip
             label={badge.label}
