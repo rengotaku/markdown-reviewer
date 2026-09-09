@@ -4,6 +4,7 @@ import Typography from "@mui/material/Typography";
 import type { CommentJSON } from "@/api";
 import { renderCommentMarkdown } from "@/utils/commentMarkdown";
 import { markdownBodySx } from "./markdownBodySx";
+import { CommentId } from "./CommentId";
 
 /** Lines of body kept in the preview. It exists to answer "what does this say"
  *  at a glance — a long comment is read in the thread, not here — so the clamp
@@ -30,14 +31,22 @@ export function CommentHoverPreview({ comment }: Props) {
       data-testid="comment-hover-preview"
       sx={{ width: 288, p: 1.25, cursor: "pointer" }}
     >
-      <Typography
-        variant="caption"
-        color="text.secondary"
-        sx={{ display: "block", fontWeight: 500 }}
-      >
-        {comment.author || "unknown"}
-        {comment.date ? ` · ${comment.date}` : ""}
-      </Typography>
+      <Box sx={{ display: "flex", alignItems: "center", gap: 0.75, minWidth: 0 }}>
+        <CommentId id={comment.id} />
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          sx={{
+            fontWeight: 500,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {comment.author || "unknown"}
+          {comment.date ? ` · ${comment.date}` : ""}
+        </Typography>
+      </Box>
       <Typography
         variant="body2"
         component="div"

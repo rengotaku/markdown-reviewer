@@ -10,3 +10,4 @@ export { CommentHoverPreview } from "./CommentHoverPreview";
 export { DiffView } from "./DiffView";
 export { NameTooltip } from "./NameTooltip";
 export { LinkPreviewCard } from "./LinkPreviewCard";
+export { CommentId } from "./CommentId";

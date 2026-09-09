@@ -50,6 +50,13 @@ function renderPane(props: Partial<React.ComponentProps<typeof CommentSidePane>>
 }
 
 describe("CommentSidePane", () => {
+  it("shows each comment's id so a person can match it to what the AI reported (#286)", () => {
+    renderPane({ comments: [comment("c-001"), comment("c-002")] });
+    const rows = screen.getAllByTestId("comment-item");
+    expect(within(rows[0]).getByTestId("comment-id")).toHaveTextContent("c-001");
+    expect(within(rows[1]).getByTestId("comment-id")).toHaveTextContent("c-002");
+  });
+
   it("shows a not-under-review message but keeps the add toolbar clickable to prompt ingest", async () => {
     const user = userEvent.setup();
     const handlers = renderPane({ reviewActive: false });

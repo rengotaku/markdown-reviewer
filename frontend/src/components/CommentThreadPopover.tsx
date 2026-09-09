@@ -12,6 +12,7 @@ import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import type { CommentJSON } from "@/api";
 import { renderCommentMarkdown } from "@/utils/commentMarkdown";
 import { markdownBodySx } from "./markdownBodySx";
+import { CommentId } from "./CommentId";
 
 /** How many trailing messages stay visible when a thread is collapsed. The
  *  opening remark carries the ask and the tail carries whoever you are
@@ -137,15 +138,25 @@ export function CommentThreadPopover({
         gap: 1.25,
       }}
     >
-      {contextLabel && (
-        <Typography
-          variant="caption"
-          color="text.disabled"
-          data-testid="comment-thread-context"
-        >
-          {contextLabel}
-        </Typography>
-      )}
+      {/* The id is here rather than beside each message: it names the thread,
+          not any one remark in it. Always present, unlike the context line. */}
+      <Box sx={{ display: "flex", alignItems: "center", gap: 0.75, minWidth: 0 }}>
+        <CommentId id={comment.id} />
+        {contextLabel && (
+          <Typography
+            variant="caption"
+            color="text.disabled"
+            data-testid="comment-thread-context"
+            sx={{
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {contextLabel}
+          </Typography>
+        )}
+      </Box>
 
       <Box
         sx={{
