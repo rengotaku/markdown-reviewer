@@ -10,6 +10,12 @@ export interface CommentAnchor {
   heading_path: string[] | null;
   snippet: string;
   occurrence: number;
+  // Server-computed (#287): the client never sets these. line_fingerprint
+  // backs the backend's silent-mis-anchor detection; orphan flags an anchor
+  // known to resolve to the wrong line, which resolveAnchorInBlocks
+  // (utils/pmAnchor.ts) must refuse to highlight/jump to.
+  line_fingerprint?: string;
+  orphan?: boolean;
 }
 
 export interface CommentReply {

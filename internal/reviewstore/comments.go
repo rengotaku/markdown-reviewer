@@ -42,10 +42,24 @@ var ErrReplyNotFound = errors.New("reviewstore: reply not found")
 // load the snippet is searched under heading_path; the occurrence index
 // disambiguates identical snippets. A miss yields an orphan (honest failure)
 // rather than a silent mis-anchor.
+//
+// LineFingerprint and Orphan (#287) exist because snippet+heading+occurrence
+// alone cannot detect a *silent* mis-anchor: when a snippet repeats many times
+// under the same heading (e.g. a table's "未対応" status column) and the
+// matching lines are reordered, "the Occurrence-th match" still resolves —
+// just to a different line than the one the comment was made about.
+// LineFingerprint records the markup-stripped, trimmed text of the line the
+// anchor resolved to at creation time, so reanchorOne can tell "resolves"
+// apart from "resolves to the line it originally meant". Orphan is set when
+// that check fails and no rebuilt anchor could be found either: the comment
+// must not silently point at the wrong line, so it is flagged rather than
+// left looking healthy.
 type Anchor struct {
-	Snippet     string   `json:"snippet"`
-	HeadingPath []string `json:"heading_path"`
-	Occurrence  int      `json:"occurrence"`
+	Snippet         string   `json:"snippet"`
+	LineFingerprint string   `json:"line_fingerprint,omitempty"`
+	HeadingPath     []string `json:"heading_path"`
+	Occurrence      int      `json:"occurrence"`
+	Orphan          bool     `json:"orphan,omitempty"`
 }
 
 // Reply is one threaded response under a comment.
@@ -318,6 +332,12 @@ var (
 // found / heading renamed) — the caller surfaces it as an orphan rather than
 // guessing a location.
 func ResolveAnchor(content string, a Anchor) (lineRange [2]int, ok bool) {
+	if a.Orphan {
+		// Explicitly flagged as pointing at the wrong line (#287): treat
+		// exactly like "not found" rather than resolving to a plausible but
+		// known-incorrect line.
+		return [2]int{}, false
+	}
 	if a.Snippet == "" {
 		return [2]int{}, false
 	}
@@ -342,6 +362,29 @@ func ResolveAnchor(content string, a Anchor) (lineRange [2]int, ok bool) {
 	return [2]int{}, false
 }
 
+// FingerprintAt returns the fingerprint (markup-stripped, trimmed line text)
+// of the line an anchor resolves to in content, for stamping onto
+// Anchor.LineFingerprint. ok=false means the anchor did not resolve, or the
+// line it resolved to has no stable text to fingerprint (blank / markup
+// only) — callers should leave LineFingerprint empty in that case rather
+// than record a fingerprint that can never match again.
+func FingerprintAt(content string, a Anchor) (fingerprint string, ok bool) {
+	lr, found := ResolveAnchor(content, a)
+	if !found {
+		return "", false
+	}
+	lines := strings.Split(content, "\n")
+	idx := lr[0] - 1
+	if idx < 0 || idx >= len(lines) {
+		return "", false
+	}
+	fp := strings.TrimSpace(stripInlineMarkup(lines[idx]))
+	if fp == "" {
+		return "", false
+	}
+	return fp, true
+}
+
 // ResolveAnchorForDisplay resolves like ResolveAnchor but falls back to the
 // snippet alone when the heading gate rejects every line and the snippet still
 // occurs exactly once: that line is then the only thing the anchor can mean, so
@@ -361,6 +404,16 @@ func ResolveAnchor(content string, a Anchor) (lineRange [2]int, ok bool) {
 // ResolveAnchor so a stale heading_path still counts as "needs repair" and gets
 // rewritten to disk on the next edit instead of being papered over forever.
 func ResolveAnchorForDisplay(content string, a Anchor) (anchor Anchor, lineRange [2]int, ok bool) {
+	if a.Orphan {
+		// #287: an anchor reanchorOne has explicitly flagged Orphan is known
+		// to point at the wrong line (its recorded target moved/vanished and
+		// no rebuild recovered it) — that determination must stick. Without
+		// this early return, the single-remaining-match fallback below would
+		// "recover" a plausible-looking line whenever the snippet happens to
+		// still be unique in the new body, silently undoing the Orphan flag
+		// and reviving the exact silent mis-anchor #287 fixed.
+		return a, [2]int{}, false
+	}
 	if lr, found := ResolveAnchor(content, a); found {
 		return a, lr, true
 	}

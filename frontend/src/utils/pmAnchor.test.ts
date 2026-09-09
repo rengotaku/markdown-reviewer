@@ -83,6 +83,25 @@ describe("pmAnchor", () => {
     ).toBeNull();
   });
 
+  it("refuses to resolve an anchor the backend flagged orphan (#287), even though it would otherwise match", () => {
+    const a = {
+      heading_path: ["# 認証", "## エラー"],
+      snippet: "24 時間",
+      occurrence: 0,
+      orphan: true,
+    };
+    expect(resolveAnchorInBlocks(blocks, a)).toBeNull();
+
+    // Same anchor minus the orphan flag resolves as normal, confirming the
+    // above null is caused by orphan, not by the snippet/heading/occurrence
+    // triple itself being unresolvable.
+    const healthy = { heading_path: a.heading_path, snippet: a.snippet, occurrence: a.occurrence };
+    expect(resolveAnchorInBlocks(blocks, healthy)).toEqual({
+      from: 50,
+      to: 50 + "24 時間".length,
+    });
+  });
+
   it("computeAnchorInBlocks is the inverse of resolveAnchorInBlocks", () => {
     const a = computeAnchorInBlocks(blocks, 4, "24 時間");
     expect(a.heading_path).toEqual(["# 認証", "## エラー"]);

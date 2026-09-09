@@ -61,7 +61,8 @@ func TestListComments_OutOfBandEdit_Reanchors(t *testing.T) {
 		Occurrence:  0,
 	})
 
-	// First read establishes the revision baseline; the comment resolves.
+	// The revision baseline is now established at ingest time (#287
+	// follow-up), not by this first read; the comment simply resolves.
 	resp := getComments(t, h, "doc.md")
 	require.Len(t, resp.Comments, 1)
 	require.False(t, resp.Comments[0].Orphan)
@@ -86,4 +87,53 @@ func TestListComments_OutOfBandEdit_Reanchors(t *testing.T) {
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&revs))
 	require.Len(t, revs.Revisions, 2)
 	assert.Equal(t, "external", revs.Revisions[0].Author)
+}
+
+// TestListComments_ExternalEditBeforeFirstRead_ReanchorsNonUniqueSnippet is
+// the #287 follow-up regression: the exact steps that used to swallow a
+// silent mis-anchor. Before the ingest handler snapshotted a baseline
+// revision, an edit made between ingest and the very first GET had no "old"
+// body for SyncExternalEdit's drift detection to diff against — the first
+// read adopted the already-edited body as ground truth, so a comment on a
+// non-unique snippet whose row had silently moved reported healthy at the
+// wrong (new occupant's) line instead of following its own row.
+func TestListComments_ExternalEditBeforeFirstRead_ReanchorsNonUniqueSnippet(t *testing.T) {
+	useTempReviewStore(t)
+	h, root := setupFilesHandler(t)
+	doc := filepath.Join(root, "tasks.md")
+	oldBody := "# Doc\n\n" +
+		"| No | 担当 | 状態 |\n" +
+		"|----|------|------|\n" +
+		"| 1 | A | 未対応 |\n" +
+		"| 2 | B | 未対応 |\n" +
+		"| 3 | C | 未対応 |\n"
+	require.NoError(t, os.WriteFile(doc, []byte(oldBody), 0o644))
+
+	require.Equal(t, http.StatusOK, serve(h, httptest.NewRequest(http.MethodPost, "/api/ingest/tasks.md", nil)).Code)
+
+	created := postInlineComment(t, h, "tasks.md", reviewstore.Anchor{
+		HeadingPath: []string{"# Doc"}, Snippet: "未対応", Occurrence: 0,
+	})
+	require.NotNil(t, created.Anchor)
+	assert.Equal(t, "| 1 | A | 未対応 |", created.Anchor.LineFingerprint)
+	require.NotNil(t, created.Context)
+	assert.Equal(t, [2]int{5, 5}, created.Context.LineRange)
+
+	// Rewrite the file out-of-band — no GET in between — moving A's row (the
+	// comment's target) to the end.
+	newBody := "# Doc\n\n" +
+		"| No | 担当 | 状態 |\n" +
+		"|----|------|------|\n" +
+		"| 2 | B | 未対応 |\n" +
+		"| 3 | C | 未対応 |\n" +
+		"| 1 | A | 未対応 |\n"
+	require.NoError(t, os.WriteFile(doc, []byte(newBody), 0o644))
+
+	resp := getComments(t, h, "tasks.md")
+	require.Len(t, resp.Comments, 1)
+	// The bug: this used to report orphan=false at [5,5] — B's row — instead
+	// of following A's row to its new location.
+	assert.False(t, resp.Comments[0].Orphan, "A's row still exists; must not be orphaned")
+	require.NotNil(t, resp.Comments[0].Context)
+	assert.Equal(t, [2]int{7, 7}, resp.Comments[0].Context.LineRange, "comment must follow A's row (line 7), not silently stay on B's row (line 5)")
 }
