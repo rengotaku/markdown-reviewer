@@ -201,6 +201,46 @@ func TestResolveAnchor(t *testing.T) {
 	}
 }
 
+// TestResolveAnchor_OrphanFlagShortCircuits (#287) pins down that an Anchor
+// explicitly flagged Orphan is always treated as unresolved, even when its
+// snippet/heading_path/occurrence would otherwise resolve to a real line —
+// this is what lets reanchorOne hand back a "known wrong line, do not trust
+// it" anchor and have every downstream reader (API, mr CLI, frontend) agree
+// it is an orphan.
+func TestResolveAnchor_OrphanFlagShortCircuits(t *testing.T) {
+	content := "# Title\n\nSome line of text.\n"
+	a := Anchor{Snippet: "Some line", Occurrence: 0}
+
+	if _, ok := ResolveAnchor(content, a); !ok {
+		t.Fatalf("precondition: anchor should resolve without Orphan set")
+	}
+	a.Orphan = true
+	if _, ok := ResolveAnchor(content, a); ok {
+		t.Fatalf("Orphan:true anchor must resolve to ok=false, even though snippet/heading/occurrence would otherwise match")
+	}
+}
+
+// TestFingerprintAt (#287) covers FingerprintAt's contract: it returns the
+// markup-stripped, trimmed text of the line an anchor resolves to, and
+// ok=false when the anchor itself does not resolve.
+func TestFingerprintAt(t *testing.T) {
+	content := "# Title\n\nThe **bold** fox jumps.\n\nAnother line.\n"
+	a := Anchor{HeadingPath: []string{"# Title"}, Snippet: "bold", Occurrence: 0}
+
+	fp, ok := FingerprintAt(content, a)
+	if !ok {
+		t.Fatalf("expected FingerprintAt to resolve")
+	}
+	if fp != "The bold fox jumps." {
+		t.Fatalf("want markup-stripped trimmed line text, got %q", fp)
+	}
+
+	// Unresolvable anchor: ok=false.
+	if _, ok := FingerprintAt(content, Anchor{Snippet: "存在しない"}); ok {
+		t.Fatalf("expected ok=false for an anchor that does not resolve")
+	}
+}
+
 // TestResolveAnchor_InlineMarkupInHeading guards the regression where an
 // ancestor heading containing inline markup (here a code span) orphaned a
 // comment even though nothing was edited: the frontend stored the heading_path
@@ -431,6 +471,31 @@ func TestResolveAnchorForDisplay(t *testing.T) {
 	// A snippet that is really gone stays orphaned.
 	if _, _, ok := ResolveAnchorForDisplay(content, Anchor{Snippet: "存在しない文字列"}); ok {
 		t.Fatal("expected orphan for a missing snippet")
+	}
+}
+
+// TestResolveAnchorForDisplay_OrphanFlagIsNotRecoveredByFallback (#287) is the
+// P1 regression codex caught: deleting the anchor's original target row while
+// a sibling row with the same snippet survives leaves exactly one matching
+// line in the new body — precisely the shape the single-remaining-match
+// fallback below is designed to "recover". Without the Orphan short-circuit,
+// that fallback would silently undo reanchorOne's Orphan determination and
+// resurface the #287 silent-mis-anchor bug at the read path.
+func TestResolveAnchorForDisplay_OrphanFlagIsNotRecoveredByFallback(t *testing.T) {
+	// Only one line contains "未対応" — the shape that would otherwise let
+	// the unique-match fallback "recover" a line for an orphan anchor.
+	content := "# Doc\n\n| No | 担当 | 状態 |\n|----|------|------|\n| 2 | B | 未対応 |\n"
+
+	orphaned := Anchor{
+		HeadingPath:     []string{"# Doc"},
+		Snippet:         "未対応",
+		Occurrence:      0,
+		LineFingerprint: "| 1 | A | 未対応 |", // the row this anchor used to point at
+		Orphan:          true,
+	}
+	_, _, ok := ResolveAnchorForDisplay(content, orphaned)
+	if ok {
+		t.Fatal("Orphan:true anchor must not be resolved by ResolveAnchorForDisplay, even when exactly one candidate line remains")
 	}
 }
 

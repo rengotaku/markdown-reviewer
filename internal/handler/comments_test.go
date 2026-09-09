@@ -123,6 +123,68 @@ func TestComments_CRUDLifecycle(t *testing.T) {
 	assert.Empty(t, list.Comments)
 }
 
+// TestComments_CreateStampsLineFingerprint (#287) confirms the server stamps
+// a LineFingerprint onto the stored anchor at creation time, matching the
+// markup-stripped/trimmed text of the line it resolved to. Without this,
+// reanchorOne (internal/reviewstore/reanchor.go) has no way to tell a healthy
+// resolve apart from a silent mis-anchor when the snippet repeats.
+func TestComments_CreateStampsLineFingerprint(t *testing.T) {
+	useTempReviewStore(t)
+	h, root := setupFilesHandler(t)
+	content := "# 進捗\n\n| No | 担当 | 状態 |\n|----|------|------|\n| 1 | A | 未対応 |\n| 2 | B | 未対応 |\n"
+	require.NoError(t, os.WriteFile(filepath.Join(root, "doc.md"), []byte(content), 0o644))
+	require.Equal(t, http.StatusOK, serve(h, httptest.NewRequest(http.MethodPost, "/api/ingest/doc.md", nil)).Code)
+
+	rec := postJSON(t, h, http.MethodPost, "/api/comments/doc.md", handler.CreateCommentRequest{
+		Scope: "inline", Body: "Aさんの行についてです",
+		Anchor: anchor("# 進捗", "未対応"), // Occurrence: 0 -> A's row (line 5)
+	})
+	require.Equal(t, http.StatusCreated, rec.Code)
+	var created handler.CommentJSON
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&created))
+	require.NotNil(t, created.Anchor)
+	assert.Equal(t, "| 1 | A | 未対応 |", created.Anchor.LineFingerprint)
+	assert.False(t, created.Anchor.Orphan)
+
+	// review.json on disk carries the same fingerprint (not just the
+	// in-memory response), confirming it was persisted, not just computed
+	// for display.
+	review, err := reviewstore.ReadReview("default", "doc.md")
+	require.NoError(t, err)
+	require.Len(t, review.Comments, 1)
+	require.NotNil(t, review.Comments[0].Anchor)
+	assert.Equal(t, "| 1 | A | 未対応 |", review.Comments[0].Anchor.LineFingerprint)
+}
+
+// TestComments_CreateIgnoresClientSuppliedFingerprint (#287) confirms the
+// server never trusts a client-supplied line_fingerprint/orphan: it always
+// overwrites them with its own computation, so a malicious or buggy client
+// cannot forge a healthy-looking fingerprint (or force a comment to render
+// as orphan) at creation time.
+func TestComments_CreateIgnoresClientSuppliedFingerprint(t *testing.T) {
+	useTempReviewStore(t)
+	h, root := setupFilesHandler(t)
+	content := "# Title\n\nSome real line of text.\n"
+	require.NoError(t, os.WriteFile(filepath.Join(root, "doc.md"), []byte(content), 0o644))
+	require.Equal(t, http.StatusOK, serve(h, httptest.NewRequest(http.MethodPost, "/api/ingest/doc.md", nil)).Code)
+
+	forged := anchor("# Title", "Some real line")
+	forged.LineFingerprint = "totally forged fingerprint"
+	forged.Orphan = true
+
+	rec := postJSON(t, h, http.MethodPost, "/api/comments/doc.md", handler.CreateCommentRequest{
+		Scope: "inline", Body: "x", Anchor: forged,
+	})
+	require.Equal(t, http.StatusCreated, rec.Code)
+	var created handler.CommentJSON
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&created))
+	require.NotNil(t, created.Anchor)
+	assert.Equal(t, "Some real line of text.", created.Anchor.LineFingerprint)
+	assert.False(t, created.Anchor.Orphan)
+	// And it actually resolves, since the forged Orphan flag was discarded.
+	require.NotNil(t, created.Context)
+}
+
 func TestReplies_EditAndDeleteByIndex(t *testing.T) {
 	useTempReviewStore(t)
 	h, root := setupFilesHandler(t)

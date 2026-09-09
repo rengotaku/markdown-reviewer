@@ -54,6 +54,18 @@ func (h *Handler) IngestFile(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to ingest"})
 		return
 	}
+	// Snapshot the current body as the baseline revision (#287 follow-up):
+	// without it, an edit made before the first GET has no "old" body to
+	// diff against, so a comment anchored right after ingest can silently
+	// mis-anchor and never get caught. Best-effort — a failure here must not
+	// fail ingest itself, only be logged.
+	if raw, rerr := os.ReadFile(full); rerr == nil {
+		if serr := reviewstore.SnapshotIngestBaseline(name, rel, string(raw)); serr != nil {
+			slog.Warn("ingest baseline snapshot failed", "root", name, "path", rel, "err", serr)
+		}
+	} else {
+		slog.Warn("ingest baseline snapshot: failed to read canonical file", "root", name, "path", rel, "err", rerr)
+	}
 	c.JSON(http.StatusOK, IngestResponse{Path: rel, Root: name, State: "review"})
 }
 

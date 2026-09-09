@@ -62,6 +62,51 @@ func TestIngest_TransitionsToReview(t *testing.T) {
 	assert.Equal(t, "review", read.State)
 }
 
+// TestIngest_SnapshotsBaselineRevision is the #287 follow-up: ingest must
+// snapshot the current canonical body as a baseline revision immediately, not
+// wait for the first read. Without a baseline, an edit made between ingest
+// and the first GET has no "old" body to diff against, so a comment anchored
+// right after ingest can silently mis-anchor with nothing catching it (see
+// TestListComments_ExternalEditBeforeFirstRead_ReanchorsNonUniqueSnippet).
+func TestIngest_SnapshotsBaselineRevision(t *testing.T) {
+	useTempReviewStore(t)
+	h, root := setupFilesHandler(t)
+	require.NoError(t, os.WriteFile(filepath.Join(root, "doc.md"), []byte("# hello\n"), 0o644))
+
+	require.Equal(t, http.StatusOK, serve(h, httptest.NewRequest(http.MethodPost, "/api/ingest/doc.md", nil)).Code)
+
+	rec := serve(h, httptest.NewRequest(http.MethodGet, "/api/revisions/doc.md", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	var list handler.RevisionListResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&list))
+	require.Len(t, list.Revisions, 1, "ingest should snapshot exactly one baseline revision")
+
+	rec = serve(h, httptest.NewRequest(http.MethodGet, "/api/revisions/doc.md?id="+list.Revisions[0].ID, nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	var rev handler.RevisionResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&rev))
+	assert.Equal(t, "# hello\n", rev.Content)
+}
+
+// TestIngest_ReIngestDoesNotDuplicateBaseline confirms re-ingesting an
+// already-managed file (Ingest is documented as idempotent) does not grow
+// revision history: the baseline is only meaningful once, at first ingest.
+func TestIngest_ReIngestDoesNotDuplicateBaseline(t *testing.T) {
+	useTempReviewStore(t)
+	h, root := setupFilesHandler(t)
+	require.NoError(t, os.WriteFile(filepath.Join(root, "doc.md"), []byte("# hello\n"), 0o644))
+
+	require.Equal(t, http.StatusOK, serve(h, httptest.NewRequest(http.MethodPost, "/api/ingest/doc.md", nil)).Code)
+	require.Equal(t, http.StatusOK, serve(h, httptest.NewRequest(http.MethodPost, "/api/ingest/doc.md", nil)).Code)
+	require.Equal(t, http.StatusOK, serve(h, httptest.NewRequest(http.MethodPost, "/api/ingest/doc.md", nil)).Code)
+
+	rec := serve(h, httptest.NewRequest(http.MethodGet, "/api/revisions/doc.md", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	var list handler.RevisionListResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&list))
+	assert.Len(t, list.Revisions, 1, "re-ingesting an already-managed file must not duplicate the baseline revision")
+}
+
 func TestIngest_MissingFile_404(t *testing.T) {
 	useTempReviewStore(t)
 	h, _ := setupFilesHandler(t)
@@ -98,17 +143,27 @@ func TestRevisions_SavesNeverSnapshot(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(root, "doc.md"), []byte("# v0\n"), 0o644))
 	require.Equal(t, http.StatusOK, serve(h, httptest.NewRequest(http.MethodPost, "/api/ingest/doc.md", nil)).Code)
 
+	// #287 follow-up: explicit ingest now snapshots exactly one baseline
+	// revision (see TestIngest_SnapshotsBaselineRevision), so the list is no
+	// longer empty right after ingest — but the point of this test (saves
+	// never accrue history) still holds: it must not grow past that one.
+	rec := serve(h, httptest.NewRequest(http.MethodGet, "/api/revisions/doc.md", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	var afterIngest handler.RevisionListResponse
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&afterIngest))
+	require.Len(t, afterIngest.Revisions, 1, "ingest should snapshot exactly one baseline revision")
+
 	// Stand in for autosave: many writes in a row, none of which may create a
 	// revision. Before #280 this produced one revision per save.
 	for _, body := range []string{"# v1\n", "# v2\n", "# v3\n"} {
 		require.Equal(t, http.StatusOK, putFile(t, h, body).Code)
 	}
 
-	rec := serve(h, httptest.NewRequest(http.MethodGet, "/api/revisions/doc.md", nil))
+	rec = serve(h, httptest.NewRequest(http.MethodGet, "/api/revisions/doc.md", nil))
 	require.Equal(t, http.StatusOK, rec.Code)
 	var list handler.RevisionListResponse
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&list))
-	assert.Empty(t, list.Revisions)
+	assert.Len(t, list.Revisions, 1, "saves must not accrue additional revision history beyond the ingest baseline")
 }
 
 func TestCreateRevision_SnapshotsCurrentContent(t *testing.T) {

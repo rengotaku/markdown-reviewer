@@ -88,3 +88,45 @@ func SyncExternalEdit(root, relPath, rawContent string) (synced bool, err error)
 // externalAuthor labels revisions snapshotted from out-of-band edits, where
 // the actual author (AI via a file tool, human via a text editor) is unknown.
 const externalAuthor = "external"
+
+// SnapshotIngestBaseline records rawContent as the ingested file's first
+// revision, when it does not already have history.
+//
+// Without this, an edit made between Ingest and the first GET is invisible
+// to SyncExternalEdit's drift detection (#287 follow-up): its
+// len(revs)==0 branch treats whichever body the *first* read happens to see
+// as the retroactive baseline, so a comment anchored just after ingest whose
+// target line was silently moved by that edit is never re-anchored — there
+// is no "old" snapshot left to diff the edit against, so the very drift the
+// read path exists to detect is invisible. Concretely: ingest → comment
+// anchored to line 5 → file rewritten with that line moved to line 7,
+// without any GET in between → the first GET afterwards adopts the rewritten
+// body as ground truth and reports the comment still healthy at line 5's
+// new (wrong) occupant.
+//
+// This is a best-effort snapshot: a failure here must not fail Ingest, so
+// callers should log and continue rather than propagate the error to the
+// client. A file that already has history — including a second Ingest of an
+// already-managed file — is left untouched: baselining is only meaningful
+// once, at the very first ingest, and skipping the call entirely (rather
+// than relying solely on AppendRevision's sha dedupe) also means a repeat
+// ingest never even risks growing history.
+//
+// author is externalAuthor, the same label SyncExternalEdit uses for its own
+// snapshots: a baseline, like an out-of-band edit snapshot, is not
+// attributable to a specific save action.
+func SnapshotIngestBaseline(root, relPath, rawContent string) error {
+	dir, err := EntryDir(root, relPath)
+	if err != nil {
+		return err
+	}
+	revs, err := readRevisions(filepath.Join(dir, historyFile))
+	if err != nil {
+		return err
+	}
+	if len(revs) > 0 {
+		return nil // already has history; nothing to baseline
+	}
+	_, _, err = AppendRevision(root, relPath, externalAuthor, StripAIHint(rawContent))
+	return err
+}

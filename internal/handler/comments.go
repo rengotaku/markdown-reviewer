@@ -187,6 +187,20 @@ func (h *Handler) CreateComment(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "scope and body are required"})
 		return
 	}
+	// Stamp a line fingerprint on each incoming anchor (#287) so a later
+	// reanchor can tell "still resolves" apart from "silently resolves to a
+	// different line". This is a best-effort optimization, not a
+	// requirement: if the canonical body cannot be read here, comments still
+	// get created with no fingerprint (fail-open), same as pre-#287
+	// behavior. Any client-supplied line_fingerprint/orphan is discarded —
+	// the server always computes its own, never trusts the caller's.
+	if content, rerr := os.ReadFile(full); rerr == nil {
+		body := string(content)
+		stampFingerprint(body, req.Anchor)
+		for i := range req.Anchors {
+			stampFingerprint(body, &req.Anchors[i])
+		}
+	}
 	created, err := reviewstore.AddComment(name, rel, reviewstore.Comment{
 		Scope: req.Scope, GroupID: req.GroupID, Author: req.Author,
 		Date: req.Date, Body: req.Body, Anchor: req.Anchor, Anchors: req.Anchors,
@@ -197,6 +211,23 @@ func (h *Handler) CreateComment(c *gin.Context) {
 	}
 	content, _ := os.ReadFile(full)
 	c.JSON(http.StatusCreated, buildCommentJSON(string(content), created))
+}
+
+// stampFingerprint sets a's LineFingerprint from the line it resolves to in
+// content, always overwriting whatever the client sent (Orphan is likewise
+// reset to false: a freshly created anchor is never orphan). a may be nil
+// (unset Anchor field) or fail to resolve (already an orphan at creation
+// time) — both leave LineFingerprint empty, matching pre-#287 behavior.
+func stampFingerprint(content string, a *reviewstore.Anchor) {
+	if a == nil {
+		return
+	}
+	a.Orphan = false
+	if fp, ok := reviewstore.FingerprintAt(content, *a); ok {
+		a.LineFingerprint = fp
+	} else {
+		a.LineFingerprint = ""
+	}
 }
 
 // UpdateRequest is the body for PATCH /api/comments/*path?id=... Either field

@@ -20,6 +20,14 @@ export interface PmAnchor {
   heading_path: string[] | null;
   snippet: string;
   occurrence: number;
+  // line_fingerprint / orphan (#287): server-computed fields the backend
+  // uses to detect a silent mis-anchor (a non-unique snippet resolving to a
+  // line other than the one the comment was made about) when reanchoring.
+  // The editor never sets or reasons about line_fingerprint itself — it only
+  // has to honor orphan: true by refusing to resolve, so it never highlights
+  // / jumps to a line the backend has already determined is the wrong one.
+  line_fingerprint?: string;
+  orphan?: boolean;
 }
 
 /**
@@ -112,6 +120,13 @@ export function resolveAnchorInBlocks(
   blocks: ReadonlyArray<AnchorBlock>,
   anchor: PmAnchor
 ): { from: number; to: number } | null {
+  // #287: the backend flags an anchor Orphan when it resolves under the
+  // snippet/heading/occurrence rule but to a line it has determined is not
+  // the one the comment was originally about (a silent move it could not
+  // recover from). Resolving it here anyway — even though these same rules
+  // would find a match — would highlight/jump to that same known-wrong
+  // line, so honor the flag and refuse up front.
+  if (anchor.orphan) return null;
   if (!anchor.snippet) return null;
 
   const headingPath = anchor.heading_path ?? [];
