@@ -1,6 +1,7 @@
 import { Extension } from "@tiptap/core";
 import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
 import type { BlankLinePayload } from "@/utils/blankLines";
+import { PROGRAMMATIC_TRANSACTION_META } from "../programmaticTransaction";
 
 // BlankLines materializes the blank lines that separated a Markdown block
 // from the previous one as real, empty paragraph nodes in the ProseMirror
@@ -85,6 +86,9 @@ export const BlankLines = Extension.create({
 
           // Loading a file shouldn't create an undo step for this.
           tr.setMeta("addToHistory", false);
+          // Not a user edit (#293) — this recreates blank lines the loaded
+          // file already had, right after setContent.
+          tr.setMeta(PROGRAMMATIC_TRANSACTION_META, true);
           if (dispatch) dispatch(tr);
           return true;
         },

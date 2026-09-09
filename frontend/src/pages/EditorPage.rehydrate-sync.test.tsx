@@ -56,6 +56,7 @@ function makeOpenFile(
     markdown: "# stale buffer",
     savedMarkdown: "# stale buffer",
     isDirty: false,
+    userEdited: false,
     reloadToken: 0,
     serverModified: "2026-05-20T00:00:00Z",
     serverCreated: "2026-05-19T00:00:00Z",

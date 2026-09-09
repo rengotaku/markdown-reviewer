@@ -35,6 +35,7 @@ import { IndentKeymap } from "./extensions/IndentKeymap";
 import { LinkPreviewCard } from "../LinkPreviewCard";
 import { LinkHoverGuard } from "./linkHoverGuard";
 import { getEditorMarkdown } from "./markdownSerialize";
+import { PROGRAMMATIC_TRANSACTION_META } from "./programmaticTransaction";
 import { computeBlankLines } from "@/utils/blankLines";
 import "./styles/editor.css";
 
@@ -145,14 +146,6 @@ export function TiptapEditor() {
   }, []);
 
   /**
-   * Timestamp (ms) until which onUpdate should be ignored. setContent's
-   * `emitUpdate: false` only suppresses the direct dispatch; extensions like
-   * autolink fire follow-up transactions via appendTransaction that re-emit
-   * onUpdate. Without this settle window, the post-load extension passes mark
-   * the freshly-opened file dirty even though the user didn't edit. Issue #20.
-   */
-  const settleUntilRef = useRef(0);
-  /**
    * Latest `activeRoot`, mirrored into a ref so the debounced flush (fired
    * from a setTimeout, or invoked by EditorPage well after this render)
    * always targets the file that was actually being edited rather than a
@@ -209,17 +202,39 @@ export function TiptapEditor() {
     ],
     content: "",
     editable: true,
-    onUpdate: ({ editor: ed }) => {
+    onUpdate: ({ editor: ed, transaction, appendedTransactions }) => {
       if (!activeRoot) return;
       if (!useOpenFiles.getState().activeIdByRoot[activeRoot]) return;
-      // Drop updates fired by post-setContent extension transactions
-      // (e.g. autolink) so an untouched file isn't flagged dirty.
-      if (Date.now() < settleUntilRef.current) return;
+      // A genuine user edit is any transaction that actually changed the
+      // document and isn't one WE dispatched ourselves (#293). This is
+      // deliberately the inverse of an earlier version of this fix, which
+      // enumerated the DOM events / commands that count as "the user
+      // edited" — codex review found three input paths (first paste, a
+      // task-item checkbox, StarterKit's built-in keymap) that bypassed
+      // that list and silently lost the edit. Checking `docChanged`
+      // instead covers every current and future input path automatically;
+      // the only thing that has to stay accurate is the (small, grep-able)
+      // set of places that mark their own transactions as programmatic —
+      // see programmaticTransaction.ts.
+      //
+      // `transaction` (the root tr for this dispatch) is checked directly;
+      // `appendedTransactions` covers extensions' appendTransaction passes
+      // (e.g. autolink) riding along on the same dispatch.
+      const isGenuineEdit = (tr: typeof transaction) =>
+        tr.docChanged && !tr.getMeta(PROGRAMMATIC_TRANSACTION_META);
+      if (!isGenuineEdit(transaction) && !appendedTransactions.some(isGenuineEdit)) {
+        return;
+      }
       // isDirty must react on every keystroke (unsaved dot, discard-changes
       // confirm) — only the expensive Markdown resync below is debounced
       // (#265). No-ops once already dirty, so this doesn't add a
       // store update (and re-render) per keystroke beyond the first.
       useOpenFiles.getState().markActiveDirty(activeRoot);
+      // Layer 2 (EditorPage's autosave) checks this independently of
+      // `isDirty` (#293) — set alongside it, from the same genuine-edit
+      // determination above, not from a separately maintained flag.
+      const editedId = useOpenFiles.getState().activeIdByRoot[activeRoot];
+      if (editedId) useOpenFiles.getState().markFileUserEdited(editedId);
       if (pendingSyncTimeoutRef.current !== null) {
         clearTimeout(pendingSyncTimeoutRef.current);
       }
@@ -285,7 +300,13 @@ export function TiptapEditor() {
   // while a restore is still in flight elsewhere doesn't lock that one too.
   useEffect(() => {
     if (!editor || editor.isDestroyed) return;
-    editor.setEditable(restoringFileId === null || restoringFileId !== activeId);
+    // Toggling read-only doesn't change the document (docChanged: false),
+    // so the onUpdate gate above already ignores it — emitUpdate: false is
+    // still passed to avoid the unconditional "update" emission entirely
+    // (#293: editor.setEditable() otherwise emits "update" regardless of
+    // whether the doc changed, which used to slip past the old, narrower
+    // gate before this fix).
+    editor.setEditable(restoringFileId === null || restoringFileId !== activeId, false);
   }, [editor, restoringFileId, activeId]);
 
   // Safety net for the two ways a debounced edit could otherwise be lost
@@ -328,21 +349,19 @@ export function TiptapEditor() {
       // emitUpdate: false → don't fire onUpdate for the programmatic load.
       // TipTap's Markdown roundtrip can produce a slightly normalized string
       // (e.g. trailing newline tweaks) which would otherwise set isDirty=true
-      // immediately after opening a freshly-loaded file. See issue #20.
+      // immediately after opening a freshly-loaded file. See issue #20. Its
+      // own `preventUpdate` meta suppresses "update" entirely (checked on
+      // the root transaction, ahead of onUpdate's docChanged gate above),
+      // so any appended transaction riding along on this same dispatch
+      // (autolink, etc.) is suppressed too.
       editor.commands.setContent(body, { emitUpdate: false });
-      // Open the settle window *before* any further programmatic
-      // transactions, not after. setBlankLinesBefore below dispatches
-      // synchronously, which runs onUpdate synchronously too — if the
-      // window were opened after that call (as it originally was), onUpdate
-      // would read the *previous* load's now-expired settleUntilRef, slip
-      // past the suppression, and mark a freshly-opened file dirty (#259
-      // regression of the #20 fix). Same reasoning applies to any other
-      // post-setContent extension transaction (autolink, etc.).
-      settleUntilRef.current = Date.now() + 250;
       // Push the blank-line counts markdown-it saw in `body` onto the
-      // freshly loaded doc's top-level blocks (#259) — an attribute-only,
-      // addToHistory:false transaction (BlankLines.ts), so it rides along
-      // in the settle window opened above, same as setContent itself.
+      // freshly loaded doc's top-level blocks (#259) — this dispatches as
+      // its own transaction (not part of setContent's suppressed batch)
+      // and *does* change the document (it inserts empty paragraphs), so
+      // it marks itself programmatic via PROGRAMMATIC_TRANSACTION_META
+      // (see BlankLines.ts) rather than relying on a time window to be
+      // ignored by onUpdate's gate (#293).
       editor.commands.setBlankLinesBefore(computeBlankLines(body));
     }
   }, [editor, activeId, activeReloadToken]);

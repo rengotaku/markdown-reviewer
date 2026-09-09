@@ -330,6 +330,7 @@ describe("EditorPage restore-to-this-version (#282)", () => {
       useOpenFiles
         .getState()
         .updateActiveMarkdown(DEFAULT_ROOT, "# README.md\n\nunsaved buffer\n");
+      useOpenFiles.getState().markFileUserEdited(id!);
     });
     expect(useOpenFiles.getState().files.find((f) => f.id === id)?.isDirty).toBe(true);
 
@@ -425,6 +426,7 @@ describe("EditorPage restore-to-this-version (#282)", () => {
       useOpenFiles
         .getState()
         .updateActiveMarkdown(DEFAULT_ROOT, "# README.md\n\nunsaved buffer\n");
+      useOpenFiles.getState().markFileUserEdited(id!);
     });
 
     await user.click(screen.getByTestId("diff-btn-restore"));
