@@ -14,6 +14,22 @@ export interface OpenFile {
   /** The last persisted ("clean") markdown — what `markdown` reverts to on discard. */
   savedMarkdown: string;
   isDirty: boolean;
+  /**
+   * Whether the user has actually edited this file's buffer since it was
+   * last loaded from disk (#293). Distinct from `isDirty`: `isDirty` is
+   * `markdown !== savedMarkdown`, which a bug elsewhere (a programmatic
+   * transaction that slips past the editor's onUpdate gate, a stray
+   * `updateActiveMarkdown` call) could set without the user typing a single
+   * character. Autosave additionally requires `userEdited` before writing
+   * — see EditorPage's `autosave` — so a phantom dirty flag never reaches
+   * disk. Reset to false at every point the buffer is freshly loaded from
+   * disk (open, external reload, discard) and set true only by
+   * `markFileUserEdited`, called from the one place a genuine user edit is
+   * detected: TiptapEditor's onUpdate, when the dispatched transaction
+   * actually changed the document and isn't one the app itself dispatched
+   * (see `src/components/tiptap/programmaticTransaction.ts`).
+   */
+  userEdited: boolean;
   reloadToken: number;
   /**
    * sha256 hex the server last reported for this file's on-disk content
@@ -79,6 +95,10 @@ interface OpenFilesState {
   addFiles: (incoming: IncomingFile[]) => void;
   overwriteFiles: (root: string, incoming: IncomingFile[]) => void;
   updateActiveMarkdown: (root: string, markdown: string) => void;
+  /** Record that the user has genuinely edited `id`'s buffer (#293). See
+   *  `OpenFile.userEdited` for why this is tracked separately from
+   *  `isDirty`. No-op once already true. */
+  markFileUserEdited: (id: string) => void;
   /**
    * Mark the active file dirty without touching `markdown` (#265). The
    * editor's full-document Markdown resync is debounced for perf on large
@@ -199,6 +219,7 @@ export const useOpenFiles = create<OpenFilesState>()((set) => ({
             markdown: item.markdown,
             savedMarkdown: item.markdown,
             isDirty: false,
+            userEdited: false,
             reloadToken: 0,
             serverSha: item.sha,
             serverModified: item.modified ?? "",
@@ -225,6 +246,7 @@ export const useOpenFiles = create<OpenFilesState>()((set) => ({
               markdown: item.markdown,
               savedMarkdown: item.markdown,
               isDirty: false,
+              userEdited: false,
               reloadToken: file.reloadToken + 1,
               serverModified: item.modified ?? file.serverModified,
               serverCreated: item.created ?? file.serverCreated,
@@ -253,6 +275,17 @@ export const useOpenFiles = create<OpenFilesState>()((set) => ({
               : file
           );
           return { files };
+        }),
+
+      markFileUserEdited: (id) =>
+        set((state) => {
+          const file = state.files.find((f) => f.id === id);
+          if (!file || file.userEdited) return state;
+          return {
+            files: state.files.map((f) =>
+              f.id === id ? { ...f, userEdited: true } : f
+            ),
+          };
         }),
 
       markActiveDirty: (root) =>
@@ -391,6 +424,7 @@ export const useOpenFiles = create<OpenFilesState>()((set) => ({
             markdown: incoming.markdown,
             savedMarkdown: incoming.markdown,
             isDirty: false,
+            userEdited: false,
             reloadToken: 0,
             serverSha: incoming.sha,
             serverModified: incoming.modified ?? "",
@@ -462,6 +496,7 @@ export const useOpenFiles = create<OpenFilesState>()((set) => ({
                     ...file,
                     markdown: file.savedMarkdown,
                     isDirty: false,
+                    userEdited: false,
                     reloadToken: file.reloadToken + 1,
                   }
                 : file
@@ -480,6 +515,7 @@ export const useOpenFiles = create<OpenFilesState>()((set) => ({
                     markdown,
                     savedMarkdown: markdown,
                     isDirty: false,
+                    userEdited: false,
                     reloadToken: file.reloadToken + 1,
                     serverModified: modified,
                     serverCreated: created ?? file.serverCreated,

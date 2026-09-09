@@ -46,10 +46,11 @@ async function openDirtyReadme(user: ReturnType<typeof userEvent.setup>) {
   await waitFor(() =>
     expect(screen.getByTestId("editor-active-path")).toHaveTextContent("README.md")
   );
+  const id = useOpenFiles.getState().activeIdByRoot[DEFAULT_ROOT];
   act(() => {
     useOpenFiles.getState().updateActiveMarkdown(DEFAULT_ROOT, "# edited\n");
+    if (id) useOpenFiles.getState().markFileUserEdited(id);
   });
-  const id = useOpenFiles.getState().activeIdByRoot[DEFAULT_ROOT];
   expect(useOpenFiles.getState().files.find((f) => f.id === id)?.isDirty).toBe(true);
   return id;
 }
@@ -107,6 +108,57 @@ describe("EditorPage autosave (#280)", () => {
       expect(file?.savedMarkdown).toBe("# edited\n");
       expect(file?.serverSha).toBe("sha-after-autosave");
     });
+  });
+
+  // #293 layer 2: a fail-closed backstop independent of whatever set
+  // `isDirty` in the first place. Simulates the exact shape a leak in the
+  // onUpdate gate would produce — dirty, but never actually user-edited —
+  // without going through TiptapEditor (mocked out in this file) at all.
+  it("never writes a buffer to disk that isDirty but the user never actually edited", async () => {
+    const puts: string[] = [];
+    server.use(
+      http.put(`${API_BASE}/api/files/*`, async ({ request }) => {
+        const body = (await request.json()) as { content: string };
+        puts.push(body.content);
+        return HttpResponse.json({
+          path: "README.md",
+          root: DEFAULT_ROOT,
+          state: "review",
+          modified: "2026-05-20T00:00:00Z",
+          created: "2026-05-01T00:00:00Z",
+          sha: "should-never-be-seen",
+        });
+      })
+    );
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    renderPage();
+    await user.click(await screen.findByTestId("sidebar-file-README.md"));
+    await waitFor(() =>
+      expect(screen.getByTestId("editor-active-path")).toHaveTextContent("README.md")
+    );
+    const id = useOpenFiles.getState().activeIdByRoot[DEFAULT_ROOT]!;
+    // Force the exact "dirty but not user-edited" state directly, bypassing
+    // markActiveDirty/markFileUserEdited entirely — a stand-in for whatever
+    // future bug might set isDirty without ever calling markFileUserEdited.
+    act(() => {
+      useOpenFiles.setState((state) => ({
+        files: state.files.map((f) =>
+          f.id === id ? { ...f, markdown: "# corrupted\n", isDirty: true } : f
+        ),
+      }));
+    });
+    expect(useOpenFiles.getState().files.find((f) => f.id === id)?.userEdited).toBe(false);
+
+    elapseIdle();
+    // Give any in-flight request a chance to land before asserting silence.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(puts).toEqual([]);
+    const file = useOpenFiles.getState().files.find((f) => f.id === id);
+    expect(file?.isDirty).toBe(true);
+    expect(file?.markdown).toBe("# corrupted\n");
   });
 
   it("keeps the buffer dirty and only warns when the file changed outside the editor", async () => {

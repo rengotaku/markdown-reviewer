@@ -329,6 +329,7 @@ describe("EditorPage", () => {
       expect(active).toBeDefined();
     });
     useOpenFiles.getState().updateActiveMarkdown("mock-root", "edited content");
+    useOpenFiles.getState().markFileUserEdited(useOpenFiles.getState().activeIdByRoot["mock-root"]!);
 
     // Expand docs/ and switch to a different file
     await user.click(screen.getByTestId("sidebar-dir-docs"));
@@ -368,6 +369,7 @@ describe("EditorPage", () => {
     );
 
     useOpenFiles.getState().updateActiveMarkdown("mock-root", "new content");
+    useOpenFiles.getState().markFileUserEdited(useOpenFiles.getState().activeIdByRoot["mock-root"]!);
     expect(
       useOpenFiles
         .getState()
@@ -1434,6 +1436,7 @@ describe("EditorPage", () => {
       expect(screen.getByTestId("editor-active-path")).toHaveTextContent("README.md")
     );
     useOpenFiles.getState().updateActiveMarkdown("mock-root", "edited");
+    useOpenFiles.getState().markFileUserEdited(useOpenFiles.getState().activeIdByRoot["mock-root"]!);
 
     await user.click(screen.getByTestId("editor-save"));
     await waitFor(() => {

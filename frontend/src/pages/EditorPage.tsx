@@ -431,6 +431,13 @@ export function EditorPage() {
     const file = useOpenFiles.getState().files.find((f) => f.id === fileId);
     if (!file) return false;
     if (!file.isDirty) return true;
+    // Fail-closed backstop (#293), independent of the onUpdate gate that
+    // sets `isDirty` in the first place: never write a buffer to disk that
+    // the user never actually typed/pasted/toolbar-edited into, even if
+    // some other bug left it dirty. Nothing was lost — the buffer just
+    // never diverged from the user's intent — so this is reported as
+    // "already clean" rather than a failure.
+    if (!file.userEdited) return true;
     if (autosaveInFlight.current.has(fileId)) return false;
     // An un-reconciled external change means there is no baseline we can
     // honestly claim to be building on. Overwriting it is a decision, so leave
