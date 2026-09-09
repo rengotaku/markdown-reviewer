@@ -11,7 +11,7 @@
 //	mr reply    <path> <id> <text> [--author NAME]   add a threaded reply
 //	mr resolve  <path> <id>       mark a comment resolved
 //	mr reopen   <path> <id>       reopen a resolved comment
-//	mr open     <path> [--comment ID] [--print]  open the file in the web UI
+//	mr open     <path> [<extra-path>...] [--comment ID] [--print]  open the file in the web UI
 //	mr revisions <path> [--json]  list revision history, newest first
 //	mr restore  <path> <id> [--author NAME]  restore the canonical body to
 //	                                          revision id (default author "external")
@@ -88,13 +88,18 @@ Usage:
   mr reply    <path> <id> <text> [--author NAME]
   mr resolve  <path> <id>              mark a comment resolved
   mr reopen   <path> <id>              reopen a resolved comment
-  mr open     <path> [--comment ID] [--print]  open the file in the web UI (--print: URL only)
+  mr open     <path> [<extra-path>...] [--comment ID] [--print]  open the file in the web UI (--print: URL only)
   mr revisions <path> [--json]         list revision history, newest first
   mr restore  <path> <id> [--author NAME]  restore the canonical body to revision id (default author "external")
 
 <path> is absolute or relative to cwd, normally under a configured root.
 A path outside every root is registered as a one-off review by "mr open"; the
 other subcommands then work on it while it is the file that slot holds.
+"mr open" accepts extra paths after <path>: they open as background tabs
+alongside <path> via repeated ?open= params. Extras must share <path>'s root;
+a mismatched or unresolvable extra is dropped with a warning, and at most one
+positional argument total may sit outside every configured root (the one-off
+slot only holds one file).
 --since ID: only comments after ID (e.g. --since c-008).
 --unanswered: only comments whose latest activity is not from the AI.
 `)

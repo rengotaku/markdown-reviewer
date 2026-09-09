@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,15 +19,39 @@ import (
 func noPlist() (string, error) { return "", errors.New("no plist") }
 
 func TestDeeplink(t *testing.T) {
-	got := deeplink("http://localhost:15174", "works", "2608041155/phases/phase0/draft.md", "")
+	got := deeplink("http://localhost:15174", "works", "2608041155/phases/phase0/draft.md", "", nil)
 	want := "http://localhost:15174/works/2608041155%2Fphases%2Fphase0%2Fdraft.md"
 	if got != want {
 		t.Errorf("deeplink() = %q, want %q", got, want)
 	}
 }
 
+func TestDeeplink_WithOpenParams(t *testing.T) {
+	got := deeplink("http://localhost:15174", "works", "main.md", "", []string{"a.md", "b.md"})
+	want := "http://localhost:15174/works/main.md?open=a.md&open=b.md"
+	if got != want {
+		t.Errorf("deeplink() = %q, want %q", got, want)
+	}
+}
+
+func TestDeeplink_OpenParamsWithComment(t *testing.T) {
+	got := deeplink("http://localhost:15174", "works", "main.md", "c-001", []string{"a.md", "b.md"})
+	want := "http://localhost:15174/works/main.md?comment_id=c-001&open=a.md&open=b.md"
+	if got != want {
+		t.Errorf("deeplink() = %q, want %q", got, want)
+	}
+}
+
+func TestDeeplink_OpenParamsEscapeSpacesAndMultibyte(t *testing.T) {
+	got := deeplink("http://localhost:15174", "works", "main.md", "", []string{"日本語/note v2.md"})
+	want := "http://localhost:15174/works/main.md?open=" + url.QueryEscape("日本語/note v2.md")
+	if got != want {
+		t.Errorf("deeplink() = %q, want %q", got, want)
+	}
+}
+
 func TestDeeplink_EscapesMultibyteAndSpaces(t *testing.T) {
-	got := deeplink("http://localhost:15174", "レビュー", "日本語/note v2.md", "")
+	got := deeplink("http://localhost:15174", "レビュー", "日本語/note v2.md", "", nil)
 	// A raw space or the rel path's own '/' would break the single path
 	// segment EditorPage's splat decoding expects.
 	for _, bad := range []string{" ", "日本語/note"} {
@@ -41,7 +66,7 @@ func TestDeeplink_EscapesMultibyteAndSpaces(t *testing.T) {
 }
 
 func TestDeeplink_TrimsTrailingSlashOnBase(t *testing.T) {
-	got := deeplink("http://localhost:15174/", "works", "a.md", "")
+	got := deeplink("http://localhost:15174/", "works", "a.md", "", nil)
 	if strings.Contains(got, "15174//") {
 		t.Errorf("deeplink() = %q, doubled the slash", got)
 	}
@@ -99,11 +124,9 @@ func TestBaseURL_Precedence(t *testing.T) {
 }
 
 func TestCmdOpen_UsageOnWrongArgCount(t *testing.T) {
-	for _, args := range [][]string{nil, {"a.md", "b.md"}} {
-		err := cmdOpen(args)
-		if err == nil || !strings.Contains(err.Error(), "usage: mr open") {
-			t.Errorf("cmdOpen(%v) error = %v, want a usage error", args, err)
-		}
+	err := cmdOpen(nil)
+	if err == nil || !strings.Contains(err.Error(), "usage: mr open") {
+		t.Errorf("cmdOpen(nil) error = %v, want a usage error", err)
 	}
 }
 
@@ -255,9 +278,137 @@ func TestCmdOpen_Case9_WithoutCommentRegression(t *testing.T) {
 }
 
 func TestDeeplink_WithComment(t *testing.T) {
-	got := deeplink("http://localhost:15174", "works", "draft.md", "c-001")
+	got := deeplink("http://localhost:15174", "works", "draft.md", "c-001", nil)
 	want := "http://localhost:15174/works/draft.md?comment_id=c-001"
 	if got != want {
 		t.Errorf("deeplink() = %q, want %q", got, want)
+	}
+}
+
+// 10. 追加ファイルが複数、すべて同じ root → open= が指定順に積まれる。
+func TestCmdOpen_Case10_MultipleExtrasSameRoot(t *testing.T) {
+	rootDir := t.TempDir()
+	rootsJSON, err := json.Marshal([]map[string]string{{"name": "works", "path": rootDir}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("REVIEW_ROOTS", string(rootsJSON))
+	t.Setenv("REVIEWER_CONFIG_DIR", t.TempDir())
+	t.Setenv("PORT", serverdefaults.Port) // pin base URL; a real launchd plist may set a different PORT
+
+	for _, name := range []string{"main.md", "a.md", "b.md"} {
+		if writeErr := os.WriteFile(filepath.Join(rootDir, name), []byte("# doc\n"), 0o644); writeErr != nil {
+			t.Fatal(writeErr)
+		}
+	}
+
+	out, err := captureStdout(t, func() error {
+		return cmdOpen([]string{
+			filepath.Join(rootDir, "main.md"),
+			filepath.Join(rootDir, "a.md"),
+			filepath.Join(rootDir, "b.md"),
+			"--print",
+		})
+	})
+	if err != nil {
+		t.Fatalf("cmdOpen failed: %v", err)
+	}
+	out = strings.TrimSpace(out)
+	want := "http://localhost:" + serverdefaults.Port + "/works/main.md?open=a.md&open=b.md"
+	if out != want {
+		t.Errorf("cmdOpen stdout = %q, want %q", out, want)
+	}
+}
+
+// 11. 追加ファイルが別 root → 警告して無視、メインは開く。
+func TestCmdOpen_Case11_ExtraUnderDifferentRootIsWarnedAndIgnored(t *testing.T) {
+	mainRootDir := t.TempDir()
+	otherRootDir := t.TempDir()
+	rootsJSON, err := json.Marshal([]map[string]string{
+		{"name": "works", "path": mainRootDir},
+		{"name": "other", "path": otherRootDir},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("REVIEW_ROOTS", string(rootsJSON))
+	t.Setenv("REVIEWER_CONFIG_DIR", t.TempDir())
+	t.Setenv("PORT", serverdefaults.Port) // pin base URL; a real launchd plist may set a different PORT
+
+	if writeErr := os.WriteFile(filepath.Join(mainRootDir, "main.md"), []byte("# doc\n"), 0o644); writeErr != nil {
+		t.Fatal(writeErr)
+	}
+	if writeErr := os.WriteFile(filepath.Join(otherRootDir, "b.md"), []byte("# doc\n"), 0o644); writeErr != nil {
+		t.Fatal(writeErr)
+	}
+
+	out, err := captureStdout(t, func() error {
+		return cmdOpen([]string{
+			filepath.Join(mainRootDir, "main.md"),
+			filepath.Join(otherRootDir, "b.md"),
+			"--print",
+		})
+	})
+	if err != nil {
+		t.Fatalf("cmdOpen failed: %v", err)
+	}
+	out = strings.TrimSpace(out)
+	want := "http://localhost:" + serverdefaults.Port + "/works/main.md"
+	if out != want {
+		t.Errorf("cmdOpen stdout = %q, want %q (different-root extra dropped)", out, want)
+	}
+}
+
+// 12. 追加ファイルが2つともルート外だとエラーで終了する。anonymous スロット
+// は1つしか無いため、それを要求する out-of-root パスは全体で1つまで
+// （resolveExtras のキャップを直接検証する。メインは通常 root 内で開ける
+// ケースに固定し、registerAdhoc/実サーバへの依存を避ける）。
+func TestCmdOpen_Case12_TwoExtraOutsideRootPathsIsAnError(t *testing.T) {
+	rootDir := t.TempDir()
+	rootsJSON, err := json.Marshal([]map[string]string{{"name": "works", "path": rootDir}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("REVIEW_ROOTS", string(rootsJSON))
+	t.Setenv("REVIEWER_CONFIG_DIR", t.TempDir())
+
+	if writeErr := os.WriteFile(filepath.Join(rootDir, "main.md"), []byte("# doc\n"), 0o644); writeErr != nil {
+		t.Fatal(writeErr)
+	}
+	outsideA := filepath.Join(t.TempDir(), "outside-a.md")
+	outsideB := filepath.Join(t.TempDir(), "outside-b.md")
+
+	err = cmdOpen([]string{filepath.Join(rootDir, "main.md"), outsideA, outsideB, "--print"})
+	if err == nil {
+		t.Fatal("cmdOpen expected an error for two out-of-root extra paths, got nil")
+	}
+}
+
+// 13. Regression (#289 follow-up 1): rejecting a two-out-of-root-paths
+// command must never touch the ad-hoc slot in the first place.
+// registerAdhoc purges whatever review currently occupies the slot
+// (TestAdhoc_ReplacingTheSlotPurgesPreviousComments in
+// internal/handler/adhoc_test.go), so validating the "at most one
+// out-of-root path" cap only after already registering the main path would
+// destroy an existing review for a command that ends up refused anyway.
+func TestCmdOpen_Case13_RejectedTwoOutsideRootPathsNeverPostsToAdhoc(t *testing.T) {
+	withRoots(t)
+	base, posted := adhocServer(t, `{"root":"anonymous","dir":"/tmp","path":"existing.md","ephemeral":true}`)
+	t.Setenv(baseURLEnv, base)
+
+	mainOutside := outOfRootFile(t, "main-outside.md")
+	extraOutside := outOfRootFile(t, "extra-outside.md")
+
+	err := cmdOpen([]string{mainOutside, extraOutside, "--print"})
+	if err == nil {
+		t.Fatal("cmdOpen expected an error for two out-of-root paths, got nil")
+	}
+	if !strings.Contains(err.Error(), "at most one out-of-root path") {
+		t.Errorf("error = %q, want the out-of-root cap message", err)
+	}
+	if *posted {
+		t.Error("cmdOpen POSTed to /api/adhoc before validating the out-of-root cap — " +
+			"this would have purged whatever review currently occupies the slot, " +
+			"for a command that was going to be rejected anyway")
 	}
 }

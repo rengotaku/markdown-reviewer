@@ -103,7 +103,13 @@ interface OpenFilesState {
   /** Close the files that sit to the right of id within the same root's tab order. */
   closeToRight: (id: string) => void;
   closeAll: () => void;
-  openServerFile: (incoming: IncomingFile) => void;
+  /**
+   * `opts.activate` (default true) set to false adds the file to `files`
+   * without touching `activeIdByRoot` — used to open a background tab
+   * (#289's `?open=`) without ever routing its content through the single
+   * shared editor instance.
+   */
+  openServerFile: (incoming: IncomingFile, opts?: { activate?: boolean }) => void;
   markActiveSaved: (
     root: string,
     modified?: string,
@@ -360,13 +366,15 @@ export const useOpenFiles = create<OpenFilesState>()((set) => ({
 
       closeAll: () => set(() => ({ files: [], activeIdByRoot: {} })),
 
-      openServerFile: (incoming) =>
+      openServerFile: (incoming, opts) =>
         set((state) => {
+          const activate = opts?.activate ?? true;
           const path = incoming.path ?? incoming.name;
           const existing = state.files.find(
             (f) => f.path === path && f.root === incoming.root
           );
           if (existing) {
+            if (!activate) return state; // already open — leave activeIdByRoot alone
             if (state.activeIdByRoot[incoming.root] === existing.id) return state;
             return {
               activeIdByRoot: {
@@ -388,6 +396,14 @@ export const useOpenFiles = create<OpenFilesState>()((set) => ({
             serverModified: incoming.modified ?? "",
             serverCreated: incoming.created ?? "",
           };
+          if (!activate) {
+            // Background tab (#289): join `files` only. Never touching
+            // `activeIdByRoot` here means TiptapEditor's activeId-keyed
+            // load effect never fires for it, so its content never enters
+            // the shared editor instance — and never risks the post-load
+            // settle window / debounced resync leaving it dirty.
+            return { files: [...state.files, created] };
+          }
           return {
             files: [...state.files, created],
             activeIdByRoot: {

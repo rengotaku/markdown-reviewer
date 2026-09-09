@@ -58,7 +58,7 @@ import { useUIStore } from "@/hooks/useUIStore";
 import { useHoverPanel } from "@/hooks/useHoverPanel";
 import { useEditorInstance } from "@/hooks/useEditorInstance";
 import { useCommentAuthor } from "@/hooks/useCommentAuthor";
-import { useActiveRoot } from "@/hooks/useActiveRoot";
+import { useActiveRoot, OPEN_PARAM } from "@/hooks/useActiveRoot";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   statFile,
@@ -1350,6 +1350,11 @@ export function EditorPage() {
   // (`% d` isn't a valid escape), crashing the whole page.
   const initialFilePathRef = useRef(routeParams["*"] || null);
   const initialCommentIdRef = useRef(searchParams.get(COMMENT_ID_PARAM));
+  // Repeated `open=<rel>` params (#289): extra files to open as background
+  // tabs alongside the path-addressed main file. Read once on mount, same
+  // as the two refs above — later URL changes (tab-sync effect, sidebar
+  // filter edits) must not re-trigger this.
+  const initialExtraPathsRef = useRef(searchParams.getAll(OPEN_PARAM));
 
   // Keep the URL path in sync with the active tab so the current view is
   // bookmarkable / shareable. Runs on every active-file change (tab click,
@@ -1872,6 +1877,57 @@ export function EditorPage() {
     }
   };
 
+  // Opens `path` as a background tab (#289's `?open=`) without activating
+  // it. Deliberately doesn't reuse handleSelect: handleSelect always makes
+  // its target the active tab, and briefly activating every background
+  // path in turn (then activating the main path again once done) used to
+  // route each one through the single shared TiptapEditor instance — which
+  // raced its post-load settle window and debounced Markdown resync
+  // (#265) and left the last one activated-then-deactivated spuriously
+  // dirty. A background tab never needs its content in the editor until
+  // the user actually clicks it, so this only ever touches `files`, never
+  // `activeIdByRoot`.
+  const handleOpenInBackground = async (path: string) => {
+    if (!activeRoot) return;
+    const requestRoot = activeRoot;
+    const alreadyOpen = useOpenFiles
+      .getState()
+      .files.some((f) => f.root === requestRoot && f.path === path);
+    if (alreadyOpen) return;
+    try {
+      const res = await readFile.mutateAsync({ path, root: requestRoot });
+      // Lightweight guard (#289 follow-up 3): if the user switched root
+      // while this read was in flight, activeRootRef has already moved on
+      // — writing the response under requestRoot now would add a tab to a
+      // root the page isn't even showing anymore, and the error branch
+      // below would toast a failure onto whatever root *is* now showing.
+      // Not a full cancellation (no AbortController on the request itself,
+      // no signal threaded into useReadFile) — deferred, see the deeplink
+      // effect's own comment.
+      if (activeRootRef.current !== requestRoot) return;
+      openServerFile(
+        {
+          name: basename(res.path),
+          path: res.path,
+          root: requestRoot,
+          markdown: res.content,
+          modified: res.modified,
+          created: res.created,
+          sha: res.sha,
+        },
+        { activate: false }
+      );
+    } catch (err) {
+      if (activeRootRef.current !== requestRoot) return;
+      // Fail-soft (issue #289): one unreadable extra path must not stop the
+      // others, same contract as handleSelect's own read failure.
+      showToast(
+        `ファイルの読み込みに失敗しました: ${(err as Error).message ?? "unknown error"}`,
+        "error"
+      );
+    }
+  };
+
   // Tab-bar clicks switch tabs directly via MUI Tabs' onChange, bypassing
   // handleSelect entirely — so the #119 case 6 revalidation added there
   // (bump fileEventTrigger after reactivating an existing tab) needs its own
@@ -1909,7 +1965,30 @@ export function EditorPage() {
     if (!path) return;
     if (!activeRoot) return;
     initialFilePathRef.current = null;
-    void handleSelect(path);
+    const extras = initialExtraPathsRef.current;
+    initialExtraPathsRef.current = [];
+    const expandingRoot = activeRoot;
+    void (async () => {
+      await handleSelect(path);
+      // Sequential, not parallel: keeps read failures/toasts in a
+      // predictable order and avoids piling concurrent calls onto the one
+      // readFile mutation instance. Each extra is opened in the background
+      // (handleOpenInBackground) rather than activated, so — unlike an
+      // activate-then-deactivate loop — nothing here ever changes which
+      // file is active; `path` stays active throughout.
+      for (const extra of extras) {
+        // Lightweight guard (#289 follow-up 3): the user switched root
+        // while an earlier extra's read was still in flight. Stop opening
+        // further extras under a root the page has already left — a full
+        // cancellation (AbortController threaded through useReadFile,
+        // StrictMode-safe cleanup of this ref-driven effect) is a bigger
+        // redesign than this deeplink-expansion race warrants; deferred
+        // (tracked outside this codebase, not as a code TODO).
+        if (activeRootRef.current !== expandingRoot) break;
+        if (extra === path) continue; // already open (and active) from above
+        await handleOpenInBackground(extra);
+      }
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeRoot]);
 
