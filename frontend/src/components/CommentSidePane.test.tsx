@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, within, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, within, waitFor, fireEvent, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { CommentSidePane } from "./CommentSidePane";
 import type { CommentJSON } from "@/api";
@@ -88,8 +88,30 @@ function renderPane(
     onJump: vi.fn(),
     onSelect: vi.fn(),
   };
+  // #306: an anchored comment absent from `anchorTops` is now excluded from
+  // the rail (no more 0-fallback) — most tests in this file exercise a
+  // CommentRow's actions (reply/edit/resolve/detail) and don't care where in
+  // the rail it lands, so give every anchored fixture a synthetic
+  // measurement here unless the test supplies its own `anchorTops` (the rail
+  // (#298)/(#306) describe blocks below always do, to control layout
+  // directly).
+  const comments = props.comments ?? [];
+  const defaultAnchorTops = Object.fromEntries(
+    comments
+      .filter((c) => c.scope !== "global" && !c.orphan)
+      .map((c, i) => [c.id, i * 10])
+  );
   render(
-    <CommentSidePane root="works" filePath="doc.md" comments={[]} reviewActive canAddComment {...handlers} {...props} />
+    <CommentSidePane
+      root="works"
+      filePath="doc.md"
+      comments={[]}
+      reviewActive
+      canAddComment
+      {...handlers}
+      anchorTops={defaultAnchorTops}
+      {...props}
+    />
   );
   if (!keepPinnedCollapsed) {
     const toggle = screen.queryByTestId("comment-pinned-toggle");
@@ -936,5 +958,69 @@ describe("CommentSidePane rail (#298)", () => {
     });
     await user.click(screen.getByTestId("comment-rail-below"));
     await waitFor(() => expect(h.onJump).toHaveBeenCalledWith("c2"));
+  });
+});
+
+describe("CommentSidePane rail anchor measurement (#306)", () => {
+  // #306 case 1: an anchored comment with no entry in `anchorTops` yet (the
+  // caller hasn't measured its decoration's DOM position this render pass)
+  // must not fall back to viewport top 0 — that used to plant its card at
+  // the rail's very top, in front of whichever paragraph the reader is
+  // actually looking at, and it stayed there because nothing re-triggers a
+  // measurement on its own. Case 1 requires it simply stays out of the rail
+  // until a real measurement lands.
+  it("1. an anchored comment missing from anchorTops is not drawn in the rail (no 0-fallback)", async () => {
+    renderPane({
+      // c1 has a real measurement; c2 does not (key entirely absent, not
+      // just falsy) — the exact shape recomputeAnchorTops produces before
+      // its first successful pass over c2's decoration.
+      anchorTops: { c1: 10 },
+      comments: [comment("c1"), comment("c2")],
+    });
+    // The rail's own box is measured asynchronously (rAF, in
+    // AlignedCommentRail's scheduleMeasurePane) against this file's 4000px
+    // getBoundingClientRect stub. Flushing that rAF here rules out a false
+    // pass: at the pre-measurement paneHeight===0, a second card overflows
+    // the (zero-height) pane and is dropped to `belowCount` regardless of
+    // whether the 0-fallback bug is fixed — that path would pass this
+    // assertion even with the bug present. A 4000px pane comfortably fits
+    // both c1 and a wrongly-defaulted c2, so this only stays green once c2
+    // is genuinely excluded for having no anchorTops entry.
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+    const rail = screen.getByTestId("comment-rail-aligned");
+    const items = within(rail).getAllByTestId("comment-item");
+    expect(items).toHaveLength(1);
+    expect(within(rail).getByTestId("comment-id")).toHaveTextContent("c1");
+  });
+
+  // #306 case 2: this must not be confused with case 1. A comment with no
+  // anchor at all (global scope, or orphaned) is a different, permanent
+  // state — it belongs in the pinned section regardless of anchorTops, not
+  // "waiting to be measured".
+  it("2. a comment with no anchor (global/orphan) still renders in the pinned section, not the rail, regardless of anchorTops", () => {
+    renderPane(
+      {
+        // Neither g1 nor o1 ever gets an anchorTops entry — there's no
+        // decoration to measure — while c1 does.
+        anchorTops: { c1: 10 },
+        comments: [
+          comment("c1"),
+          pinned("g1"),
+          comment("o1", { orphan: true, context: null }),
+        ],
+      },
+      { keepPinnedCollapsed: true }
+    );
+    const rail = screen.getByTestId("comment-rail-aligned");
+    expect(within(rail).getAllByTestId("comment-item")).toHaveLength(1);
+    expect(within(rail).getByTestId("comment-id")).toHaveTextContent("c1");
+
+    const section = screen.getByTestId("comment-pinned-section");
+    expect(within(section).getByTestId("comment-pinned-toggle")).toHaveTextContent(
+      "全体・位置不明 2"
+    );
   });
 });

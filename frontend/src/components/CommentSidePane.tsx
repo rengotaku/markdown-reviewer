@@ -752,15 +752,31 @@ function AlignedCommentRail({
     () =>
       comments.map((c, i) => ({
         id: c.id,
-        // `comments` here is already the anchored subset (no global/orphan),
-        // so every entry has a *real* anchor — a missing lookup only means
-        // the caller hasn't measured this frame's decorations yet (editor
-        // not mounted, or its decoration not rendered on this render pass).
-        // Falling back to `null` would read as "no live anchor" and drop the
-        // card from `visible` entirely until a measurement arrives, so it
-        // falls back to 0 (top of viewport) instead — visible right away,
-        // repositioned once the real rect lands.
-        anchorTop: anchorTops[c.id] ?? 0,
+        // `comments` here is already the anchored subset (no global/orphan).
+        // A resolved comment paints no persistent decoration by design
+        // (CommentHighlight's buildDeco skips `status === "resolved"`), so
+        // the caller's measurement can never produce an entry for one —
+        // that isn't "not yet measured", it's permanent, so it keeps the
+        // pre-#306 0 fallback (out of this issue's scope; unrelated to the
+        // race below).
+        //
+        // An *open* comment's missing lookup, though, only means the caller
+        // hasn't measured this frame's decoration yet (editor not mounted,
+        // decoration not rendered on this render pass, or the comment list
+        // just changed and a fresh measurement hasn't landed). #306: falling
+        // back to 0 there used to plant the card at the rail's very top — in
+        // front of whatever paragraph the reader is actually looking at —
+        // and it stayed there because nothing else re-triggered a
+        // measurement. `null` reads as "no live anchor" to
+        // layoutCommentRail, which drops the card from `visible` (and out of
+        // above/below) rather than misplacing it; it reappears once the
+        // caller's measurement produces a real entry.
+        anchorTop:
+          c.status === "resolved"
+            ? (anchorTops[c.id] ?? 0)
+            : Object.hasOwn(anchorTops, c.id)
+              ? anchorTops[c.id]
+              : null,
         height: cardHeights[c.id] ?? RAIL_DEFAULT_CARD_HEIGHT,
         order: i,
       })),
