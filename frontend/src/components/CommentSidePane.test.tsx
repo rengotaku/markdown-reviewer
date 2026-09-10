@@ -898,20 +898,43 @@ describe("CommentSidePane rail (#298)", () => {
   });
 
   it("a card the rail can't fit is dropped and counted, and jumping from the count uses onJump", async () => {
+    // Root cause of a CI-only flake (rengotaku/markdown-reviewer#305 PR CI):
+    // this file's beforeEach stubs getBoundingClientRect to a *tall* pane
+    // (4000px, so the earlier multi-card tests in this file can measure more
+    // than one card at once — see the stub's own comment above). That stub
+    // also applies to *this* test's rail container. The rail measures its
+    // own box asynchronously (rAF, in AlignedCommentRail's
+    // scheduleMeasurePane) — the very first paint still reflects the
+    // pre-measurement state (paneHeight 0), so a `500`-anchored second card
+    // doesn't fit yet and "below" renders. But once that rAF fires and
+    // remeasures against the 4000px stub, `c2` *does* fit inside a 4000px
+    // pane and the whole "below" section unmounts. Locally the click landed
+    // before that remeasure; under CI's slower/differently-scheduled
+    // event loop the remeasure won, and `await user.click(below)` clicked a
+    // detached node — no handler fires, `onJump` is never called (reproduced
+    // deterministically here by running this test in isolation, which
+    // removes whatever incidental timing the full-suite run relies on: 5/5
+    // isolated runs failed at this exact assertion before the fix below).
+    //
+    // The fix makes the "doesn't fit" outcome true regardless of *which*
+    // pane height (the stale 0 or the remeasured 4000) is in effect: c2's
+    // anchor sits far below either one, so `belowCount` stays 1 whichever
+    // measurement wins the race — the flake is eliminated at the source
+    // instead of being timed around.
     const user = userEvent.setup();
-    // jsdom has no layout, so the pane's own box measures 0×0 — the first
-    // card still gets placed (shrink-to-fit for a lone leading card), and a
-    // second card whose anchor sits below the (zero-height) pane can't fit
-    // and is counted as belowCount instead.
     const h = renderPane({
-      anchorTops: { c1: 0, c2: 500 },
+      anchorTops: { c1: 0, c2: 100_000 },
       comments: [comment("c1"), comment("c2")],
     });
     const rail = screen.getByTestId("comment-rail-aligned");
     expect(within(rail).getAllByTestId("comment-item")).toHaveLength(1);
-    const below = screen.getByTestId("comment-rail-below");
-    expect(below).toHaveTextContent("下に 1 件");
-    await user.click(below);
-    expect(h.onJump).toHaveBeenCalledWith("c2");
+    // Re-queried from `screen` right before the click (rather than reusing
+    // the `below` reference from the assertion above) so a re-render between
+    // the two would still click the live node, not a detached one.
+    await waitFor(() => {
+      expect(screen.getByTestId("comment-rail-below")).toHaveTextContent("下に 1 件");
+    });
+    await user.click(screen.getByTestId("comment-rail-below"));
+    await waitFor(() => expect(h.onJump).toHaveBeenCalledWith("c2"));
   });
 });
