@@ -804,7 +804,8 @@ describe("CommentSidePane", () => {
 // switches to the rail arithmetic (commentRailLayout.ts) when a caller opts
 // in — which is what EditorPage always does in the app.
 describe("CommentSidePane rail mode (#298)", () => {
-  it("12. keeps global/orphan comments in the pinned section in aligned mode too, out of the rail", () => {
+  it("12. keeps global/orphan comments out of the rail in aligned mode, collapsed behind a toggle by default so the rail keeps the pane's height (#301 follow-up)", async () => {
+    const user = userEvent.setup();
     renderPane({
       railMode: "aligned",
       anchorTops: { c1: 10 },
@@ -815,10 +816,23 @@ describe("CommentSidePane rail mode (#298)", () => {
       ],
     });
     const section = screen.getByTestId("comment-pinned-section");
-    expect(within(section).getAllByTestId("comment-item")).toHaveLength(2);
+    // Collapsed by default: no comment rows rendered inline (they'd otherwise
+    // claim height from the flex layout, squeezing the rail below it — the
+    // exact #301 failure mode this guards against), just the count in the
+    // toggle header.
+    expect(within(section).queryAllByTestId("comment-item")).toHaveLength(0);
+    expect(within(section).getByTestId("comment-pinned-toggle")).toHaveTextContent(
+      "全体・位置不明 2"
+    );
     const rail = screen.getByTestId("comment-rail-aligned");
     expect(within(rail).getAllByTestId("comment-item")).toHaveLength(1);
     expect(within(rail).getByTestId("comment-id")).toHaveTextContent("c1");
+
+    // Expanding renders the pinned comments in an overlay, not as additional
+    // flex-participating height on the section itself.
+    await user.click(within(section).getByTestId("comment-pinned-toggle"));
+    const overlay = screen.getByTestId("comment-pinned-overlay");
+    expect(within(overlay).getAllByTestId("comment-item")).toHaveLength(2);
   });
 
   it("renders anchored comments inside the aligned rail container, not the plain list", () => {
