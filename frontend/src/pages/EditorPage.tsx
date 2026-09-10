@@ -91,6 +91,7 @@ import {
   type HighlightComment,
 } from "@/components/tiptap/extensions/CommentHighlight";
 import { popoverFrame } from "@/utils/popoverFrame";
+import { scrollTableIntoView } from "@/utils/scrollTableIntoView";
 import type {
   ComposerMode,
   ComposerSubmit,
@@ -2038,6 +2039,10 @@ export function EditorPage() {
     );
     if (decorated.length > 0) {
       decorated[0].scrollIntoView({ behavior: "smooth", block: "center" });
+      // #310: `scrollIntoView`'s vertical centering doesn't reliably pull a
+      // highlight out from a wide table's own horizontal scroll region
+      // (#152) — bring it inside that container's visible width too.
+      scrollTableIntoView(decorated[0]);
       decorated.forEach((el) => {
         el.classList.remove("is-flash");
         void el.offsetWidth; // force reflow so the animation restarts
@@ -2053,6 +2058,7 @@ export function EditorPage() {
     const target =
       node.nodeType === Node.TEXT_NODE ? node.parentElement : (node as HTMLElement);
     target?.scrollIntoView({ behavior: "smooth", block: "center" });
+    if (target) scrollTableIntoView(target);
     editor.commands.flashCommentRanges(ranges);
     flashTimerRef.current = window.setTimeout(() => {
       flashTimerRef.current = null;
