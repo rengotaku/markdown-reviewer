@@ -230,22 +230,10 @@ export function CommentSidePane({
     () => (filter === "all" ? comments : comments.filter((c) => c.status === filter)),
     [comments, filter]
   );
-  // Comments with no live anchor cannot open a popover beside the text, so
-  // they get their own section at the top and stay operable here (#253).
-  const pinned = useMemo(
-    () => visible.filter((c) => c.scope === "global" || c.orphan),
-    [visible]
-  );
-  // The paragraph-aligned rail (#298) needs to claim nearly the whole pane
-  // height — a paragraph anchored near the top of the file otherwise has no
-  // band left to render its card in at all (#301 follow-up: capping this
-  // section to 40% still left it "collapsed above 300px" for anything with
-  // 5+ pinned comments). So this section defaults to a single collapsed
-  // header row and its full content only appears as an overlay on demand,
-  // never as a permanent claim on the rail's height. Local (unpersisted)
-  // state: every mount starts collapsed (#304), and switching files or
-  // selecting a card never expands it automatically.
-  const [pinnedExpanded, setPinnedExpanded] = useState(false);
+  // Comments with no live anchor (全体スコープ / orphan) cannot open a popover
+  // beside the text, and no longer get a section inside this pane (#309):
+  // they render at the top of the document body instead (DocumentTopComments,
+  // rendered by TiptapEditor). This pane's rail is anchored-comments-only.
   const anchored = useMemo(
     () => visible.filter((c) => !(c.scope === "global" || c.orphan)),
     [visible]
@@ -419,111 +407,31 @@ export function CommentSidePane({
                 : "解決済みのコメントはありません。"}
             </Typography>
           </Box>
+        ) : anchored.length === 0 ? (
+          // #309: every visible comment is global/orphan (no live anchor) —
+          // those render at the top of the document body now, not here.
+          <Box sx={{ p: 2 }}>
+            <Typography variant="body2" color="text.secondary">
+              本文にひもづくコメントはありません。全体・位置不明のコメントは本文の先頭に表示されています。
+            </Typography>
+          </Box>
         ) : (
-          <>
-            {pinned.length > 0 && (
-              <Box
-                data-testid="comment-pinned-section"
-                // This section is a sibling of a `flex: 1` rail whose own
-                // content is entirely absolutely-positioned (so its
-                // content-box height is 0). A flex item's shrink share is
-                // weighted by its flex-basis, and `flex: 1` sets that basis
-                // to 0 — so however tall this section renders, it claims 0%
-                // of any shrinking and the rail gets none of the shrink
-                // either. `position: relative` lets the expanded content
-                // below render as an absolutely-positioned overlay instead
-                // of adding to this box's own (flex-participating) height —
-                // the collapsed header row is all this box actually
-                // occupies in the layout, so the rail keeps nearly the
-                // whole pane regardless of how many comments are pinned or
-                // whether the overlay is open (#301 follow-up: capping this
-                // section's height to a % of the pane, as done before,
-                // still shrank the rail's usable band below 300px with 5+
-                // pinned comments).
-                sx={{ flexShrink: 0, position: "relative" }}
-              >
-                <Box
-                  component="button"
-                  type="button"
-                  onClick={() => setPinnedExpanded((v) => !v)}
-                  aria-expanded={pinnedExpanded}
-                  data-testid="comment-pinned-toggle"
-                  sx={{
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    width: "100%",
-                    px: 1.5,
-                    py: 0.75,
-                    border: 0,
-                    borderBottom: "1px solid",
-                    borderColor: "divider",
-                    bgcolor: "action.hover",
-                    color: "text.secondary",
-                    font: "inherit",
-                    cursor: "pointer",
-                    textAlign: "left",
-                  }}
-                >
-                  <Typography variant="caption" sx={{ letterSpacing: ".04em" }}>
-                    全体・位置不明 {pinned.length}
-                  </Typography>
-                  <Typography variant="caption">{pinnedExpanded ? "閉じる" : "表示"}</Typography>
-                </Box>
-                {pinnedExpanded && (
-                  <Box
-                    data-testid="comment-pinned-overlay"
-                    sx={{
-                      position: "absolute",
-                      top: "100%",
-                      left: 0,
-                      right: 0,
-                      zIndex: 10,
-                      maxHeight: "60%",
-                      overflowY: "auto",
-                      bgcolor: "background.paper",
-                      boxShadow: 3,
-                      borderBottom: "1px solid",
-                      borderColor: "divider",
-                    }}
-                  >
-                    {pinned.map((c) => (
-                      <CommentRow
-                        key={c.id}
-                        comment={c}
-                        onDelete={onDelete}
-                        onResolveToggle={onResolveToggle}
-                        onReply={onReply}
-                        onEdit={onEdit}
-                        onEditReply={onEditReply}
-                        onDeleteReply={onDeleteReply}
-                        onJump={onJump}
-                        onOpenDetail={setDetailId}
-                        onCopyLink={handleCopyLink}
-                        canCopyLink={canCopyLink}
-                      />
-                    ))}
-                  </Box>
-                )}
-              </Box>
-            )}
-            <AlignedCommentRail
-              comments={anchored}
-              anchorTops={anchorTops}
-              selectedId={selectedId ?? null}
-              onSelect={onSelect}
-              onJump={onJump}
-              onCopyLink={handleCopyLink}
-              canCopyLink={canCopyLink}
-              onDelete={onDelete}
-              onResolveToggle={onResolveToggle}
-              onReply={onReply}
-              onEdit={onEdit}
-              onEditReply={onEditReply}
-              onDeleteReply={onDeleteReply}
-              onOpenDetail={setDetailId}
-            />
-          </>
+          <AlignedCommentRail
+            comments={anchored}
+            anchorTops={anchorTops}
+            selectedId={selectedId ?? null}
+            onSelect={onSelect}
+            onJump={onJump}
+            onCopyLink={handleCopyLink}
+            canCopyLink={canCopyLink}
+            onDelete={onDelete}
+            onResolveToggle={onResolveToggle}
+            onReply={onReply}
+            onEdit={onEdit}
+            onEditReply={onEditReply}
+            onDeleteReply={onDeleteReply}
+            onOpenDetail={setDetailId}
+          />
         )}
       </Box>
 
@@ -1205,7 +1113,7 @@ function AlignedCard({ comment, top, maxHeight, onHeightChange, ...cardProps }: 
   );
 }
 
-interface RowProps {
+export interface CommentRowProps {
   comment: CommentJSON;
   onDelete: (id: string) => void;
   onResolveToggle: (id: string, next: "open" | "resolved") => void;
@@ -1219,7 +1127,7 @@ interface RowProps {
   canCopyLink?: boolean;
 }
 
-function CommentRow({
+export function CommentRow({
   comment: c,
   onDelete,
   onResolveToggle,
@@ -1231,7 +1139,7 @@ function CommentRow({
   onOpenDetail,
   onCopyLink,
   canCopyLink = true,
-}: RowProps) {
+}: CommentRowProps) {
   const [replyOpen, setReplyOpen] = useState(false);
   const [replyBody, setReplyBody] = useState("");
   const [editOpen, setEditOpen] = useState(false);
@@ -1726,7 +1634,7 @@ function ReplyRow({
   );
 }
 
-interface DetailDialogProps {
+export interface CommentDetailDialogProps {
   comment: CommentJSON | null;
   onClose: () => void;
   onDelete: (id: string) => void;
@@ -1743,7 +1651,7 @@ interface DetailDialogProps {
 /** A roomy, centered view of one comment: full target, body, the whole reply
  *  thread, and the same actions as the side-pane row. Opened from a row's
  *  "詳細" button; closes when the comment is deleted or jumped to. */
-function CommentDetailDialog({
+export function CommentDetailDialog({
   comment: c,
   onClose,
   onDelete,
@@ -1755,7 +1663,7 @@ function CommentDetailDialog({
   onJump,
   onCopyLink,
   canCopyLink = true,
-}: DetailDialogProps) {
+}: CommentDetailDialogProps) {
   const [replyBody, setReplyBody] = useState("");
   const [editOpen, setEditOpen] = useState(false);
   const [editBody, setEditBody] = useState("");
