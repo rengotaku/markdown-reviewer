@@ -156,6 +156,36 @@ function commentTargetText(c: CommentJSON): string {
   return c.anchor?.snippet ?? c.anchors?.[0]?.snippet ?? "";
 }
 
+/** Shallow key/value equality for the anchorTops map (#298): avoids a state
+ *  update — and the render + effect cascade it triggers — when a recompute
+ *  produced the same positions as last time. */
+function shallowEqualRecord(a: Record<string, number>, b: Record<string, number>): boolean {
+  const aKeys = Object.keys(a);
+  const bKeys = Object.keys(b);
+  if (aKeys.length !== bKeys.length) return false;
+  return aKeys.every((k) => a[k] === b[k]);
+}
+
+// Walks up from `el` to find the nearest ancestor that actually scrolls
+// (`overflow-y: auto|scroll` and content taller than its box). The DOM
+// structure between the ProseMirror root and its real scroll container
+// isn't fixed — TiptapEditor wraps it in one or more plain divs before the
+// `overflow: auto` Box that does the scrolling (and centered-layout toggles
+// swap which wrapper that is) — so the caller can't assume a fixed ancestor
+// depth like "parentElement".
+function findScrollableAncestor(el: HTMLElement | null): HTMLElement | null {
+  let node = el?.parentElement ?? null;
+  while (node) {
+    const style = window.getComputedStyle(node);
+    const overflowY = style.overflowY;
+    if ((overflowY === "auto" || overflowY === "scroll") && node.scrollHeight > node.clientHeight) {
+      return node;
+    }
+    node = node.parentElement;
+  }
+  return null;
+}
+
 export function EditorPage() {
   const { active: activeRoot, roots, activePath: activeRootPath } = useActiveRoot();
   // Mirrors `activeRoot` into a ref so async handlers created at click time
@@ -316,6 +346,8 @@ export function EditorPage() {
   const editor = useEditorInstance((s) => s.editor);
   const centered = useEditorPrefs((s) => s.centered);
   const toggleCentered = useEditorPrefs((s) => s.toggleCentered);
+  const commentRailMode = useEditorPrefs((s) => s.commentRailMode);
+  const setCommentRailMode = useEditorPrefs((s) => s.setCommentRailMode);
   const { author } = useCommentAuthor();
   const queryClient = useQueryClient();
 
@@ -1456,6 +1488,13 @@ export function EditorPage() {
     composerDraftRef.current = composerDraft;
   }, [composer, composerDraft]);
 
+  // #298: while the pane is open, a highlight click selects that comment's
+  // rail card instead of opening a popover — the card already shows the
+  // body, so a second reading surface over the same paragraph would stack.
+  // Collapsed to the 40px rail, clicking still opens the thread as before
+  // (the rail has nowhere to show the body).
+  const [railSelectedId, setRailSelectedId] = useState<string | null>(null);
+
   // Opening is triggered from two places — the highlight's own click handler
   // and the hover preview sitting on top of it — so the state transition lives
   // in one function rather than being written out at each call site. Held in a
@@ -1466,6 +1505,7 @@ export function EditorPage() {
     setHoverTarget(null);
     setThreadDraft("");
     setOpenThread({ commentId, rect });
+    setRailSelectedId(null);
   };
 
   const openThreadForRef = useRef(openThreadFor);
@@ -1477,6 +1517,91 @@ export function EditorPage() {
     setOpenThread(null);
     setThreadDraft("");
   };
+
+  // Viewport top (px) of each anchored comment's first decoration, keyed by
+  // comment id — what the rail's paragraph-aligned layout positions cards
+  // against (#298). Comments with no live anchor (global/orphan) never get an
+  // entry and stay in the pane's pinned section regardless of layout mode.
+  //
+  // This whole apparatus (state, rAF scheduling, the editor/scroll/resize
+  // subscriptions below) only matters while the pane is open in aligned mode
+  // — the rail isn't even rendered otherwise. Gating on `railActive` keeps
+  // every listener/rAF/DOM-read unregistered for the common case (pane
+  // closed, or list mode), rather than running unconditionally for a feature
+  // most renders of this page never use (codex review round 1: a shared
+  // vitest worker process running dozens of unrelated test files paid for
+  // this on every one of them, ~65x the suite's baseline duration).
+  const railActive = isCommentPaneOpen && commentRailMode === "aligned";
+  const [anchorTops, setAnchorTops] = useState<Record<string, number>>({});
+  const anchorRafRef = useRef<number | null>(null);
+  const recomputeAnchorTops = () => {
+    if (!editor || editor.isDestroyed) return;
+    const root = editor.view.dom;
+    const next: Record<string, number> = {};
+    for (const c of comments) {
+      if (c.scope === "global" || c.orphan) continue;
+      const el = root.querySelector<HTMLElement>(`[data-comment-id="${CSS.escape(c.id)}"]`);
+      if (el) next[c.id] = el.getBoundingClientRect().top;
+    }
+    // Skip the state update (and the render + downstream effects it would
+    // trigger) when nothing actually moved — a `transaction` fires on every
+    // keystroke/selection change, most of which don't shift any decoration.
+    setAnchorTops((prev) => (shallowEqualRecord(prev, next) ? prev : next));
+  };
+  const scheduleAnchorRecalc = () => {
+    if (!railActive) return;
+    if (anchorRafRef.current !== null) return;
+    anchorRafRef.current = requestAnimationFrame(() => {
+      anchorRafRef.current = null;
+      recomputeAnchorTops();
+    });
+  };
+  const scheduleAnchorRecalcRef = useRef(scheduleAnchorRecalc);
+  useEffect(() => {
+    scheduleAnchorRecalcRef.current = scheduleAnchorRecalc;
+  });
+  // Recompute whenever the decorations could have moved: the comment list
+  // changed, the document was edited, the reader scrolled the body, the
+  // viewport resized, or the centered-layout width changed. Coalesced onto a
+  // single rAF (#298 forbids re-reading every comment's rect per scroll
+  // event) rather than firing the DOM read synchronously from each listener.
+  useEffect(() => {
+    if (!railActive) return;
+    scheduleAnchorRecalcRef.current();
+  }, [comments, editor, centered, railActive]);
+  useEffect(() => {
+    if (!railActive || !editor || editor.isDestroyed) return;
+    const onUpdate = () => scheduleAnchorRecalcRef.current();
+    editor.on("transaction", onUpdate);
+    return () => {
+      if (editor.isDestroyed) return;
+      editor.off("transaction", onUpdate);
+    };
+  }, [editor, railActive]);
+  useEffect(() => {
+    if (!railActive || !editor || editor.isDestroyed) return;
+    const onScrollOrResize = () => scheduleAnchorRecalcRef.current();
+    // The nearest scrollable ancestor of the ProseMirror DOM node is
+    // TiptapEditor's actual scroll container (`overflow-y: auto`) — but it
+    // isn't a fixed number of hops up (plain non-scrolling wrapper divs sit
+    // in between, and centered-layout toggles swap which wrapper ends up
+    // scrolling), so it's found by walking up rather than assumed to be
+    // `parentElement`. Listening there instead of capturing every `scroll`
+    // in the document keeps this from re-running on unrelated scrolling
+    // elsewhere in the app (menus, listboxes, ...).
+    const scrollEl = findScrollableAncestor(editor.view.dom);
+    scrollEl?.addEventListener("scroll", onScrollOrResize);
+    window.addEventListener("resize", onScrollOrResize);
+    return () => {
+      scrollEl?.removeEventListener("scroll", onScrollOrResize);
+      window.removeEventListener("resize", onScrollOrResize);
+    };
+  }, [editor, railActive, centered]);
+  useEffect(() => {
+    return () => {
+      if (anchorRafRef.current !== null) cancelAnimationFrame(anchorRafRef.current);
+    };
+  }, []);
 
   // Re-render the toolbar Add-Comment button when selection / doc changes.
   const [, setSelectionTick] = useState(0);
@@ -1607,6 +1732,13 @@ export function EditorPage() {
     // Clicking a highlight opens its thread (#251). The id comes from the
     // decoration set first for the same reason the hover path does it: nested
     // highlights merge into one span whose attribute keeps a single id.
+    //
+    // #298: with the pane open, the click instead selects the paragraph's
+    // card in the rail — the card already shows the body beside the text, so
+    // a popover over the same paragraph would be a second reading surface for
+    // the same thing. Collapsed to the 40px rail (pane closed) there is no
+    // card to select, so the popover stays the only way in (#251/#252's
+    // original path, untouched).
     const openThreadAt = (el: HTMLElement, pos: number | null) => {
       const commentId =
         (pos !== null ? commentIdsInRange(editor.state, pos, pos + 1)[0] : undefined) ??
@@ -1614,6 +1746,10 @@ export function EditorPage() {
         undefined;
       if (!commentId) return;
       clearTimers();
+      if (useUIStore.getState().isCommentPaneOpen) {
+        setRailSelectedId(commentId);
+        return;
+      }
       openThreadForRef.current(commentId, el.getBoundingClientRect());
     };
 
@@ -3283,7 +3419,10 @@ export function EditorPage() {
             onDeleteReply={handleDeleteReply}
             onJump={handleJumpToComment}
             onSelect={handleSelectComment}
-            selectedId={openThread?.commentId ?? null}
+            selectedId={openThread?.commentId ?? railSelectedId}
+            railMode={commentRailMode}
+            onRailModeChange={setCommentRailMode}
+            anchorTops={anchorTops}
           />
         </Box>
       ) : (

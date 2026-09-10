@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
 import IconButton from "@mui/material/IconButton";
@@ -37,6 +37,14 @@ import { contextLabel } from "@/utils/commentContext";
 import { isAiAuthored } from "@/utils/commentPresentation";
 import { CommentAuthor } from "./CommentAuthor";
 import { CommentId } from "./CommentId";
+import ViewAgendaIcon from "@mui/icons-material/ViewAgenda";
+import ViewListIcon from "@mui/icons-material/ViewList";
+import { layoutCommentRail, type RailItem } from "@/utils/commentRailLayout";
+
+/** Placeholder height for a card whose real height hasn't been measured yet
+ *  (first paint, before its ResizeObserver fires) — enough to avoid every
+ *  card starting stacked at the same spot before layout settles. */
+const RAIL_DEFAULT_CARD_HEIGHT = 96;
 
 /** AI-authored comments/replies are read-only to the human reviewer: they can
  *  reply, resolve, and jump to them, but not edit the body or delete them. */
@@ -154,6 +162,17 @@ interface Props {
   onSelect: (id: string) => void;
   /** The comment whose thread is currently open, if it is one of these. */
   selectedId?: string | null;
+  /** "aligned": cards line up with the paragraph they're anchored to
+   *  (Notion-style rail, #298). "list": the plain top-to-bottom list this
+   *  pane used before. Defaults to "list" — callers that don't track a rail
+   *  mode (and don't supply `anchorTops`) keep the pane they already had. */
+  railMode?: "aligned" | "list";
+  onRailModeChange?: (mode: "aligned" | "list") => void;
+  /** Viewport top (px) of each anchored comment's first decoration, keyed by
+   *  comment id. Only meaningful in "aligned" mode; the caller (EditorPage)
+   *  owns the editor DOM this is measured from. A comment missing an entry
+   *  here is treated as having no live anchor for layout purposes. */
+  anchorTops?: Readonly<Record<string, number>>;
 }
 
 type StatusFilter = "all" | "open" | "resolved";
@@ -177,6 +196,9 @@ export function CommentSidePane({
   onJump,
   onSelect,
   selectedId,
+  railMode = "list",
+  onRailModeChange,
+  anchorTops = {},
 }: Props) {
   const canCopyLink = Boolean(root && filePath);
   const handleCopyLink = async (id: string) => {
@@ -370,9 +392,50 @@ export function CommentSidePane({
             </IconButton>
           </span>
         </Tooltip>
+        {onRailModeChange && (
+          <ToggleButtonGroup
+            value={railMode}
+            exclusive
+            size="small"
+            onChange={(_, v) => {
+              if (v !== null) onRailModeChange(v as "aligned" | "list");
+            }}
+            aria-label="コメントカードの並べ方"
+            data-testid="comment-rail-mode"
+            sx={{ flexShrink: 0 }}
+          >
+            <ToggleButton
+              value="aligned"
+              aria-label="段落整列"
+              data-testid="comment-rail-mode-aligned"
+              sx={{ p: 0.5 }}
+            >
+              <Tooltip title="段落と縦位置を揃える">
+                <ViewAgendaIcon fontSize="small" />
+              </Tooltip>
+            </ToggleButton>
+            <ToggleButton
+              value="list"
+              aria-label="一覧"
+              data-testid="comment-rail-mode-list"
+              sx={{ p: 0.5 }}
+            >
+              <Tooltip title="一覧表示">
+                <ViewListIcon fontSize="small" />
+              </Tooltip>
+            </ToggleButton>
+          </ToggleButtonGroup>
+        )}
       </Box>
 
-      <Box sx={{ flex: 1, overflow: "auto" }}>
+      <Box
+        sx={{
+          flex: 1,
+          overflow: railMode === "aligned" ? "hidden" : "auto",
+          display: railMode === "aligned" ? "flex" : "block",
+          flexDirection: "column",
+        }}
+      >
         {!reviewActive ? (
           <Box sx={{ p: 2 }}>
             <Typography variant="body2" color="text.secondary">
@@ -430,16 +493,28 @@ export function CommentSidePane({
                 ))}
               </Box>
             )}
-            {anchored.map((c) => (
-              <CommentCard
-                key={c.id}
-                comment={c}
-                selected={c.id === selectedId}
+            {railMode === "aligned" ? (
+              <AlignedCommentRail
+                comments={anchored}
+                anchorTops={anchorTops}
+                selectedId={selectedId ?? null}
                 onSelect={onSelect}
+                onJump={onJump}
                 onCopyLink={handleCopyLink}
                 canCopyLink={canCopyLink}
               />
-            ))}
+            ) : (
+              anchored.map((c) => (
+                <CommentCard
+                  key={c.id}
+                  comment={c}
+                  selected={c.id === selectedId}
+                  onSelect={onSelect}
+                  onCopyLink={handleCopyLink}
+                  canCopyLink={canCopyLink}
+                />
+              ))
+            )}
           </>
         )}
       </Box>
@@ -599,6 +674,263 @@ function CommentCard({
           返信 {replies} 件
         </Typography>
       )}
+    </Box>
+  );
+}
+
+interface AlignedRailProps {
+  /** Anchored comments (no global/orphan), in document order. */
+  comments: ReadonlyArray<CommentJSON>;
+  anchorTops: Readonly<Record<string, number>>;
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+  onJump: (id: string) => void;
+  onCopyLink: (id: string) => void;
+  canCopyLink?: boolean;
+}
+
+/** Lays anchored cards out down the rail, level with the paragraph each is
+ *  attached to (#298). The arithmetic lives in commentRailLayout.ts (pure,
+ *  unit-tested); this component only measures the DOM and feeds it in. */
+function AlignedCommentRail({
+  comments,
+  anchorTops,
+  selectedId,
+  onSelect,
+  onJump,
+  onCopyLink,
+  canCopyLink = true,
+}: AlignedRailProps) {
+  const railRef = useRef<HTMLDivElement | null>(null);
+  const [paneBox, setPaneBox] = useState({ top: 0, height: 0 });
+  const [cardHeights, setCardHeights] = useState<Record<string, number>>({});
+  const rafRef = useRef<number | null>(null);
+
+  const scheduleMeasurePane = useCallback(() => {
+    if (rafRef.current !== null) return;
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = null;
+      const rect = railRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      setPaneBox((prev) =>
+        prev.top === rect.top && prev.height === rect.height
+          ? prev
+          : { top: rect.top, height: rect.height }
+      );
+    });
+  }, []);
+
+  // Comments changing (add/delete/filter) and anchorTops changing (scroll,
+  // resize, doc edits — all measured by the caller) both mean the pane's own
+  // box may have shifted too (e.g. the pinned section above it grew).
+  useEffect(() => {
+    scheduleMeasurePane();
+  }, [comments.length, anchorTops, scheduleMeasurePane]);
+
+  useEffect(() => {
+    window.addEventListener("resize", scheduleMeasurePane);
+    return () => window.removeEventListener("resize", scheduleMeasurePane);
+  }, [scheduleMeasurePane]);
+
+  useEffect(
+    () => () => {
+      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+    },
+    []
+  );
+
+  const handleHeightChange = useCallback((id: string, height: number) => {
+    setCardHeights((prev) => (prev[id] === height ? prev : { ...prev, [id]: height }));
+  }, []);
+
+  const items: RailItem[] = useMemo(
+    () =>
+      comments.map((c, i) => ({
+        id: c.id,
+        // `comments` here is already the anchored subset (no global/orphan),
+        // so every entry has a *real* anchor — a missing lookup only means
+        // the caller hasn't measured this frame's decorations yet (editor
+        // not mounted, or its decoration not rendered on this render pass).
+        // Falling back to `null` would read as "no live anchor" and drop the
+        // card from `visible` entirely until a measurement arrives, so it
+        // falls back to 0 (top of viewport) instead — visible right away,
+        // repositioned once the real rect lands.
+        anchorTop: anchorTops[c.id] ?? 0,
+        height: cardHeights[c.id] ?? RAIL_DEFAULT_CARD_HEIGHT,
+        order: i,
+      })),
+    [comments, anchorTops, cardHeights]
+  );
+
+  const layout = useMemo(
+    () => layoutCommentRail(items, { paneTop: paneBox.top, paneHeight: paneBox.height }),
+    [items, paneBox]
+  );
+
+  const visibleIds = useMemo(() => new Set(layout.visible.map((v) => v.id)), [layout.visible]);
+  const firstVisibleIdx = comments.findIndex((c) => visibleIds.has(c.id));
+  const lastVisibleIdx = (() => {
+    for (let i = comments.length - 1; i >= 0; i -= 1) {
+      if (visibleIds.has(comments[i].id)) return i;
+    }
+    return -1;
+  })();
+  const nearestAboveId =
+    firstVisibleIdx > 0
+      ? comments[firstVisibleIdx - 1].id
+      : firstVisibleIdx === -1 && layout.aboveCount > 0
+        ? comments[comments.length - 1].id
+        : null;
+  const nearestBelowId =
+    lastVisibleIdx >= 0 && lastVisibleIdx < comments.length - 1
+      ? comments[lastVisibleIdx + 1].id
+      : lastVisibleIdx === -1 && layout.belowCount > 0
+        ? comments[0].id
+        : null;
+
+  const byId = useMemo(() => new Map(comments.map((c) => [c.id, c])), [comments]);
+
+  return (
+    <Box
+      ref={railRef}
+      sx={{ position: "relative", flex: 1, overflow: "hidden" }}
+      data-testid="comment-rail-aligned"
+    >
+      {layout.visible.map((placed) => {
+        const c = byId.get(placed.id);
+        if (!c) return null;
+        return (
+          <AlignedCard
+            key={c.id}
+            comment={c}
+            top={placed.top}
+            maxHeight={placed.maxHeight}
+            selected={c.id === selectedId}
+            onSelect={onSelect}
+            onCopyLink={onCopyLink}
+            canCopyLink={canCopyLink}
+            onHeightChange={handleHeightChange}
+          />
+        );
+      })}
+      {layout.aboveCount > 0 && (
+        <Box
+          role="button"
+          tabIndex={0}
+          data-testid="comment-rail-above"
+          onClick={() => nearestAboveId && onJump(nearestAboveId)}
+          onKeyDown={(e) => {
+            if ((e.key === "Enter" || e.key === " ") && nearestAboveId) {
+              e.preventDefault();
+              onJump(nearestAboveId);
+            }
+          }}
+          sx={{
+            position: "absolute",
+            top: 0,
+            insetInline: 8,
+            px: 1,
+            py: 0.5,
+            borderRadius: 1,
+            textAlign: "center",
+            fontSize: "0.75rem",
+            cursor: "pointer",
+            bgcolor: "background.paper",
+            border: "1px solid",
+            borderColor: "divider",
+            boxShadow: 1,
+          }}
+        >
+          上に {layout.aboveCount} 件
+        </Box>
+      )}
+      {layout.belowCount > 0 && (
+        <Box
+          role="button"
+          tabIndex={0}
+          data-testid="comment-rail-below"
+          onClick={() => nearestBelowId && onJump(nearestBelowId)}
+          onKeyDown={(e) => {
+            if ((e.key === "Enter" || e.key === " ") && nearestBelowId) {
+              e.preventDefault();
+              onJump(nearestBelowId);
+            }
+          }}
+          sx={{
+            position: "absolute",
+            bottom: 0,
+            insetInline: 8,
+            px: 1,
+            py: 0.5,
+            borderRadius: 1,
+            textAlign: "center",
+            fontSize: "0.75rem",
+            cursor: "pointer",
+            bgcolor: "background.paper",
+            border: "1px solid",
+            borderColor: "divider",
+            boxShadow: 1,
+          }}
+        >
+          下に {layout.belowCount} 件
+        </Box>
+      )}
+    </Box>
+  );
+}
+
+interface AlignedCardProps extends CardProps {
+  top: number;
+  maxHeight: number;
+  onHeightChange: (id: string, height: number) => void;
+}
+
+/** One card, absolutely positioned at the top the layout gave it. Its own
+ *  height feeds back into the layout via ResizeObserver — a reply/edit form
+ *  opening inside it, or a body's "続きを表示" toggle, changes the height the
+ *  next card has to stack below. */
+function AlignedCard({ comment, top, maxHeight, onHeightChange, ...cardProps }: AlignedCardProps) {
+  const contentRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const el = contentRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver((entries) => {
+      const h = entries[0]?.contentRect.height;
+      if (h) onHeightChange(comment.id, h);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [comment.id, onHeightChange]);
+
+  return (
+    <Box
+      data-testid="comment-rail-card"
+      data-comment-id={comment.id}
+      sx={{
+        position: "absolute",
+        left: 8,
+        right: 8,
+        top,
+        maxHeight,
+        overflow: maxHeight > 0 ? "auto" : "hidden",
+        // A card floating in whitespace needs its own edge, and the list's
+        // bottom rule (CommentCard's row separator) reads as a stray line
+        // once rows are no longer stacked against each other.
+        border: "1px solid",
+        borderColor: "divider",
+        borderRadius: 1,
+        bgcolor: "background.paper",
+        "& [data-testid=comment-item]": { borderBottom: "none" },
+      }}
+    >
+      {/* The observed element is the content, never the shell: the shell's
+          own height is what `maxHeight` clamps, so observing it would feed
+          the clamp back into the measurement and collapse the card to its
+          border (measured: it converged to 2px). */}
+      <Box ref={contentRef}>
+        <CommentCard comment={comment} {...cardProps} />
+      </Box>
     </Box>
   );
 }

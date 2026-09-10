@@ -1761,8 +1761,14 @@ describe("EditorPage comment hover preview / thread (#251)", () => {
     return ed.view.dom.querySelector(".comment-mark") as HTMLElement;
   }
 
-  /** Clicks the comment's highlight and waits for its thread to open. */
+  /** Clicks the comment's highlight and waits for its thread to open. #298:
+   *  a highlight click only opens the popover with the pane collapsed to the
+   *  rail — with the pane open it selects the rail card instead (covered in
+   *  its own describe block below), so this — the #251 popover's own
+   *  behavior — is exercised collapsed, same as it would be for a reader
+   *  who hasn't opened the pane. */
   async function openThread(ed: Editor) {
+    useUIStore.setState({ isCommentPaneOpen: false });
     await waitFor(() => {
       const el = ed.view.dom.querySelector(".comment-mark") as HTMLElement;
       fireEvent.click(el, { clientX: 10, clientY: 10 });
@@ -1872,6 +1878,7 @@ describe("EditorPage comment hover preview / thread (#251)", () => {
 
   it("キーボードでもスレッドを開ける", async () => {
     const { ed } = await openWithComment(openComment);
+    useUIStore.setState({ isCommentPaneOpen: false });
 
     await waitFor(() => {
       const el = ed.view.dom.querySelector(".comment-mark") as HTMLElement;
@@ -2088,6 +2095,177 @@ describe("EditorPage comment hover preview / thread (#251)", () => {
       expect(screen.getByTestId("comment-thread-edit")).toBeDisabled()
     );
     expect(screen.getByTestId("comment-thread-delete")).toBeDisabled();
+  });
+});
+
+// #298: the pane's rail layout mode changes what a highlight click does.
+describe("EditorPage comment rail: highlight click while the pane is open (#298)", () => {
+  let fakeEditor: Editor | null = null;
+
+  function installEditor(html: string): Editor {
+    fakeEditor = new Editor({
+      extensions: [
+        StarterKit.configure({ link: false }),
+        CommentHighlight,
+        DiffGutter,
+        LineNumberGutter,
+      ],
+      content: html,
+    });
+    fakeEditor.view.coordsAtPos = () => ({ top: 100, bottom: 120, left: 50, right: 150 });
+    fakeEditor.view.posAtCoords = () => null;
+    useEditorInstance.getState().setEditor(fakeEditor);
+    return fakeEditor;
+  }
+
+  async function openWithComment(comment: CommentJSON) {
+    const user = userEvent.setup();
+    const { http, HttpResponse } = await import("msw");
+    const { server } = await import("@/test/mocks/server");
+    server.use(
+      http.get("http://localhost:8080/api/stat/*", () =>
+        HttpResponse.json({
+          path: "README.md",
+          root: "mock-root",
+          modified: "2026-05-20T00:00:00Z",
+          created: "2026-05-19T00:00:00Z",
+          state: "review",
+          hasOpenComments: comment.status === "open",
+        })
+      ),
+      http.get("http://localhost:8080/api/comments/*", () =>
+        HttpResponse.json({
+          file: "README.md",
+          root: "mock-root",
+          summary: { total: 1, by_scope: {}, by_status: {} },
+          comments: [comment],
+        })
+      )
+    );
+    renderPage();
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
+    );
+    await user.click(screen.getByTestId("sidebar-file-README.md"));
+    await waitFor(() =>
+      expect(screen.getByTestId(`comment-context-${comment.id}`)).toBeInTheDocument()
+    );
+    const ed = installEditor("<h2>実績</h2><p>SLA遵守率 98%</p>");
+    await waitFor(() =>
+      expect(ed.view.dom.querySelectorAll(".comment-mark").length).toBeGreaterThan(0)
+    );
+    return { user, ed };
+  }
+
+  const railComment: CommentJSON = {
+    id: "c-400",
+    scope: "inline",
+    body: "段落と揃えて",
+    status: "open",
+    author: "human",
+    anchor: { heading_path: ["## 実績"], snippet: "SLA遵守率 98%", occurrence: 0 },
+    context: { heading_path: ["実績"], line_range: [74, 74] },
+    orphan: false,
+  };
+
+  beforeEach(() => {
+    localStorage.clear();
+    useOpenFiles.setState({ files: [], activeIdByRoot: {} });
+    useToast.setState({ toasts: [] });
+    useConfirm.setState({ pending: null, queue: [] });
+    useEditorInstance.setState({ editor: null });
+    useUIStore.setState({ isCommentPaneOpen: true });
+    useEditorPrefs.setState({ commentRailMode: "aligned" });
+    Element.prototype.scrollIntoView = vi.fn();
+  });
+
+  afterEach(() => {
+    fakeEditor?.destroy();
+    fakeEditor = null;
+    useEditorInstance.setState({ editor: null });
+  });
+
+  it("9. clicking the highlight with the pane open selects the card instead of opening a popover", async () => {
+    const { ed } = await openWithComment(railComment);
+
+    const el = ed.view.dom.querySelector(".comment-mark") as HTMLElement;
+    fireEvent.click(el, { clientX: 10, clientY: 10 });
+
+    // No popover — the pane already shows the body beside the text.
+    expect(screen.queryByTestId("comment-thread-popover")).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByTestId("comment-item")).toHaveAttribute("data-selected", "true")
+    );
+  });
+
+  it("10. clicking the highlight with the pane collapsed still opens the popover as before", async () => {
+    const { ed } = await openWithComment(railComment);
+    useUIStore.setState({ isCommentPaneOpen: false });
+
+    await waitFor(() => {
+      const el = ed.view.dom.querySelector(".comment-mark") as HTMLElement;
+      fireEvent.click(el, { clientX: 10, clientY: 10 });
+      expect(screen.getByTestId("comment-thread-popover")).toBeInTheDocument();
+    });
+  });
+
+  it("11. scrolling the nearest scrollable ancestor recomputes the card's rail position", async () => {
+    const { ed } = await openWithComment(railComment);
+
+    expect(screen.getByTestId("comment-rail-aligned")).toBeInTheDocument();
+    // In the real DOM `editor.view.dom.parentElement` is a plain wrapper div
+    // (`overflow: visible`) — the actual scroll container is further up the
+    // tree (see EditorPage's findScrollableAncestor). Reproduce that shape:
+    // tiptap's Editor (constructed without an `element` option, as here)
+    // mounts into its own throwaway wrapper div that is never attached to
+    // `document`, so wrap that wrapper in a container that *does* look
+    // scrollable (`overflow-y: auto` + scrollHeight > clientHeight) and
+    // assert the listener ends up on that ancestor, not the immediate parent.
+    const wrapper = ed.view.dom.parentElement as HTMLElement;
+    const scrollContainer = document.createElement("div");
+    scrollContainer.style.overflowY = "auto";
+    Object.defineProperty(scrollContainer, "scrollHeight", { value: 2000, configurable: true });
+    Object.defineProperty(scrollContainer, "clientHeight", { value: 800, configurable: true });
+    scrollContainer.appendChild(wrapper);
+    // The scroll-listener effect only (re)runs on [editor, railActive,
+    // centered] — reparenting after mount doesn't retrigger it on its own,
+    // so toggle `railActive` off/on to force it to re-discover the ancestor
+    // now that the DOM shape above matches production.
+    act(() => {
+      useEditorPrefs.setState({ commentRailMode: "list" });
+    });
+    act(() => {
+      useEditorPrefs.setState({ commentRailMode: "aligned" });
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("comment-rail-aligned")).toBeInTheDocument()
+    );
+
+    const mark = ed.view.dom.querySelector(".comment-mark") as HTMLElement;
+    // recomputeAnchorTops re-reads this on every call; start at 0 (already
+    // inside the zero-height jsdom pane, so the card is `visible`), then move
+    // it below the pane once the ancestor scrolls.
+    let markTop = 0;
+    mark.getBoundingClientRect = () =>
+      ({ top: markTop, bottom: markTop + 20, left: 0, right: 0, width: 0, height: 20, x: 0, y: markTop, toJSON() {} }) as DOMRect;
+
+    // Scrolling `wrapper` itself (the non-scrollable immediate parent) must
+    // not trigger a recompute — proves the listener isn't attached there.
+    markTop = 500;
+    fireEvent.scroll(wrapper);
+    const staleCardWrapper = screen.getByTestId("comment-rail-card") as HTMLElement;
+    expect(window.getComputedStyle(staleCardWrapper).top).toBe("0px");
+
+    // Scrolling the real scroll container recomputes and re-lays out the
+    // card at its new (much lower) anchor top (single-comment case is always
+    // shrink-to-fit and stays `visible`, never dropped to `below` — see
+    // commentRailLayout.ts's "lone leading card" handling — so the top the
+    // AlignedCard wrapper was placed at is what proves the recompute ran).
+    fireEvent.scroll(scrollContainer);
+    await waitFor(() => {
+      const cardWrapper = screen.getByTestId("comment-rail-card") as HTMLElement;
+      expect(window.getComputedStyle(cardWrapper).top).toBe("500px");
+    });
   });
 });
 
