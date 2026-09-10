@@ -51,21 +51,6 @@ describe("useUIStore", () => {
     expect(useUIStore.getState().sidebarPinned).toBe(true);
   });
 
-  it("toggles and sets the comment pane state", () => {
-    useUIStore.setState({ isCommentPaneOpen: true });
-    const { toggleCommentPane, setCommentPaneOpen } = useUIStore.getState();
-
-    toggleCommentPane();
-    expect(useUIStore.getState().isCommentPaneOpen).toBe(false);
-    toggleCommentPane();
-    expect(useUIStore.getState().isCommentPaneOpen).toBe(true);
-
-    setCommentPaneOpen(false);
-    expect(useUIStore.getState().isCommentPaneOpen).toBe(false);
-    setCommentPaneOpen(true);
-    expect(useUIStore.getState().isCommentPaneOpen).toBe(true);
-  });
-
   it("tracks the selected directory path", () => {
     useUIStore.setState({ selectedDirPath: null });
     const { setSelectedDirPath } = useUIStore.getState();

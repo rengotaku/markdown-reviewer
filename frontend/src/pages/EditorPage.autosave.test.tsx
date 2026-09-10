@@ -12,7 +12,6 @@ import { EditorPage } from "./EditorPage";
 import { useOpenFiles } from "@/hooks/useOpenFiles";
 import { useToast } from "@/hooks/useToast";
 import { useConfirm } from "@/hooks/useConfirm";
-import { useUIStore } from "@/hooks/useUIStore";
 import { server } from "@/test/mocks/server";
 import { API_BASE_URL } from "@/api";
 
@@ -71,7 +70,6 @@ beforeEach(() => {
   useOpenFiles.setState({ files: [], activeIdByRoot: {} });
   useToast.setState({ toasts: [] });
   useConfirm.setState({ pending: null, queue: [] });
-  useUIStore.setState({ isCommentPaneOpen: false });
 });
 
 afterEach(() => {

@@ -1,8 +1,36 @@
-import { describe, it, expect, vi } from "vitest";
-import { render, screen, within, waitFor } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { render, screen, within, waitFor, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { CommentSidePane } from "./CommentSidePane";
 import type { CommentJSON } from "@/api";
+
+// #304 removed the plain list layout: every anchored comment now renders
+// through the paragraph-aligned rail (commentRailLayout.ts), which measures
+// the pane's own box via getBoundingClientRect. jsdom never lays anything
+// out, so that always reads 0×0 — without this stub only a single card would
+// ever be `visible` (see the layout's own "isFirstVisible" shrink-to-fit
+// branch), silently dropping every fixture after the first regardless of
+// what the test is actually about. A generously tall pane keeps this file's
+// many action tests (reply/edit/resolve/detail) about those actions, not
+// about rail placement arithmetic (which commentRailLayout.test.ts already
+// covers on its own).
+beforeEach(() => {
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+    top: 0,
+    left: 0,
+    right: 300,
+    bottom: 4000,
+    width: 300,
+    height: 4000,
+    x: 0,
+    y: 0,
+    toJSON() {},
+  } as DOMRect);
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 const comment = (id: string, overrides: Partial<CommentJSON> = {}): CommentJSON => ({
   id,
@@ -26,11 +54,28 @@ const pinned = (id: string, overrides: Partial<CommentJSON> = {}): CommentJSON =
  *  need the filter switched before they appear. */
 async function showAll(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByTestId("comment-filter-all"));
+  // Switching the filter can be what first brings a pinned (global/orphan)
+  // comment into `visible` — it renders the pinned section (and its toggle)
+  // for the first time collapsed (#304), same as at initial render.
+  const toggle = screen.queryByTestId("comment-pinned-toggle");
+  if (toggle && toggle.getAttribute("aria-expanded") === "false") {
+    fireEvent.click(toggle);
+  }
 }
 
-function renderPane(props: Partial<React.ComponentProps<typeof CommentSidePane>> = {}) {
+/**
+ * `keepPinnedCollapsed`: the pinned section (全体・位置不明) always starts
+ * collapsed (#304). Every test in this file except the ones about that
+ * collapsed state itself uses `pinned()` purely as a fixture for exercising
+ * the full reply/edit/resolve/detail row (CommentRow) — none of them are
+ * about the collapse, so the default here expands it once up front rather
+ * than making each of those tests click through the toggle first.
+ */
+function renderPane(
+  props: Partial<React.ComponentProps<typeof CommentSidePane>> = {},
+  { keepPinnedCollapsed = false }: { keepPinnedCollapsed?: boolean } = {}
+) {
   const handlers = {
-    onClose: vi.fn(),
     onRefresh: vi.fn(),
     onAddComment: vi.fn(),
     onAddGlobal: vi.fn(),
@@ -46,13 +91,24 @@ function renderPane(props: Partial<React.ComponentProps<typeof CommentSidePane>>
   render(
     <CommentSidePane root="works" filePath="doc.md" comments={[]} reviewActive canAddComment {...handlers} {...props} />
   );
+  if (!keepPinnedCollapsed) {
+    const toggle = screen.queryByTestId("comment-pinned-toggle");
+    if (toggle) fireEvent.click(toggle);
+  }
   return handlers;
 }
 
 describe("CommentSidePane", () => {
-  it("shows each comment's id so a person can match it to what the AI reported (#286)", () => {
+  it("shows each comment's id so a person can match it to what the AI reported (#286)", async () => {
     renderPane({ comments: [comment("c-001"), comment("c-002")] });
-    const rows = screen.getAllByTestId("comment-item");
+    // The rail measures its own box via rAF (commentRailLayout.ts) before it
+    // can place a second card — the very first render still has last frame's
+    // (here: none) measurement.
+    const rows = await waitFor(() => {
+      const items = screen.getAllByTestId("comment-item");
+      expect(items).toHaveLength(2);
+      return items;
+    });
     expect(within(rows[0]).getByTestId("comment-id")).toHaveTextContent("c-001");
     expect(within(rows[1]).getByTestId("comment-id")).toHaveTextContent("c-002");
   });
@@ -332,7 +388,7 @@ describe("CommentSidePane", () => {
     // 未解決 by default (#253)
     expect(screen.getAllByTestId("comment-item")).toHaveLength(1);
     await showAll(user);
-    expect(screen.getAllByTestId("comment-item")).toHaveLength(2);
+    await waitFor(() => expect(screen.getAllByTestId("comment-item")).toHaveLength(2));
     await user.click(screen.getByTestId("comment-filter-resolved"));
     let items = screen.getAllByTestId("comment-item");
     expect(items).toHaveLength(1);
@@ -371,9 +427,13 @@ describe("CommentSidePane", () => {
     expect(h.onSelect).toHaveBeenCalledWith("c1");
   });
 
-  it("marks the row whose thread is open", () => {
+  it("marks the row whose thread is open", async () => {
     renderPane({ comments: [comment("c1"), comment("c2")], selectedId: "c2" });
-    const [first, second] = screen.getAllByTestId("comment-item");
+    const [first, second] = await waitFor(() => {
+      const items = screen.getAllByTestId("comment-item");
+      expect(items).toHaveLength(2);
+      return items;
+    });
     expect(first).toHaveAttribute("data-selected", "false");
     expect(second).toHaveAttribute("data-selected", "true");
   });
@@ -431,13 +491,6 @@ describe("CommentSidePane", () => {
     await user.click(screen.getByTestId("comment-open-detail"));
     expect(screen.getByTestId("comment-detail-dialog")).toBeInTheDocument();
     expect(screen.queryByTestId("comment-detail-reply-input")).not.toBeInTheDocument();
-  });
-
-  it("closes the pane via the header button", async () => {
-    const user = userEvent.setup();
-    const h = renderPane();
-    await user.click(screen.getByTestId("comment-pane-close"));
-    expect(h.onClose).toHaveBeenCalled();
   });
 
   it("labels a multi-anchor (cross-section) comment with its heading names", () => {
@@ -799,22 +852,23 @@ describe("CommentSidePane", () => {
   });
 });
 
-// #298: the pane's "aligned" (段落整列) layout mode. `railMode` defaults to
-// "list" (unchanged behaviour, asserted throughout the suite above) and only
-// switches to the rail arithmetic (commentRailLayout.ts) when a caller opts
-// in — which is what EditorPage always does in the app.
-describe("CommentSidePane rail mode (#298)", () => {
-  it("12. keeps global/orphan comments out of the rail in aligned mode, collapsed behind a toggle by default so the rail keeps the pane's height (#301 follow-up)", async () => {
+// #298: the pane's paragraph-aligned rail layout — the only layout the pane
+// renders since #304 removed the plain list mode (and the toggle between the
+// two).
+describe("CommentSidePane rail (#298)", () => {
+  it("12. keeps global/orphan comments out of the rail, collapsed behind a toggle by default so the rail keeps the pane's height (#301 follow-up)", async () => {
     const user = userEvent.setup();
-    renderPane({
-      railMode: "aligned",
-      anchorTops: { c1: 10 },
-      comments: [
-        comment("c1"),
-        pinned("g1"),
-        comment("o1", { orphan: true, context: null }),
-      ],
-    });
+    renderPane(
+      {
+        anchorTops: { c1: 10 },
+        comments: [
+          comment("c1"),
+          pinned("g1"),
+          comment("o1", { orphan: true, context: null }),
+        ],
+      },
+      { keepPinnedCollapsed: true }
+    );
     const section = screen.getByTestId("comment-pinned-section");
     // Collapsed by default: no comment rows rendered inline (they'd otherwise
     // claim height from the flex layout, squeezing the rail below it — the
@@ -835,55 +889,52 @@ describe("CommentSidePane rail mode (#298)", () => {
     expect(within(overlay).getAllByTestId("comment-item")).toHaveLength(2);
   });
 
-  it("renders anchored comments inside the aligned rail container, not the plain list", () => {
+  it("renders anchored comments inside the aligned rail container", () => {
     renderPane({
-      railMode: "aligned",
       anchorTops: { c1: 10, c2: 20 },
       comments: [comment("c1"), comment("c2")],
     });
     expect(screen.getByTestId("comment-rail-aligned")).toBeInTheDocument();
   });
 
-  it("falls back to the plain list when railMode is omitted", () => {
-    renderPane({ comments: [comment("c1"), comment("c2")] });
-    expect(screen.queryByTestId("comment-rail-aligned")).not.toBeInTheDocument();
-    expect(screen.getAllByTestId("comment-item")).toHaveLength(2);
-  });
-
   it("a card the rail can't fit is dropped and counted, and jumping from the count uses onJump", async () => {
+    // Root cause of a CI-only flake (rengotaku/markdown-reviewer#305 PR CI):
+    // this file's beforeEach stubs getBoundingClientRect to a *tall* pane
+    // (4000px, so the earlier multi-card tests in this file can measure more
+    // than one card at once — see the stub's own comment above). That stub
+    // also applies to *this* test's rail container. The rail measures its
+    // own box asynchronously (rAF, in AlignedCommentRail's
+    // scheduleMeasurePane) — the very first paint still reflects the
+    // pre-measurement state (paneHeight 0), so a `500`-anchored second card
+    // doesn't fit yet and "below" renders. But once that rAF fires and
+    // remeasures against the 4000px stub, `c2` *does* fit inside a 4000px
+    // pane and the whole "below" section unmounts. Locally the click landed
+    // before that remeasure; under CI's slower/differently-scheduled
+    // event loop the remeasure won, and `await user.click(below)` clicked a
+    // detached node — no handler fires, `onJump` is never called (reproduced
+    // deterministically here by running this test in isolation, which
+    // removes whatever incidental timing the full-suite run relies on: 5/5
+    // isolated runs failed at this exact assertion before the fix below).
+    //
+    // The fix makes the "doesn't fit" outcome true regardless of *which*
+    // pane height (the stale 0 or the remeasured 4000) is in effect: c2's
+    // anchor sits far below either one, so `belowCount` stays 1 whichever
+    // measurement wins the race — the flake is eliminated at the source
+    // instead of being timed around.
     const user = userEvent.setup();
-    // jsdom has no layout, so the pane's own box measures 0×0 — the first
-    // card still gets placed (shrink-to-fit for a lone leading card), and a
-    // second card whose anchor sits below the (zero-height) pane can't fit
-    // and is counted as belowCount instead.
     const h = renderPane({
-      railMode: "aligned",
-      anchorTops: { c1: 0, c2: 500 },
+      anchorTops: { c1: 0, c2: 100_000 },
       comments: [comment("c1"), comment("c2")],
     });
     const rail = screen.getByTestId("comment-rail-aligned");
     expect(within(rail).getAllByTestId("comment-item")).toHaveLength(1);
-    const below = screen.getByTestId("comment-rail-below");
-    expect(below).toHaveTextContent("下に 1 件");
-    await user.click(below);
-    expect(h.onJump).toHaveBeenCalledWith("c2");
-  });
-
-  it("shows the mode toggle only when onRailModeChange is supplied, and switches modes", async () => {
-    const user = userEvent.setup();
-    const onRailModeChange = vi.fn();
-    renderPane({
-      railMode: "list",
-      onRailModeChange,
-      comments: [comment("c1")],
+    // Re-queried from `screen` right before the click (rather than reusing
+    // the `below` reference from the assertion above) so a re-render between
+    // the two would still click the live node, not a detached one.
+    await waitFor(() => {
+      expect(screen.getByTestId("comment-rail-below")).toHaveTextContent("下に 1 件");
     });
-    expect(screen.getByTestId("comment-rail-mode")).toBeInTheDocument();
-    await user.click(screen.getByTestId("comment-rail-mode-aligned"));
-    expect(onRailModeChange).toHaveBeenCalledWith("aligned");
-  });
-
-  it("hides the mode toggle when the caller doesn't track a mode", () => {
-    renderPane({ comments: [comment("c1")] });
-    expect(screen.queryByTestId("comment-rail-mode")).not.toBeInTheDocument();
+    await user.click(screen.getByTestId("comment-rail-below"));
+    await waitFor(() => expect(h.onJump).toHaveBeenCalledWith("c2"));
   });
 });

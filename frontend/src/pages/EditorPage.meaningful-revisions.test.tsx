@@ -51,7 +51,6 @@ describe("EditorPage meaningfulRevisions memoization (#265 follow-up)", () => {
     useOpenFiles.setState({ files: [], activeIdByRoot: {} });
     useToast.setState({ toasts: [] });
     useConfirm.setState({ pending: null, queue: [] });
-    useUIStore.setState({ isCommentPaneOpen: false });
   });
 
   it("does not re-run lineDiff on unrelated re-renders once revisions/content settle", async () => {
@@ -108,14 +107,13 @@ describe("EditorPage meaningfulRevisions memoization (#265 follow-up)", () => {
 
     // Force several EditorPage re-renders via state that has nothing to do
     // with revisions/revContents/the active file's savedMarkdown -- toggling
-    // the comment pane subscribes EditorPage to a store update and
-    // re-renders it, exactly like the isDirty flips that fire while typing.
-    // Driven directly via the store (rather than clicking the toggle
-    // button) since the button that opens the pane disappears once it's
-    // open, replaced by a different close control.
+    // the sidebar pin subscribes EditorPage to a store update and re-renders
+    // it, exactly like the isDirty flips that fire while typing. (#304
+    // removed the comment pane's own open/close state, which this test used
+    // to drive for the same purpose.)
     for (let i = 0; i < 5; i++) {
       await act(async () => {
-        useUIStore.getState().toggleCommentPane();
+        useUIStore.getState().toggleSidebarPinned();
       });
     }
 

@@ -14,7 +14,6 @@ import { EditorPage } from "./EditorPage";
 import { useOpenFiles } from "@/hooks/useOpenFiles";
 import { useToast } from "@/hooks/useToast";
 import { useConfirm } from "@/hooks/useConfirm";
-import { useUIStore } from "@/hooks/useUIStore";
 import { useEditorInstance } from "@/hooks/useEditorInstance";
 
 vi.mock("@/components/tiptap/TiptapEditor", () => ({
@@ -98,7 +97,6 @@ describe("EditorPage restore-to-this-version (#282)", () => {
     useOpenFiles.setState({ files: [], activeIdByRoot: {} });
     useToast.setState({ toasts: [] });
     useConfirm.setState({ pending: null, queue: [] });
-    useUIStore.setState({ isCommentPaneOpen: false });
     useEditorInstance.setState({ restoringFileId: null });
     mockUnderReview();
   });

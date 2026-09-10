@@ -5,7 +5,6 @@ import {
   waitFor,
   fireEvent,
   act,
-  within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -23,7 +22,6 @@ import { CommentHighlight } from "@/components/tiptap/extensions/CommentHighligh
 import { DiffGutter } from "@/components/tiptap/extensions/DiffGutter";
 import { LineNumberGutter } from "@/components/tiptap/extensions/LineNumberGutter";
 import type { CommentJSON } from "@/api";
-import { useUIStore } from "@/hooks/useUIStore";
 
 vi.mock("@/components/tiptap/TiptapEditor", () => ({
   TiptapEditor: () => <div data-testid="tiptap-editor" />,
@@ -67,16 +65,8 @@ function renderPage(initialPath = `/${DEFAULT_ROOT}`) {
   );
 }
 
-// The comment pane no longer opens by default (#253). These tests are mostly
-// about what it lists, so open it for all of them; the default itself is
-// asserted in its own test below.
-beforeEach(() => {
-  useUIStore.setState({ isCommentPaneOpen: true });
-});
-
-describe("EditorPage comment pane default (#253)", () => {
-  it("starts closed and opens from the editor header", async () => {
-    useUIStore.setState({ isCommentPaneOpen: false });
+describe("EditorPage comment pane always shown (#304)", () => {
+  it("is present as soon as a file is opened, with no way to close it", async () => {
     const user = userEvent.setup();
     renderPage();
     await waitFor(() =>
@@ -84,10 +74,10 @@ describe("EditorPage comment pane default (#253)", () => {
     );
     await user.click(screen.getByTestId("sidebar-file-README.md"));
 
-    expect(screen.queryByTestId("comment-side-pane")).not.toBeInTheDocument();
-
-    await user.click(screen.getByTestId("editor-toggle-comments"));
     expect(await screen.findByTestId("comment-side-pane")).toBeInTheDocument();
+    expect(screen.queryByTestId("editor-toggle-comments")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("comment-pane-close")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("comment-rail")).not.toBeInTheDocument();
   });
 });
 
@@ -472,105 +462,6 @@ describe("EditorPage", () => {
     await waitFor(() =>
       expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
     );
-  });
-
-  it("comments pane can be toggled (close inside, open from editor header)", async () => {
-    const user = userEvent.setup();
-    renderPage();
-
-    await waitFor(() =>
-      expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
-    );
-
-    // Pane defaults to open; close button is rendered inside it.
-    expect(screen.getByTestId("comment-side-pane")).toBeInTheDocument();
-    await user.click(screen.getByTestId("comment-pane-close"));
-    expect(screen.queryByTestId("comment-side-pane")).not.toBeInTheDocument();
-
-    // Closed → "open" button appears in the editor header.
-    await user.click(screen.getByTestId("editor-toggle-comments"));
-    expect(screen.getByTestId("comment-side-pane")).toBeInTheDocument();
-  });
-
-  // #276: closed pane still has to answer "is anything waiting on me here?"
-  // and let a reader comment on the file as a whole.
-  it("shows the same counts on the collapsed rail as the pane's filter", async () => {
-    const { http, HttpResponse } = await import("msw");
-    const { server } = await import("@/test/mocks/server");
-    const comment = (id: string, status: "open" | "resolved") => ({
-      id,
-      scope: "inline",
-      author: "alice",
-      date: "2026-05-20",
-      body: `body of ${id}`,
-      status,
-      anchor: { heading_path: [], snippet: "mock", occurrence: 0 },
-      context: { heading_path: [], line_range: [1, 1] },
-      orphan: false,
-    });
-    server.use(
-      http.get("http://localhost:8080/api/stat/*", ({ request }) => {
-        const url = new URL(request.url);
-        return HttpResponse.json({
-          path: url.pathname.replace(/^\/api\/stat\//, ""),
-          root: "mock-root",
-          modified: "2026-05-20T00:00:00Z",
-          created: "2026-05-19T00:00:00Z",
-          state: "review",
-          hasOpenComments: true,
-        });
-      }),
-      http.get("http://localhost:8080/api/comments/*", ({ request }) => {
-        const url = new URL(request.url);
-        return HttpResponse.json({
-          file: url.pathname.replace(/^\/api\/comments\//, ""),
-          root: "mock-root",
-          summary: { total: 3, by_scope: {}, by_status: {} },
-          comments: [
-            comment("c1", "open"),
-            comment("c2", "open"),
-            comment("c3", "resolved"),
-          ],
-        });
-      })
-    );
-    const user = userEvent.setup();
-    renderPage();
-    await waitFor(() =>
-      expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
-    );
-    await user.click(screen.getByTestId("sidebar-file-README.md"));
-
-    // The pane's own filter is the reference the rail has to agree with.
-    await waitFor(() =>
-      expect(screen.getByTestId("comment-filter-all")).toHaveTextContent("すべて 3")
-    );
-    expect(screen.getByTestId("comment-filter-open")).toHaveTextContent("未解決 2");
-    expect(screen.getByTestId("comment-filter-resolved")).toHaveTextContent("解決済 1");
-
-    await user.click(screen.getByTestId("comment-pane-close"));
-
-    expect(screen.getByTestId("comment-rail-count-all")).toHaveTextContent("3");
-    expect(screen.getByTestId("comment-rail-count-open")).toHaveTextContent("2");
-    expect(screen.getByTestId("comment-rail-count-resolved")).toHaveTextContent("1");
-  });
-
-  it("offers the file-wide comment button while the pane is closed (#276)", async () => {
-    const user = userEvent.setup();
-    renderPage();
-    await waitFor(() =>
-      expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
-    );
-    await user.click(screen.getByTestId("sidebar-file-README.md"));
-    await user.click(screen.getByTestId("comment-pane-close"));
-
-    expect(screen.queryByTestId("comment-side-pane")).not.toBeInTheDocument();
-    expect(screen.getByTestId("rail-add-global-comment")).toBeInTheDocument();
-    // The composer itself can't open here: TiptapEditor is mocked, and
-    // handleAddGlobalClick bails when there is no editor instance (the pane's
-    // own button has the same limitation in this file). The rail's half of the
-    // wiring is covered in CommentRail.test.tsx; the end-to-end path was
-    // checked in a real browser.
   });
 
   it("shows a placeholder when no file is selected", () => {
@@ -1673,11 +1564,11 @@ describe("EditorPage selection menu (#233)", () => {
   });
 });
 
-describe("EditorPage comment hover preview / thread (#251)", () => {
-  // The 編集 / 削除 items used to live in the editor's right-click menu. They
-  // now open by hovering the comment's highlight — adding a comment is what
-  // the selection bubble is for, and an already-commented span should not
-  // have to be re-selected to act on it.
+describe("EditorPage comment highlight & rail selection (#304)", () => {
+  // #304 removed the hover-preview popover and the click-opens-a-thread
+  // popover (#251/#298): the pane is always open, so a highlight's hover
+  // has nothing left to preview, and its click always selects that
+  // comment's card in the rail instead.
   let fakeEditor: Editor | null = null;
 
   function installEditor(html: string): Editor {
@@ -1735,46 +1626,11 @@ describe("EditorPage comment hover preview / thread (#251)", () => {
       expect(screen.getByTestId(`comment-context-${comment.id}`)).toBeInTheDocument()
     );
     const ed = installEditor("<h2>実績</h2><p>SLA遵守率 98%</p>");
-    // Wait for the page to push the comment into the editor as a decoration —
-    // the bubble reads its target from that decoration set.
+    // Wait for the page to push the comment into the editor as a decoration.
     await waitFor(() =>
       expect(ed.view.dom.querySelectorAll(".comment-mark").length).toBeGreaterThan(0)
     );
     return { user, ed };
-  }
-
-  /** Rests the pointer on the comment's highlight and waits for the preview. */
-  async function hoverHighlight(ed: Editor) {
-    // jsdom has no layout, so posAtCoords returns null (stubbed in
-    // installEditor) and the handler falls back to the mark's
-    // data-comment-id — the path this exercises.
-    //
-    // Re-queried and re-fired on every retry: pointer samples are throttled
-    // (a single move can land inside the previous sample's window), and the
-    // decorations are rebuilt on every doc/comment change, which detaches the
-    // element a move would otherwise be dispatched to.
-    await waitFor(() => {
-      const el = ed.view.dom.querySelector(".comment-mark") as HTMLElement;
-      fireEvent.mouseMove(el, { clientX: 10, clientY: 10 });
-      expect(screen.getByTestId("comment-hover-preview")).toBeInTheDocument();
-    });
-    return ed.view.dom.querySelector(".comment-mark") as HTMLElement;
-  }
-
-  /** Clicks the comment's highlight and waits for its thread to open. #298:
-   *  a highlight click only opens the popover with the pane collapsed to the
-   *  rail — with the pane open it selects the rail card instead (covered in
-   *  its own describe block below), so this — the #251 popover's own
-   *  behavior — is exercised collapsed, same as it would be for a reader
-   *  who hasn't opened the pane. */
-  async function openThread(ed: Editor) {
-    useUIStore.setState({ isCommentPaneOpen: false });
-    await waitFor(() => {
-      const el = ed.view.dom.querySelector(".comment-mark") as HTMLElement;
-      fireEvent.click(el, { clientX: 10, clientY: 10 });
-      expect(screen.getByTestId("comment-thread-popover")).toBeInTheDocument();
-    });
-    return ed.view.dom.querySelector(".comment-mark") as HTMLElement;
   }
 
   const openComment: CommentJSON = {
@@ -1803,94 +1659,8 @@ describe("EditorPage comment hover preview / thread (#251)", () => {
     useEditorInstance.setState({ editor: null });
   });
 
-  it("ホバーでは本文のプレビューだけが出て、操作は出ない", async () => {
+  it("4. hovering the highlight shows no comment preview and no menu", async () => {
     const { ed } = await openWithComment(openComment);
-
-    await hoverHighlight(ed);
-
-    expect(screen.getByTestId("comment-hover-preview-body")).toHaveTextContent(
-      "ここ直して"
-    );
-    // Hover reads, click writes (#251).
-    expect(screen.queryByTestId("comment-thread-edit")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("comment-thread-delete")).not.toBeInTheDocument();
-
-    // Leaving the editor closes it again.
-    fireEvent.mouseLeave(ed.view.dom);
-    await waitFor(() =>
-      expect(screen.queryByTestId("comment-hover-preview")).not.toBeInTheDocument()
-    );
-  });
-
-  it("コメント外にホバーしてもメニューは出ない", async () => {
-    const { ed } = await openWithComment(openComment);
-
-    // The "実績" heading sits before the highlighted paragraph.
-    const heading = ed.view.dom.querySelector("h2") as HTMLElement;
-    fireEvent.mouseMove(heading, { clientX: 10, clientY: 10 });
-
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 300));
-    });
-    expect(screen.queryByTestId("editor-comment-menu")).not.toBeInTheDocument();
-  });
-
-  it("クリックでスレッドが開き、返信・解決・編集・削除が揃う", async () => {
-    const { ed } = await openWithComment(openComment);
-
-    await openThread(ed);
-
-    expect(screen.getByTestId("comment-thread-message")).toHaveTextContent(
-      "ここ直して"
-    );
-    expect(screen.getByTestId("comment-thread-reply-input")).toBeInTheDocument();
-    expect(screen.getByTestId("comment-thread-resolve")).toBeEnabled();
-    expect(screen.getByTestId("comment-thread-edit")).toBeEnabled();
-    expect(screen.getByTestId("comment-thread-delete")).toBeEnabled();
-  });
-
-  it("一覧のカードをクリックすると本文へ飛んでスレッドが開く", async () => {
-    const { user } = await openWithComment(openComment);
-
-    await user.click(screen.getByTestId("comment-item"));
-
-    expect(await screen.findByTestId("comment-thread-popover")).toBeInTheDocument();
-    expect(vi.mocked(Element.prototype.scrollIntoView)).toHaveBeenCalled();
-    // The list marks the row whose thread is open.
-    await waitFor(() =>
-      expect(screen.getByTestId("comment-item")).toHaveAttribute(
-        "data-selected",
-        "true"
-      )
-    );
-  });
-
-  it("プレビューのカードをクリックしてもスレッドが開く", async () => {
-    // The card covers the text it describes, so a pointer that drifted onto it
-    // while reading must not click through to nothing.
-    const { user, ed } = await openWithComment(openComment);
-    await hoverHighlight(ed);
-
-    await user.click(screen.getByTestId("comment-hover-preview-click"));
-
-    expect(await screen.findByTestId("comment-thread-popover")).toBeInTheDocument();
-  });
-
-  it("キーボードでもスレッドを開ける", async () => {
-    const { ed } = await openWithComment(openComment);
-    useUIStore.setState({ isCommentPaneOpen: false });
-
-    await waitFor(() => {
-      const el = ed.view.dom.querySelector(".comment-mark") as HTMLElement;
-      expect(el).toHaveAttribute("tabindex", "0");
-      fireEvent.keyDown(el, { key: "Enter" });
-      expect(screen.getByTestId("comment-thread-popover")).toBeInTheDocument();
-    });
-  });
-
-  it("スレッドを開いている間はホバープレビューを出さない", async () => {
-    const { ed } = await openWithComment(openComment);
-    await openThread(ed);
 
     const el = ed.view.dom.querySelector(".comment-mark") as HTMLElement;
     fireEvent.mouseMove(el, { clientX: 10, clientY: 10 });
@@ -1899,294 +1669,13 @@ describe("EditorPage comment hover preview / thread (#251)", () => {
     });
 
     expect(screen.queryByTestId("comment-hover-preview")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("editor-comment-menu")).not.toBeInTheDocument();
+
+    fireEvent.mouseLeave(ed.view.dom);
   });
 
-  it("選択が残っていてもハイライトのクリックでスレッドが開く", async () => {
-    // Right after commenting the commented range is still selected; clicking
-    // the highlight must still open its thread.
+  it("3. clicking the highlight selects the card instead of opening a popover", async () => {
     const { ed } = await openWithComment(openComment);
-    await act(async () => {
-      ed.commands.setTextSelection({ from: 1, to: 3 });
-    });
-
-    await openThread(ed);
-
-    expect(screen.getByTestId("comment-thread-popover")).toBeInTheDocument();
-  });
-
-  it("編集は本文入りの吹き出しを開く", async () => {
-    const { user, ed } = await openWithComment(openComment);
-    await openThread(ed);
-
-    await user.click(await screen.findByTestId("comment-thread-edit"));
-
-    // The composer takes the thread's place at the same anchor (#252).
-    expect(await screen.findByTestId("comment-composer-popover")).toBeInTheDocument();
-    expect(screen.getByTestId("comment-body-input")).toHaveValue("ここ直して");
-    expect(screen.queryByTestId("comment-thread-popover")).not.toBeInTheDocument();
-  });
-
-  it("返信は POST を投げてスレッドに載る", async () => {
-    const { user, ed } = await openWithComment(openComment);
-    const { http, HttpResponse } = await import("msw");
-    const { server } = await import("@/test/mocks/server");
-    let posted: unknown = null;
-    server.use(
-      http.post("http://localhost:8080/api/replies*", async ({ request }) => {
-        posted = await request.json();
-        return HttpResponse.json({ ok: true });
-      })
-    );
-    await openThread(ed);
-
-    await user.type(
-      screen.getByTestId("comment-thread-reply-input"),
-      "直しました"
-    );
-    await user.click(screen.getByTestId("comment-thread-send"));
-
-    await waitFor(() =>
-      expect(posted).toMatchObject({ body: "直しました" })
-    );
-  });
-
-  it("未送信の返信があると外側クリックでは閉じない", async () => {
-    const { user, ed } = await openWithComment(openComment);
-    await openThread(ed);
-
-    await user.type(screen.getByTestId("comment-thread-reply-input"), "書きかけ");
-    fireEvent.mouseDown(document.body);
-
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 50));
-    });
-    expect(screen.getByTestId("comment-thread-popover")).toBeInTheDocument();
-    expect(screen.getByTestId("comment-thread-draft-hint")).toBeInTheDocument();
-  });
-
-  it("未送信がなければ外側クリックで閉じる", async () => {
-    const { ed } = await openWithComment(openComment);
-    await openThread(ed);
-
-    fireEvent.mouseDown(document.body);
-
-    await waitFor(() =>
-      expect(screen.queryByTestId("comment-thread-popover")).not.toBeInTheDocument()
-    );
-  });
-
-  it("Esc は未送信の返信の破棄を確認してから閉じる", async () => {
-    const { user, ed } = await openWithComment(openComment);
-    await openThread(ed);
-    await user.type(screen.getByTestId("comment-thread-reply-input"), "書きかけ");
-
-    fireEvent.keyDown(document, { key: "Escape" });
-
-    const dialog = await screen.findByRole("dialog");
-    await user.click(within(dialog).getByRole("button", { name: "破棄して閉じる" }));
-
-    await waitFor(() =>
-      expect(screen.queryByTestId("comment-thread-popover")).not.toBeInTheDocument()
-    );
-  });
-
-  it("長いスレッドは畳まれ、ボタンで全部開く", async () => {
-    const { user, ed } = await openWithComment({
-      ...openComment,
-      replies: [
-        { author: "ai", body: "r1" },
-        { author: "human", body: "r2" },
-        { author: "ai", body: "r3" },
-        { author: "human", body: "r4" },
-        { author: "ai", body: "r5" },
-      ],
-    });
-    await openThread(ed);
-
-    // Scoped to the popover: the side pane lists the same replies.
-    const popover = screen.getByTestId("comment-thread-popover");
-    // Opening remark + the last two, with the middle folded behind a button.
-    expect(within(popover).getAllByTestId("comment-thread-message")).toHaveLength(3);
-    expect(within(popover).queryByText("r1")).not.toBeInTheDocument();
-
-    await user.click(screen.getByTestId("comment-thread-expand"));
-
-    expect(within(popover).getAllByTestId("comment-thread-message")).toHaveLength(6);
-    expect(within(popover).getByText("r1")).toBeInTheDocument();
-  });
-
-  it("削除は DELETE を投げる", async () => {
-    const { user, ed } = await openWithComment(openComment);
-    const { http, HttpResponse } = await import("msw");
-    const { server } = await import("@/test/mocks/server");
-    let deleted: string | null = null;
-    server.use(
-      http.delete("http://localhost:8080/api/comments/*", ({ request }) => {
-        deleted = new URL(request.url).searchParams.get("id");
-        return HttpResponse.json({ ok: true });
-      })
-    );
-    await openThread(ed);
-
-    await user.click(await screen.findByTestId("comment-thread-delete"));
-    // Deleting asks first, naming the comment it is about to drop.
-    const dialog = await screen.findByRole("dialog");
-    expect(dialog).toHaveTextContent("ここ直して");
-    await user.click(within(dialog).getByRole("button", { name: "削除" }));
-
-    await waitFor(() => expect(deleted).toBe("c-300"));
-  });
-
-  it("連打しても DELETE は1回しか飛ばない", async () => {
-    const { user, ed } = await openWithComment(openComment);
-    const { http, HttpResponse } = await import("msw");
-    const { server } = await import("@/test/mocks/server");
-    let calls = 0;
-    server.use(
-      http.delete("http://localhost:8080/api/comments/*", async () => {
-        calls += 1;
-        // Hold the request open so the second click lands mid-flight.
-        await new Promise((r) => setTimeout(r, 300));
-        return HttpResponse.json({ ok: true });
-      })
-    );
-    await openThread(ed);
-
-    const btn = await screen.findByTestId("comment-thread-delete");
-    await user.click(btn);
-    await user.click(await screen.findByRole("button", { name: "削除" }));
-
-    // The button is disabled while the request is in flight, and a click that
-    // gets through anyway (fireEvent ignores pointer-events) is a no-op.
-    await waitFor(() => expect(btn).toBeDisabled());
-    fireEvent.click(btn);
-
-    await waitFor(() => expect(calls).toBe(1));
-    expect(calls).toBe(1);
-  });
-
-  it("削除の確認をキャンセルするとコメントは残る", async () => {
-    const { user, ed } = await openWithComment(openComment);
-    const { http, HttpResponse } = await import("msw");
-    const { server } = await import("@/test/mocks/server");
-    let calls = 0;
-    server.use(
-      http.delete("http://localhost:8080/api/comments/*", () => {
-        calls += 1;
-        return HttpResponse.json({ ok: true });
-      })
-    );
-    await openThread(ed);
-
-    await user.click(await screen.findByTestId("comment-thread-delete"));
-    await user.click(await screen.findByRole("button", { name: "キャンセル" }));
-
-    expect(calls).toBe(0);
-    expect(ed.view.dom.querySelectorAll(".comment-mark").length).toBeGreaterThan(0);
-    // The thread is still usable (no stuck in-flight state).
-    expect(screen.getByTestId("comment-thread-delete")).toBeEnabled();
-  });
-
-  it("AI のコメントは編集・削除とも無効になる", async () => {
-    const { ed } = await openWithComment({ ...openComment, author: "ai" });
-    await openThread(ed);
-
-    await waitFor(() =>
-      expect(screen.getByTestId("comment-thread-edit")).toBeDisabled()
-    );
-    expect(screen.getByTestId("comment-thread-delete")).toBeDisabled();
-  });
-});
-
-// #298: the pane's rail layout mode changes what a highlight click does.
-describe("EditorPage comment rail: highlight click while the pane is open (#298)", () => {
-  let fakeEditor: Editor | null = null;
-
-  function installEditor(html: string): Editor {
-    fakeEditor = new Editor({
-      extensions: [
-        StarterKit.configure({ link: false }),
-        CommentHighlight,
-        DiffGutter,
-        LineNumberGutter,
-      ],
-      content: html,
-    });
-    fakeEditor.view.coordsAtPos = () => ({ top: 100, bottom: 120, left: 50, right: 150 });
-    fakeEditor.view.posAtCoords = () => null;
-    useEditorInstance.getState().setEditor(fakeEditor);
-    return fakeEditor;
-  }
-
-  async function openWithComment(comment: CommentJSON) {
-    const user = userEvent.setup();
-    const { http, HttpResponse } = await import("msw");
-    const { server } = await import("@/test/mocks/server");
-    server.use(
-      http.get("http://localhost:8080/api/stat/*", () =>
-        HttpResponse.json({
-          path: "README.md",
-          root: "mock-root",
-          modified: "2026-05-20T00:00:00Z",
-          created: "2026-05-19T00:00:00Z",
-          state: "review",
-          hasOpenComments: comment.status === "open",
-        })
-      ),
-      http.get("http://localhost:8080/api/comments/*", () =>
-        HttpResponse.json({
-          file: "README.md",
-          root: "mock-root",
-          summary: { total: 1, by_scope: {}, by_status: {} },
-          comments: [comment],
-        })
-      )
-    );
-    renderPage();
-    await waitFor(() =>
-      expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
-    );
-    await user.click(screen.getByTestId("sidebar-file-README.md"));
-    await waitFor(() =>
-      expect(screen.getByTestId(`comment-context-${comment.id}`)).toBeInTheDocument()
-    );
-    const ed = installEditor("<h2>実績</h2><p>SLA遵守率 98%</p>");
-    await waitFor(() =>
-      expect(ed.view.dom.querySelectorAll(".comment-mark").length).toBeGreaterThan(0)
-    );
-    return { user, ed };
-  }
-
-  const railComment: CommentJSON = {
-    id: "c-400",
-    scope: "inline",
-    body: "段落と揃えて",
-    status: "open",
-    author: "human",
-    anchor: { heading_path: ["## 実績"], snippet: "SLA遵守率 98%", occurrence: 0 },
-    context: { heading_path: ["実績"], line_range: [74, 74] },
-    orphan: false,
-  };
-
-  beforeEach(() => {
-    localStorage.clear();
-    useOpenFiles.setState({ files: [], activeIdByRoot: {} });
-    useToast.setState({ toasts: [] });
-    useConfirm.setState({ pending: null, queue: [] });
-    useEditorInstance.setState({ editor: null });
-    useUIStore.setState({ isCommentPaneOpen: true });
-    useEditorPrefs.setState({ commentRailMode: "aligned" });
-    Element.prototype.scrollIntoView = vi.fn();
-  });
-
-  afterEach(() => {
-    fakeEditor?.destroy();
-    fakeEditor = null;
-    useEditorInstance.setState({ editor: null });
-  });
-
-  it("9. clicking the highlight with the pane open selects the card instead of opening a popover", async () => {
-    const { ed } = await openWithComment(railComment);
 
     const el = ed.view.dom.querySelector(".comment-mark") as HTMLElement;
     fireEvent.click(el, { clientX: 10, clientY: 10 });
@@ -2198,19 +1687,19 @@ describe("EditorPage comment rail: highlight click while the pane is open (#298)
     );
   });
 
-  it("10. clicking the highlight with the pane collapsed still opens the popover as before", async () => {
-    const { ed } = await openWithComment(railComment);
-    useUIStore.setState({ isCommentPaneOpen: false });
+  it("keyboard Enter on the highlight also selects the card", async () => {
+    const { ed } = await openWithComment(openComment);
 
     await waitFor(() => {
       const el = ed.view.dom.querySelector(".comment-mark") as HTMLElement;
-      fireEvent.click(el, { clientX: 10, clientY: 10 });
-      expect(screen.getByTestId("comment-thread-popover")).toBeInTheDocument();
+      expect(el).toHaveAttribute("tabindex", "0");
+      fireEvent.keyDown(el, { key: "Enter" });
+      expect(screen.getByTestId("comment-item")).toHaveAttribute("data-selected", "true");
     });
   });
 
-  it("11. scrolling the nearest scrollable ancestor recomputes the card's rail position", async () => {
-    const { ed } = await openWithComment(railComment);
+  it("scrolling the nearest scrollable ancestor recomputes the card's rail position", async () => {
+    const { ed } = await openWithComment(openComment);
 
     expect(screen.getByTestId("comment-rail-aligned")).toBeInTheDocument();
     // In the real DOM `editor.view.dom.parentElement` is a plain wrapper div
@@ -2227,15 +1716,15 @@ describe("EditorPage comment rail: highlight click while the pane is open (#298)
     Object.defineProperty(scrollContainer, "scrollHeight", { value: 2000, configurable: true });
     Object.defineProperty(scrollContainer, "clientHeight", { value: 800, configurable: true });
     scrollContainer.appendChild(wrapper);
-    // The scroll-listener effect only (re)runs on [editor, railActive,
-    // centered] — reparenting after mount doesn't retrigger it on its own,
-    // so toggle `railActive` off/on to force it to re-discover the ancestor
-    // now that the DOM shape above matches production.
+    // The scroll-listener effect only (re)runs on [editor, centered] —
+    // reparenting after mount doesn't retrigger it on its own, so toggle
+    // `centered` off/on to force it to re-discover the ancestor now that the
+    // DOM shape above matches production.
     act(() => {
-      useEditorPrefs.setState({ commentRailMode: "list" });
+      useEditorPrefs.setState({ centered: false });
     });
     act(() => {
-      useEditorPrefs.setState({ commentRailMode: "aligned" });
+      useEditorPrefs.setState({ centered: true });
     });
     await waitFor(() =>
       expect(screen.getByTestId("comment-rail-aligned")).toBeInTheDocument()
