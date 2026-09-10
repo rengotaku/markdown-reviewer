@@ -747,7 +747,15 @@ function CommentCard({
         </Tooltip>
       </Box>
 
-      {ctx && (
+      {/* #312: the context row ("対象: ...") only earns its height once a
+          card is selected. A non-selected card is one of possibly many
+          stacked down the rail — #298 places each level with the paragraph
+          it targets, but that only holds while a card stays shorter than
+          the anchor spacing above it. This row was part of what pushed
+          non-selected cards past 95px and beyond real-document anchor gaps
+          (measured 138px, #298's alignment breaking by 123px). It's still
+          one click away: selecting the card brings it back. */}
+      {selected && ctx && (
         <Typography
           variant="caption"
           color="text.secondary"
