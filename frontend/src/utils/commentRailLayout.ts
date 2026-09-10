@@ -5,6 +5,15 @@ export const RAIL_GAP = 8;
  *  other card off the rail; the card scrolls inside itself past this. */
 export const RAIL_CARD_MAX_HEIGHT = 320;
 
+/** Below this allotted height a shrunk card wouldn't show anything readable
+ *  (a header row and maybe half a line) — not worth rendering as `visible`.
+ *  Guards against a pane whose own box has collapsed to (near) 0 height
+ *  (e.g. a large pinned section above it pushed it out): without this floor
+ *  the lone-card shrink-to-fit branch below would still emit a card clamped
+ *  to `maxHeight: 0`, which looks to the reviewer like the comment vanished
+ *  rather than "not enough room, jump to see it". */
+export const RAIL_MIN_USABLE_HEIGHT = 40;
+
 export interface RailItem {
   id: string;
   /** Highlight's viewport top, or null for comments with no live anchor
@@ -112,10 +121,25 @@ export function layoutCommentRail(
       // it: shrink it to the pane instead of dropping it entirely (#298's
       // "単体でペイン高さを超えるカードは top 0 で置き").
       if (isFirstVisible) {
+        // `paneHeight === 0` is the pane's own not-yet-measured state (its
+        // box is measured post-paint via ResizeObserver/rAF — callers pass
+        // `{ top: 0, height: 0 }` until the first measurement lands) rather
+        // than a genuinely collapsed pane, so it keeps the pre-#301
+        // shrink-to-0 behavior: a harmless single-frame placeholder that
+        // gets corrected as soon as the real measurement arrives. Once
+        // `paneHeight` reflects a real (if too-small) measurement, though,
+        // shrinking a card below the readable floor is the actual bug this
+        // guards against.
         const fitHeight = Math.max(0, paneHeight - top);
-        visible.push({ id: item.id, top, maxHeight: fitHeight });
-        cursor = top + fitHeight + gap;
-        continue;
+        if (paneHeight === 0 || fitHeight >= RAIL_MIN_USABLE_HEIGHT) {
+          visible.push({ id: item.id, top, maxHeight: fitHeight });
+          cursor = top + fitHeight + gap;
+          continue;
+        }
+        // Not enough room to shrink into on a pane that HAS been measured —
+        // fall through to the same above/below classification as the
+        // non-first-visible case below, instead of rendering a card the
+        // reviewer can't actually read.
       }
       // relativeAnchor here is > -cardHeight (else it would have been
       // caught by the fully-above-the-pane check above), so `< 0` only

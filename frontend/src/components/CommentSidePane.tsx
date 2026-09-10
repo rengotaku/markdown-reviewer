@@ -237,6 +237,16 @@ export function CommentSidePane({
     () => visible.filter((c) => c.scope === "global" || c.orphan),
     [visible]
   );
+  // Aligned mode (#298) needs the rail to claim nearly the whole pane
+  // height — a paragraph anchored near the top of the file otherwise has no
+  // band left to render its card in at all (#301 follow-up: capping this
+  // section to 40% still left it "collapsed above 300px" for anything with
+  // 5+ pinned comments). So in aligned mode this section defaults to a
+  // single collapsed header row and its full content only appears as an
+  // overlay on demand, never as a permanent claim on the rail's height.
+  // List mode is untouched: it never competed with the rail for space to
+  // begin with, so it keeps always showing its full content inline.
+  const [pinnedExpanded, setPinnedExpanded] = useState(false);
   const anchored = useMemo(
     () => visible.filter((c) => !(c.scope === "global" || c.orphan)),
     [visible]
@@ -459,38 +469,131 @@ export function CommentSidePane({
         ) : (
           <>
             {pinned.length > 0 && (
-              <Box data-testid="comment-pinned-section">
-                <Typography
-                  variant="caption"
-                  sx={{
-                    display: "block",
-                    px: 1.5,
-                    py: 0.75,
-                    color: "text.secondary",
-                    bgcolor: "action.hover",
-                    borderBottom: "1px solid",
-                    borderColor: "divider",
-                    letterSpacing: ".04em",
-                  }}
-                >
-                  全体・位置不明 {pinned.length}
-                </Typography>
-                {pinned.map((c) => (
-                  <CommentRow
-                    key={c.id}
-                    comment={c}
-                    onDelete={onDelete}
-                    onResolveToggle={onResolveToggle}
-                    onReply={onReply}
-                    onEdit={onEdit}
-                    onEditReply={onEditReply}
-                    onDeleteReply={onDeleteReply}
-                    onJump={onJump}
-                    onOpenDetail={setDetailId}
-                    onCopyLink={handleCopyLink}
-                    canCopyLink={canCopyLink}
-                  />
-                ))}
+              <Box
+                data-testid="comment-pinned-section"
+                sx={
+                  railMode === "aligned"
+                    ? // This section is a sibling of a `flex: 1` rail whose
+                      // own content is entirely absolutely-positioned (so
+                      // its content-box height is 0). A flex item's shrink
+                      // share is weighted by its flex-basis, and `flex: 1`
+                      // sets that basis to 0 — so however tall this section
+                      // renders, it claims 0% of any shrinking and the rail
+                      // gets none of the shrink either. `position: relative`
+                      // lets the expanded content below render as an
+                      // absolutely-positioned overlay instead of adding to
+                      // this box's own (flex-participating) height — the
+                      // collapsed header row is all this box actually
+                      // occupies in the layout, so the rail keeps nearly
+                      // the whole pane regardless of how many comments are
+                      // pinned or whether the overlay is open (#301
+                      // follow-up: capping this section's height to a % of
+                      // the pane, as done before, still shrank the rail's
+                      // usable band below 300px with 5+ pinned comments).
+                      { flexShrink: 0, position: "relative" }
+                    : undefined
+                }
+              >
+                {railMode === "aligned" ? (
+                  <Box
+                    component="button"
+                    type="button"
+                    onClick={() => setPinnedExpanded((v) => !v)}
+                    aria-expanded={pinnedExpanded}
+                    data-testid="comment-pinned-toggle"
+                    sx={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      width: "100%",
+                      px: 1.5,
+                      py: 0.75,
+                      border: 0,
+                      borderBottom: "1px solid",
+                      borderColor: "divider",
+                      bgcolor: "action.hover",
+                      color: "text.secondary",
+                      font: "inherit",
+                      cursor: "pointer",
+                      textAlign: "left",
+                    }}
+                  >
+                    <Typography variant="caption" sx={{ letterSpacing: ".04em" }}>
+                      全体・位置不明 {pinned.length}
+                    </Typography>
+                    <Typography variant="caption">{pinnedExpanded ? "閉じる" : "表示"}</Typography>
+                  </Box>
+                ) : (
+                  <Typography
+                    variant="caption"
+                    sx={{
+                      display: "block",
+                      px: 1.5,
+                      py: 0.75,
+                      color: "text.secondary",
+                      bgcolor: "action.hover",
+                      borderBottom: "1px solid",
+                      borderColor: "divider",
+                      letterSpacing: ".04em",
+                    }}
+                  >
+                    全体・位置不明 {pinned.length}
+                  </Typography>
+                )}
+                {railMode === "aligned" ? (
+                  pinnedExpanded && (
+                    <Box
+                      data-testid="comment-pinned-overlay"
+                      sx={{
+                        position: "absolute",
+                        top: "100%",
+                        left: 0,
+                        right: 0,
+                        zIndex: 10,
+                        maxHeight: "60%",
+                        overflowY: "auto",
+                        bgcolor: "background.paper",
+                        boxShadow: 3,
+                        borderBottom: "1px solid",
+                        borderColor: "divider",
+                      }}
+                    >
+                      {pinned.map((c) => (
+                        <CommentRow
+                          key={c.id}
+                          comment={c}
+                          onDelete={onDelete}
+                          onResolveToggle={onResolveToggle}
+                          onReply={onReply}
+                          onEdit={onEdit}
+                          onEditReply={onEditReply}
+                          onDeleteReply={onDeleteReply}
+                          onJump={onJump}
+                          onOpenDetail={setDetailId}
+                          onCopyLink={handleCopyLink}
+                          canCopyLink={canCopyLink}
+                        />
+                      ))}
+                    </Box>
+                  )
+                ) : (
+                  pinned.map((c) => (
+                    <CommentRow
+                      key={c.id}
+                      comment={c}
+                      onDelete={onDelete}
+                      onResolveToggle={onResolveToggle}
+                      onReply={onReply}
+                      onEdit={onEdit}
+                      onEditReply={onEditReply}
+                      onDeleteReply={onDeleteReply}
+                      onJump={onJump}
+                      onOpenDetail={setDetailId}
+                      onCopyLink={handleCopyLink}
+                      canCopyLink={canCopyLink}
+                    />
+                  ))
+                )}
               </Box>
             )}
             {railMode === "aligned" ? (
@@ -793,7 +896,7 @@ function AlignedCommentRail({
   return (
     <Box
       ref={railRef}
-      sx={{ position: "relative", flex: 1, overflow: "hidden" }}
+      sx={{ position: "relative", flex: 1, minHeight: 0, overflow: "hidden" }}
       data-testid="comment-rail-aligned"
     >
       {layout.visible.map((placed) => {

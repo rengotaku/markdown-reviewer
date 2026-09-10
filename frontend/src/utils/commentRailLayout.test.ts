@@ -106,4 +106,72 @@ describe("layoutCommentRail", () => {
     expect(result.aboveCount).toBe(0);
     expect(result.belowCount).toBe(0);
   });
+
+  it("9. a genuinely measured but too-small pane never emits a maxHeight: 0-or-sliver card (#301)", () => {
+    // paneHeight: 1 is a *measured* value (not the `0` used for "hasn't been
+    // measured yet" — see case 12's note), so the too-small-to-read guard
+    // applies: before #301's fix, the lone-card shrink-to-fit branch (case
+    // 8) would still fire here — fitHeight = max(0, 1 - 0) = 1 — and a card
+    // clamped to `maxHeight: 1` would be pushed into `visible`: invisible to
+    // the reviewer but reported as "shown". It must instead be treated as
+    // not fitting, same as any other card that can't fit before the pane's
+    // bottom edge.
+    const tinyPane = { paneTop: 100, paneHeight: 1 };
+    const items = [item("a", 100, 80, 0)];
+    const result = layoutCommentRail(items, tinyPane);
+    expect(result.visible).toEqual([]);
+    expect(result.belowCount).toBe(1);
+    expect(result.aboveCount).toBe(0);
+  });
+
+  it("10. a pane taller than 0 but still under the readable-card floor (RAIL_MIN_USABLE_HEIGHT) also drops the card instead of shrinking it to a sliver", () => {
+    // fitHeight would be 20px — technically > 0, but not enough to show
+    // anything a reviewer could read.
+    const sliverPane = { paneTop: 100, paneHeight: 20 };
+    const items = [item("a", 100, 80, 0)];
+    const result = layoutCommentRail(items, sliverPane);
+    expect(result.visible).toEqual([]);
+    expect(result.belowCount).toBe(1);
+  });
+
+  it("11. a pane exactly at the readable-card floor still shrinks the lone card into it", () => {
+    // fitHeight lands exactly at RAIL_MIN_USABLE_HEIGHT (40) — the floor is
+    // inclusive, so this still renders (case 8's behavior), just at the
+    // boundary.
+    const floorPane = { paneTop: 100, paneHeight: 40 };
+    const items = [item("a", 100, 80, 0)];
+    const result = layoutCommentRail(items, floorPane);
+    expect(result.visible).toEqual([{ id: "a", top: 0, maxHeight: 40 }]);
+    expect(result.belowCount).toBe(0);
+  });
+
+  it("12. a too-small measured pane classifies a card whose anchor sits above it as aboveCount, not belowCount", () => {
+    // relativeAnchor -20 (anchorTop 80, paneTop 100) is a small overshoot
+    // (case 3 territory), not "fully above" (case 5) — so it still reaches
+    // the fit-check, fails it under a too-small pane, and must fall back to
+    // the same anchor-position classification as any other non-fitting
+    // card: `relativeAnchor < 0` → aboveCount.
+    const tinyPane = { paneTop: 100, paneHeight: 1 };
+    const items = [item("a", 80, 40, 0)];
+    const result = layoutCommentRail(items, tinyPane);
+    expect(result.visible).toEqual([]);
+    expect(result.aboveCount).toBe(1);
+    expect(result.belowCount).toBe(0);
+  });
+
+  it("13. paneHeight 0 (not yet measured — see case 9's note) keeps the pre-#301 shrink-to-0 placeholder instead of dropping the card", () => {
+    // Distinct from case 9/12: `paneHeight === 0` is what callers pass
+    // before the pane's first real measurement lands (post-paint, via
+    // ResizeObserver/rAF), not a persistently collapsed pane — that
+    // persistent-collapse bug is fixed at the CSS layer (#301), so by the
+    // time this function ever sees a real measurement it won't be 0. This
+    // transient state keeps rendering a single zero-height placeholder card
+    // (as before #301) rather than being reclassified as above/below.
+    const unmeasuredPane = { paneTop: 100, paneHeight: 0 };
+    const items = [item("a", 100, 80, 0)];
+    const result = layoutCommentRail(items, unmeasuredPane);
+    expect(result.visible).toEqual([{ id: "a", top: 0, maxHeight: 0 }]);
+    expect(result.belowCount).toBe(0);
+    expect(result.aboveCount).toBe(0);
+  });
 });
