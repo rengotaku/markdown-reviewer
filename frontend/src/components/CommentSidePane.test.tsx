@@ -531,6 +531,8 @@ describe("CommentSidePane", () => {
           ],
         }),
       ],
+      // #312: the context row only renders on the selected card now.
+      selectedId: "c1",
     });
     expect(screen.getByTestId("comment-context-c1")).toHaveTextContent(
       "対象: ## トークン ・ ## エラー"
@@ -551,6 +553,8 @@ describe("CommentSidePane", () => {
           context: { heading_path: ["## 実績"], line_range: [74, 80] },
         }),
       ],
+      // #312: the context row only renders on the selected card now.
+      selectedId: "c1",
     });
     expect(screen.getByTestId("comment-context-c1")).toHaveTextContent(
       "対象: ## 実績 (L74–80)"
@@ -565,6 +569,8 @@ describe("CommentSidePane", () => {
           anchor: { heading_path: [], snippet: "生スニペット", occurrence: 0 },
         }),
       ],
+      // #312: the context row only renders on the selected card now.
+      selectedId: "c1",
     });
     expect(screen.getByTestId("comment-context-c1")).toHaveTextContent("対象: 生スニペット");
   });
@@ -1170,5 +1176,54 @@ describe("CommentSidePane rail card selection (#308)", () => {
     expect(within(item).getByTestId("comment-delete")).toBeDisabled();
     expect(within(item).getByTestId("comment-reply-edit")).toBeDisabled();
     expect(within(item).getByTestId("comment-reply-delete")).toBeDisabled();
+  });
+});
+
+// #312: a non-selected card's context row (comment-context-*) is one of the
+// remaining contributors to the ~138px height that pushed neighbouring cards
+// down the rail (#298's anchor-aligned placement only holds when a card is
+// shorter than the anchor spacing above it). Moving the context row behind
+// selection — same treatment #304 already gave the operation row and full
+// reply bodies — keeps it available on demand without costing every
+// non-selected card its height.
+describe("CommentSidePane rail card compact height (#312)", () => {
+  it("1. a non-selected card renders no context row (comment-context-*)", () => {
+    renderPane({ comments: [comment("c1")] });
+    expect(screen.queryByTestId("comment-context-c1")).toBeNull();
+  });
+
+  it("2. a selected card renders its context row", () => {
+    renderPane({ comments: [comment("c1")], selectedId: "c1" });
+    expect(screen.getByTestId("comment-context-c1")).toHaveTextContent("対象: ## Sec (L3)");
+  });
+
+  it("3. a non-selected card still shows the comment id and body (nothing else was removed)", () => {
+    renderPane({ comments: [comment("c1", { body: "body of c1" })] });
+    const item = screen.getByTestId("comment-item");
+    expect(within(item).getByTestId("comment-id")).toHaveTextContent("c1");
+    expect(within(item).getByTestId("comment-body")).toHaveTextContent("body of c1");
+  });
+
+  it("4. a selected card keeps #308's operation row and full reply bodies", async () => {
+    const user = userEvent.setup();
+    renderPane({
+      comments: [
+        comment("c1", {
+          replies: [{ author: "reviewer", date: "2026-05-21", body: "reply body" }],
+        }),
+      ],
+      selectedId: "c1",
+    });
+    const item = screen.getByTestId("comment-item");
+    expect(within(item).getByTestId("comment-reply-toggle")).toBeInTheDocument();
+    expect(within(item).getByTestId("comment-resolve-toggle")).toBeInTheDocument();
+    expect(within(item).getByTestId("comment-edit")).toBeInTheDocument();
+    expect(within(item).getByTestId("comment-delete")).toBeInTheDocument();
+    expect(within(item).getByTestId("comment-open-detail")).toBeInTheDocument();
+    expect(within(item).getByText("reply body")).toBeInTheDocument();
+    expect(within(item).queryByTestId("comment-reply-count")).toBeNull();
+
+    await user.click(within(item).getByTestId("comment-reply-toggle"));
+    expect(within(item).getByTestId("comment-reply-input")).toBeInTheDocument();
   });
 });

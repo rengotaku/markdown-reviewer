@@ -1640,9 +1640,13 @@ describe("EditorPage comment highlight & rail selection (#304)", () => {
       expect(ed.view.dom.querySelectorAll(".comment-mark").length).toBeGreaterThan(0)
     );
     // Only now — decoration present, anchor measurable — does #306 let the
-    // card (and its comment-context row) land in the rail.
+    // card land in the rail. #312 moved the comment-context row behind
+    // selection, so it's no longer a reliable proxy for "the card exists";
+    // wait on the card itself instead.
     await waitFor(() =>
-      expect(screen.getByTestId(`comment-context-${comment.id}`)).toBeInTheDocument()
+      expect(
+        screen.getByTestId("comment-item").getAttribute("data-comment-id")
+      ).toBe(comment.id)
     );
     return { user, ed };
   }
@@ -1969,7 +1973,7 @@ describe("EditorPage jump to comment (#167)", () => {
     );
 
     const scrollSpy = vi.mocked(Element.prototype.scrollIntoView);
-    await user.click(screen.getByTestId("comment-context-c-011"));
+    await user.click(screen.getByTestId("comment-item"));
 
     await waitFor(() => expect(scrollSpy).toHaveBeenCalled());
     // Assert *which* element was scrolled to: the live anchor position, not
@@ -2007,12 +2011,16 @@ describe("EditorPage jump to comment (#167)", () => {
     // #306: the rail only draws this row once EditorPage's anchorTops state
     // actually reflects the decoration above (an async rAF measurement, not
     // synchronous with it appearing) — wait for that too before clicking.
+    // #312 moved the comment-context row behind selection, so the card
+    // itself (still rendered regardless of selection) is what's waited on.
     await waitFor(() =>
-      expect(screen.getByTestId("comment-context-c-020")).toBeInTheDocument()
+      expect(
+        screen.getByTestId("comment-item").getAttribute("data-comment-id")
+      ).toBe("c-020")
     );
 
     const scrollSpy = vi.mocked(Element.prototype.scrollIntoView);
-    await user.click(screen.getByTestId("comment-context-c-020"));
+    await user.click(screen.getByTestId("comment-item"));
 
     await waitFor(() => expect(scrollSpy).toHaveBeenCalled());
     expect(scrollSpy.mock.instances[0]).toBe(decorated);
@@ -2070,7 +2078,7 @@ describe("EditorPage jump to comment (#167)", () => {
     );
 
     const scrollSpy = vi.mocked(Element.prototype.scrollIntoView);
-    await user.click(screen.getByTestId("comment-context-c-040"));
+    await user.click(screen.getByTestId("comment-item"));
 
     await waitFor(() => expect(scrollSpy).toHaveBeenCalled());
     const scrolledEl = scrollSpy.mock.instances[0] as HTMLElement;
@@ -2105,7 +2113,7 @@ describe("EditorPage jump to comment (#167)", () => {
     );
 
     const scrollSpy = vi.mocked(Element.prototype.scrollIntoView);
-    await user.click(screen.getByTestId("comment-context-c-041"));
+    await user.click(screen.getByTestId("comment-item"));
 
     await waitFor(() => expect(scrollSpy).toHaveBeenCalled());
     expect((scrollSpy.mock.instances[0] as HTMLElement).textContent).toContain("first");
