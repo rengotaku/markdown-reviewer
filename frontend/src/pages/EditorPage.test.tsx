@@ -5,6 +5,7 @@ import {
   waitFor,
   fireEvent,
   act,
+  within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -1622,13 +1623,26 @@ describe("EditorPage comment highlight & rail selection (#304)", () => {
       expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
     );
     await user.click(screen.getByTestId("sidebar-file-README.md"));
+    // Wait for the fetched comment to reach the pane (the filter toggle's own
+    // count, driven straight off the `comments` prop) rather than for its
+    // row/card, which — for an anchored, unresolved comment — #306 now holds
+    // out of the rail until the editor exists and its decoration has been
+    // measured. Waiting on `comment-context-*` here, before the editor is
+    // even installed, would never resolve.
     await waitFor(() =>
-      expect(screen.getByTestId(`comment-context-${comment.id}`)).toBeInTheDocument()
+      expect(screen.getByTestId("comment-filter-all")).toHaveTextContent(
+        `すべて 1`
+      )
     );
     const ed = installEditor("<h2>実績</h2><p>SLA遵守率 98%</p>");
     // Wait for the page to push the comment into the editor as a decoration.
     await waitFor(() =>
       expect(ed.view.dom.querySelectorAll(".comment-mark").length).toBeGreaterThan(0)
+    );
+    // Only now — decoration present, anchor measurable — does #306 let the
+    // card (and its comment-context row) land in the rail.
+    await waitFor(() =>
+      expect(screen.getByTestId(`comment-context-${comment.id}`)).toBeInTheDocument()
     );
     return { user, ed };
   }
@@ -1756,6 +1770,89 @@ describe("EditorPage comment highlight & rail selection (#304)", () => {
       expect(window.getComputedStyle(cardWrapper).top).toBe("500px");
     });
   });
+
+  // #306 case 3: root cause was `scheduleAnchorRecalc`'s rAF coalescing —
+  // a burst of triggers (comments arriving, the editor mounting) collapses
+  // onto a single scheduled frame, but that frame's callback used to close
+  // over whichever render happened to win the race to schedule it. When
+  // that was an early render (editor still null, or comments still `[]`),
+  // the one frame that actually ran read stale values, found nothing, and —
+  // on a file nobody scrolls or edits — nothing else ever asked for another
+  // recompute. This reproduces exactly that: the decoration is missing on
+  // the very first measurement pass and only appears once the document is
+  // reloaded and resynced afterwards (a real `resyncCommentHighlights`
+  // transaction, the same one production runs after the typing-pause
+  // debounce), which must still land the card without any further
+  // scroll/resize/edit prompting it.
+  it("3. a decoration that appears after the initial pass still lands its card on the rail", async () => {
+    const user = userEvent.setup();
+    const { http, HttpResponse } = await import("msw");
+    const { server } = await import("@/test/mocks/server");
+    server.use(
+      http.get("http://localhost:8080/api/stat/*", () =>
+        HttpResponse.json({
+          path: "README.md",
+          root: "mock-root",
+          modified: "2026-05-20T00:00:00Z",
+          created: "2026-05-19T00:00:00Z",
+          state: "review",
+          hasOpenComments: true,
+        })
+      ),
+      http.get("http://localhost:8080/api/comments/*", () =>
+        HttpResponse.json({
+          file: "README.md",
+          root: "mock-root",
+          summary: { total: 1, by_scope: {}, by_status: {} },
+          comments: [openComment],
+        })
+      )
+    );
+    renderPage();
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
+    );
+    await user.click(screen.getByTestId("sidebar-file-README.md"));
+    // Wait for the fetch, not the row — #306 now holds this anchored,
+    // unresolved comment out of the rail until it has a real measurement, so
+    // waiting for `comment-context-*` here (no editor installed yet) would
+    // never resolve.
+    await waitFor(() =>
+      expect(screen.getByTestId("comment-filter-all")).toHaveTextContent("すべて 1")
+    );
+    // Content with none of the anchor's text at all — buildDeco resolves no
+    // range for it, so no `.comment-mark` decoration is created. Distinct
+    // from "not yet decorated": the current document genuinely has nothing
+    // to highlight, matching the excluded-until-measured state case 1/2
+    // cover, not a fresh recompute trigger by itself.
+    const ed = installEditor("<p>まったく別の文章です</p>");
+    await act(async () => {
+      await new Promise((r) => requestAnimationFrame(r));
+      await new Promise((r) => requestAnimationFrame(r));
+    });
+    expect(ed.view.dom.querySelectorAll(".comment-mark")).toHaveLength(0);
+    expect(
+      within(screen.getByTestId("comment-rail-aligned")).queryAllByTestId("comment-item")
+    ).toHaveLength(0);
+
+    // The document changes to include the anchor's text (e.g. the real load
+    // finally lands), then a resync rebuilds decorations against it — the
+    // same two-step production takes (setContent, then the debounced
+    // resyncCommentHighlights once typing settles; see TiptapEditor's
+    // resyncDecorations). Both are genuine ProseMirror transactions.
+    await act(async () => {
+      ed.commands.setContent("<h2>実績</h2><p>SLA遵守率 98%</p>");
+      ed.commands.resyncCommentHighlights();
+    });
+    await waitFor(() =>
+      expect(ed.view.dom.querySelectorAll(".comment-mark")).toHaveLength(1)
+    );
+
+    await waitFor(() => {
+      const rail = screen.getByTestId("comment-rail-aligned");
+      expect(within(rail).getAllByTestId("comment-item")).toHaveLength(1);
+    });
+  });
 });
 
 describe("EditorPage jump to comment (#167)", () => {
@@ -1820,12 +1917,20 @@ describe("EditorPage jump to comment (#167)", () => {
     );
     await user.click(screen.getByTestId("comment-filter-all"));
     // Comments are only fetched once the file is under review — wait for the
-    // side pane to actually render the row(s) before touching the editor.
-    for (const c of comments) {
-      await waitFor(() =>
-        expect(screen.getByTestId(`comment-context-${c.id}`)).toBeInTheDocument()
-      );
-    }
+    // fetch to actually land before touching the editor. This used to wait
+    // for each comment's `comment-context-*` row instead, but #306 now holds
+    // an anchored, unresolved comment out of the rail until the editor
+    // exists and its decoration has been measured — waiting on the row here
+    // (before any editor is installed) would never resolve for one. The
+    // filter toggle's count is driven straight off the `comments` prop, so
+    // it's a readiness signal independent of rail placement; callers that
+    // need a specific row to exist wait for it themselves after installing
+    // their editor.
+    await waitFor(() =>
+      expect(screen.getByTestId("comment-filter-all")).toHaveTextContent(
+        `すべて ${comments.length}`
+      )
+    );
     return user;
   }
 
@@ -1899,6 +2004,12 @@ describe("EditorPage jump to comment (#167)", () => {
       expect(ed.view.dom.querySelectorAll('[data-comment-id="c-020"]')).toHaveLength(1)
     );
     const decorated = ed.view.dom.querySelector<HTMLElement>('[data-comment-id="c-020"]')!;
+    // #306: the rail only draws this row once EditorPage's anchorTops state
+    // actually reflects the decoration above (an async rAF measurement, not
+    // synchronous with it appearing) — wait for that too before clicking.
+    await waitFor(() =>
+      expect(screen.getByTestId("comment-context-c-020")).toBeInTheDocument()
+    );
 
     const scrollSpy = vi.mocked(Element.prototype.scrollIntoView);
     await user.click(screen.getByTestId("comment-context-c-020"));
@@ -1920,14 +2031,23 @@ describe("EditorPage jump to comment (#167)", () => {
       context: { heading_path: [], line_range: [10, 10] },
       orphan: false,
     };
-    const user = await openReadmeWithComments([comment]);
+    // #306: an open, non-orphan comment whose anchor text genuinely isn't in
+    // the current document paints no decoration — same as any other
+    // not-yet-measured anchor from the rail's point of view — so it no
+    // longer lands a `comment-context-*` row to click at all (case 1/2:
+    // never fed a real anchorTops entry, it stays excluded rather than
+    // drawn at a wrong position). That is exactly the same "no anchor
+    // resolves" state ケース 5 already drives through the comment_id deep
+    // link instead of a rail click, so this reaches the same guard in
+    // handleJumpToComment through that route.
+    await useComments([comment])();
+    const scrollSpy = vi.mocked(Element.prototype.scrollIntoView);
+    renderPage(`/${DEFAULT_ROOT}/README.md?comment_id=c-030`);
     installFakeEditor("<h2>実績</h2><p>SLA遵守率 98%</p>");
 
-    const scrollSpy = vi.mocked(Element.prototype.scrollIntoView);
-    await expect(
-      user.click(screen.getByTestId("comment-context-c-030"))
-    ).resolves.not.toThrow();
-
+    await waitFor(() => {
+      expect(screen.getByTestId("editor-active-path")).toHaveTextContent("README.md");
+    });
     expect(scrollSpy).not.toHaveBeenCalled();
   });
 

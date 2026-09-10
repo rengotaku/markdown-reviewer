@@ -1468,11 +1468,29 @@ export function EditorPage() {
     // keystroke/selection change, most of which don't shift any decoration.
     setAnchorTops((prev) => (shallowEqualRecord(prev, next) ? prev : next));
   };
+  // #306 root cause: `scheduleAnchorRecalc` coalesces bursts of triggers onto
+  // a single rAF via `anchorRafRef` — but the callback closed over
+  // `recomputeAnchorTops` at *schedule* time. When `comments` arrives and
+  // `editor` mounts within the same rAF window (the common case opening a
+  // file with existing comments), the first call schedules the frame while
+  // `editor` is still null; every later call in that window (once `editor`
+  // is set, `comments` included) sees `anchorRafRef.current` already
+  // occupied and no-ops. The one frame that does run reads the *stale*
+  // closure — `editor` still null, or `comments` still `[]` — finds nothing,
+  // and nothing else ever re-triggers a recompute on an untouched file (no
+  // edit/scroll/resize). Routing the callback through a ref that is kept
+  // current every render (like `scheduleAnchorRecalcRef` below) means
+  // whichever render's request wins the coalescing race, the frame that
+  // actually fires always reads the latest `editor`/`comments`.
+  const recomputeAnchorTopsRef = useRef(recomputeAnchorTops);
+  useEffect(() => {
+    recomputeAnchorTopsRef.current = recomputeAnchorTops;
+  });
   const scheduleAnchorRecalc = () => {
     if (anchorRafRef.current !== null) return;
     anchorRafRef.current = requestAnimationFrame(() => {
       anchorRafRef.current = null;
-      recomputeAnchorTops();
+      recomputeAnchorTopsRef.current();
     });
   };
   const scheduleAnchorRecalcRef = useRef(scheduleAnchorRecalc);
