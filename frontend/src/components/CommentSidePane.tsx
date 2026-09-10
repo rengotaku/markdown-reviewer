@@ -515,6 +515,13 @@ export function CommentSidePane({
               onJump={onJump}
               onCopyLink={handleCopyLink}
               canCopyLink={canCopyLink}
+              onDelete={onDelete}
+              onResolveToggle={onResolveToggle}
+              onReply={onReply}
+              onEdit={onEdit}
+              onEditReply={onEditReply}
+              onDeleteReply={onDeleteReply}
+              onOpenDetail={setDetailId}
             />
           </>
         )}
@@ -549,23 +556,69 @@ interface CardProps {
   onSelect: (id: string) => void;
   onCopyLink: (id: string) => void;
   canCopyLink?: boolean;
+  onDelete: (id: string) => void;
+  onResolveToggle: (id: string, next: "open" | "resolved") => void;
+  onReply: (id: string, body: string) => void;
+  onEdit: (id: string, body: string) => void;
+  onEditReply: (id: string, index: number, body: string) => void;
+  onDeleteReply: (id: string, index: number) => void;
+  onOpenDetail: (id: string) => void;
 }
 
-/** One anchored comment as a list entry (#253). The pane is where a comment is
- *  found; it is read and answered in the thread the editor opens beside the
- *  text, so this row carries no reply box, no edit form and no resolve button —
- *  only what tells the reader which comment this is. */
+/** One anchored comment as a list entry (#253/#298). Non-selected cards stay
+ *  read-only and low (#304: 3-line clamp, replies collapsed to a count) so
+ *  neighbouring cards aren't pushed down the rail. #308: the *selected* card
+ *  additionally gets the reply/resolve/edit/delete row and full reply bodies
+ *  that #304 removed without relocating — restored here instead of in a
+ *  popover (#304 deliberately removed CommentThreadPopover; operations live
+ *  in the card now). */
 function CommentCard({
   comment: c,
   selected,
   onSelect,
   onCopyLink,
   canCopyLink = true,
+  onDelete,
+  onResolveToggle,
+  onReply,
+  onEdit,
+  onEditReply,
+  onDeleteReply,
+  onOpenDetail,
 }: CardProps) {
   const ctx = contextLabel(c);
   const badge = SCOPE_BADGE[c.scope];
   const replies = c.replies?.length ?? 0;
   const resolved = c.status === "resolved";
+  const aiOwned = isAiAuthored(c.author);
+
+  const [replyOpen, setReplyOpen] = useState(false);
+  const [replyBody, setReplyBody] = useState("");
+  const [editOpen, setEditOpen] = useState(false);
+  const [editBody, setEditBody] = useState(c.body);
+
+  const submitReply = () => {
+    const body = replyBody.trim();
+    if (!body) return;
+    onReply(c.id, body);
+    setReplyBody("");
+    setReplyOpen(false);
+  };
+
+  const startEdit = () => {
+    setEditBody(c.body);
+    setEditOpen(true);
+  };
+
+  const submitEdit = () => {
+    const body = editBody.trim();
+    if (!body || body === c.body) {
+      setEditOpen(false);
+      return;
+    }
+    onEdit(c.id, body);
+    setEditOpen(false);
+  };
 
   return (
     <Box
@@ -624,6 +677,52 @@ function CommentCard({
             data-testid="comment-status-resolved"
           />
         )}
+        {selected && !editOpen && (
+          <>
+            <Tooltip
+              title={
+                aiOwned
+                  ? "AI のコメントは編集できません"
+                  : resolved
+                    ? "解決済みのため編集できません"
+                    : "コメントを編集"
+              }
+            >
+              <span>
+                <IconButton
+                  size="small"
+                  disabled={resolved || aiOwned}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    startEdit();
+                  }}
+                  aria-label="edit comment"
+                  data-testid="comment-edit"
+                  sx={{ p: 0.25 }}
+                >
+                  <EditOutlinedIcon sx={{ fontSize: 16 }} />
+                </IconButton>
+              </span>
+            </Tooltip>
+            <Tooltip title={aiOwned ? "AI のコメントは削除できません" : "コメントを削除"}>
+              <span>
+                <IconButton
+                  size="small"
+                  disabled={aiOwned}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDelete(c.id);
+                  }}
+                  aria-label="delete comment"
+                  data-testid="comment-delete"
+                  sx={{ p: 0.25 }}
+                >
+                  <DeleteOutlineIcon sx={{ fontSize: 16 }} />
+                </IconButton>
+              </span>
+            </Tooltip>
+          </>
+        )}
         <Tooltip
           title={
             canCopyLink ? "リンクをコピー" : "ファイルが開かれていないためコピーできません"
@@ -659,25 +758,146 @@ function CommentCard({
         </Typography>
       )}
 
-      <CollapsibleText
-        text={c.body}
-        testid="comment-body"
-        sx={{ mt: 0.5, wordBreak: "break-word" }}
-        // #304: clamp to ~3 lines instead of the pinned section's 6 — with
-        // list mode gone, every anchored comment renders as this card, so a
-        // tall body pushes its neighbours further down the rail.
-        clampHeight="3em"
-      />
+      {selected && editOpen && !resolved ? (
+        <Box sx={{ mt: 0.5 }} onClick={(e) => e.stopPropagation()}>
+          <TextField
+            value={editBody}
+            onChange={(e) => setEditBody(e.target.value)}
+            multiline
+            minRows={2}
+            fullWidth
+            size="small"
+            autoFocus
+            inputProps={{ "data-testid": "comment-edit-input" }}
+          />
+          <Box sx={{ display: "flex", justifyContent: "flex-end", gap: 0.5, mt: 0.5 }}>
+            <Button size="small" onClick={() => setEditOpen(false)}>
+              キャンセル
+            </Button>
+            <Button
+              size="small"
+              variant="contained"
+              onClick={submitEdit}
+              disabled={!editBody.trim()}
+              data-testid="comment-edit-submit"
+            >
+              更新
+            </Button>
+          </Box>
+        </Box>
+      ) : (
+        <CollapsibleText
+          text={c.body}
+          testid="comment-body"
+          sx={{ mt: 0.5, wordBreak: "break-word" }}
+          // #304: clamp to ~3 lines instead of the pinned section's 6 — with
+          // list mode gone, every anchored comment renders as this card, so a
+          // tall body pushes its neighbours further down the rail.
+          clampHeight="3em"
+        />
+      )}
 
-      {replies > 0 && (
-        <Typography
-          variant="caption"
-          color="text.disabled"
-          data-testid="comment-reply-count"
-          sx={{ display: "block", mt: 0.75 }}
-        >
-          返信 {replies} 件
-        </Typography>
+      {selected ? (
+        <>
+          {replies > 0 && c.replies && (
+            <Box sx={{ mt: 1, pl: 1, borderLeft: "2px solid", borderColor: "divider" }}>
+              {c.replies.map((r, i) => (
+                <ReplyRow
+                  key={i}
+                  reply={r}
+                  index={i}
+                  commentId={c.id}
+                  resolved={resolved}
+                  collapsible
+                  onEditReply={onEditReply}
+                  onDeleteReply={onDeleteReply}
+                />
+              ))}
+            </Box>
+          )}
+
+          {replyOpen && !resolved && (
+            <Box sx={{ mt: 1 }} onClick={(e) => e.stopPropagation()}>
+              <TextField
+                value={replyBody}
+                onChange={(e) => setReplyBody(e.target.value)}
+                placeholder="返信を入力"
+                multiline
+                minRows={2}
+                fullWidth
+                size="small"
+                autoFocus
+                inputProps={{ "data-testid": "comment-reply-input" }}
+              />
+              <Box sx={{ display: "flex", justifyContent: "flex-end", gap: 0.5, mt: 0.5 }}>
+                <Button size="small" onClick={() => setReplyOpen(false)}>
+                  キャンセル
+                </Button>
+                <Button
+                  size="small"
+                  variant="contained"
+                  onClick={submitReply}
+                  disabled={!replyBody.trim()}
+                  data-testid="comment-reply-submit"
+                >
+                  返信
+                </Button>
+              </Box>
+            </Box>
+          )}
+
+          <Divider sx={{ my: 1 }} />
+          <Box sx={{ display: "flex", gap: 0.5 }} onClick={(e) => e.stopPropagation()}>
+            <Tooltip title={resolved ? "解決済みのため返信できません" : "返信を追加"}>
+              <span>
+                <IconButton
+                  size="small"
+                  disabled={resolved}
+                  onClick={() => setReplyOpen((v) => !v)}
+                  aria-label="reply to comment"
+                  data-testid="comment-reply-toggle"
+                >
+                  <ReplyIcon fontSize="small" />
+                </IconButton>
+              </span>
+            </Tooltip>
+            <Tooltip title={resolved ? "未解決に戻す" : "解決済みにする"}>
+              <IconButton
+                size="small"
+                onClick={() => onResolveToggle(c.id, resolved ? "open" : "resolved")}
+                aria-label={resolved ? "reopen comment" : "resolve comment"}
+                data-testid="comment-resolve-toggle"
+              >
+                {resolved ? (
+                  <ReplayIcon fontSize="small" />
+                ) : (
+                  <CheckCircleOutlineIcon fontSize="small" />
+                )}
+              </IconButton>
+            </Tooltip>
+            <Tooltip title="詳細を中央に開く">
+              <IconButton
+                size="small"
+                onClick={() => onOpenDetail(c.id)}
+                aria-label="open comment detail"
+                data-testid="comment-open-detail"
+              >
+                <OpenInFullIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+          </Box>
+        </>
+      ) : (
+        replies > 0 && (
+          <Typography
+            variant="caption"
+            color="text.disabled"
+            data-testid="comment-reply-count"
+            sx={{ display: "block", mt: 0.75 }}
+          >
+            返信 {replies} 件
+          </Typography>
+        )
       )}
     </Box>
   );
@@ -692,6 +912,13 @@ interface AlignedRailProps {
   onJump: (id: string) => void;
   onCopyLink: (id: string) => void;
   canCopyLink?: boolean;
+  onDelete: (id: string) => void;
+  onResolveToggle: (id: string, next: "open" | "resolved") => void;
+  onReply: (id: string, body: string) => void;
+  onEdit: (id: string, body: string) => void;
+  onEditReply: (id: string, index: number, body: string) => void;
+  onDeleteReply: (id: string, index: number) => void;
+  onOpenDetail: (id: string) => void;
 }
 
 /** Lays anchored cards out down the rail, level with the paragraph each is
@@ -705,6 +932,13 @@ function AlignedCommentRail({
   onJump,
   onCopyLink,
   canCopyLink = true,
+  onDelete,
+  onResolveToggle,
+  onReply,
+  onEdit,
+  onEditReply,
+  onDeleteReply,
+  onOpenDetail,
 }: AlignedRailProps) {
   const railRef = useRef<HTMLDivElement | null>(null);
   const [paneBox, setPaneBox] = useState({ top: 0, height: 0 });
@@ -830,6 +1064,13 @@ function AlignedCommentRail({
             onSelect={onSelect}
             onCopyLink={onCopyLink}
             canCopyLink={canCopyLink}
+            onDelete={onDelete}
+            onResolveToggle={onResolveToggle}
+            onReply={onReply}
+            onEdit={onEdit}
+            onEditReply={onEditReply}
+            onDeleteReply={onDeleteReply}
+            onOpenDetail={onOpenDetail}
             onHeightChange={handleHeightChange}
           />
         );

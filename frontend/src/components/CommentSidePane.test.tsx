@@ -1024,3 +1024,151 @@ describe("CommentSidePane rail anchor measurement (#306)", () => {
     );
   });
 });
+
+describe("CommentSidePane rail card selection (#308)", () => {
+  // #304 stripped the popover (CommentThreadPopover) without moving its
+  // actions into the rail card, so an anchored comment could be read but
+  // never replied to or resolved from the UI. These cases restore that only
+  // for the selected card — an unselected card must stay exactly as low as
+  // before (#298's whole point), so cases 1-2 pin down the "still nothing
+  // extra" side before 3-6 pin down what selection adds.
+
+  it("1. a non-selected card renders no operation row (no reply input, resolve toggle, edit, or delete)", () => {
+    renderPane({ comments: [comment("c1")] });
+    expect(screen.queryByTestId("comment-reply-input")).toBeNull();
+    expect(screen.queryByTestId("comment-resolve-toggle")).toBeNull();
+    expect(screen.queryByTestId("comment-edit")).toBeNull();
+    expect(screen.queryByTestId("comment-delete")).toBeNull();
+  });
+
+  it("2. a non-selected card with replies shows only the reply count, not the reply bodies", () => {
+    renderPane({
+      comments: [
+        comment("c1", {
+          replies: [{ author: "reviewer", date: "2026-05-21", body: "reply body" }],
+        }),
+      ],
+    });
+    expect(screen.getByTestId("comment-reply-count")).toHaveTextContent("返信 1 件");
+    expect(screen.queryByTestId("comment-reply-body")).toBeNull();
+    expect(screen.queryByText("reply body")).toBeNull();
+  });
+
+  it("3. selecting a card reveals its operation row (reply, resolve, edit, delete, open detail)", async () => {
+    const user = userEvent.setup();
+    renderPane({ comments: [comment("c1")], selectedId: "c1" });
+    const item = screen.getByTestId("comment-item");
+    expect(within(item).getByTestId("comment-reply-toggle")).toBeInTheDocument();
+    expect(within(item).getByTestId("comment-resolve-toggle")).toBeInTheDocument();
+    expect(within(item).getByTestId("comment-edit")).toBeInTheDocument();
+    expect(within(item).getByTestId("comment-delete")).toBeInTheDocument();
+    expect(within(item).getByTestId("comment-open-detail")).toBeInTheDocument();
+    await user.click(within(item).getByTestId("comment-reply-toggle"));
+    expect(within(item).getByTestId("comment-reply-input")).toBeInTheDocument();
+  });
+
+  it("4. selecting a card with replies renders the reply bodies, not just the count", () => {
+    renderPane({
+      comments: [
+        comment("c1", {
+          replies: [{ author: "reviewer", date: "2026-05-21", body: "reply body" }],
+        }),
+      ],
+      selectedId: "c1",
+    });
+    const item = screen.getByTestId("comment-item");
+    expect(within(item).getByText("reply body")).toBeInTheDocument();
+    expect(within(item).queryByTestId("comment-reply-count")).toBeNull();
+  });
+
+  it("5. moving selection to another card closes the previous card's operation row and reply body", async () => {
+    const { rerender } = render(
+      <CommentSidePane
+        root="works"
+        filePath="doc.md"
+        comments={[comment("c1"), comment("c2")]}
+        reviewActive
+        canAddComment
+        onRefresh={vi.fn()}
+        onAddComment={vi.fn()}
+        onAddGlobal={vi.fn()}
+        onDelete={vi.fn()}
+        onResolveToggle={vi.fn()}
+        onReply={vi.fn()}
+        onEdit={vi.fn()}
+        onEditReply={vi.fn()}
+        onDeleteReply={vi.fn()}
+        onJump={vi.fn()}
+        onSelect={vi.fn()}
+        selectedId="c1"
+        anchorTops={{ c1: 0, c2: 10 }}
+      />
+    );
+    const [first] = await waitFor(() => {
+      const items = screen.getAllByTestId("comment-item");
+      expect(items).toHaveLength(2);
+      return items;
+    });
+    expect(within(first).getByTestId("comment-resolve-toggle")).toBeInTheDocument();
+
+    rerender(
+      <CommentSidePane
+        root="works"
+        filePath="doc.md"
+        comments={[comment("c1"), comment("c2")]}
+        reviewActive
+        canAddComment
+        onRefresh={vi.fn()}
+        onAddComment={vi.fn()}
+        onAddGlobal={vi.fn()}
+        onDelete={vi.fn()}
+        onResolveToggle={vi.fn()}
+        onReply={vi.fn()}
+        onEdit={vi.fn()}
+        onEditReply={vi.fn()}
+        onDeleteReply={vi.fn()}
+        onJump={vi.fn()}
+        onSelect={vi.fn()}
+        selectedId="c2"
+        anchorTops={{ c1: 0, c2: 10 }}
+      />
+    );
+    const [firstAfter, secondAfter] = await waitFor(() => {
+      const items = screen.getAllByTestId("comment-item");
+      expect(items).toHaveLength(2);
+      return items;
+    });
+    expect(within(firstAfter).queryByTestId("comment-resolve-toggle")).toBeNull();
+    expect(within(secondAfter).getByTestId("comment-resolve-toggle")).toBeInTheDocument();
+  });
+
+  it("6. replying and resolving from a selected card call onReply / onResolveToggle", async () => {
+    const user = userEvent.setup();
+    const h = renderPane({ comments: [comment("c1")], selectedId: "c1" });
+    const item = screen.getByTestId("comment-item");
+    await user.click(within(item).getByTestId("comment-reply-toggle"));
+    await user.type(within(item).getByTestId("comment-reply-input"), "返信本文");
+    await user.click(within(item).getByTestId("comment-reply-submit"));
+    expect(h.onReply).toHaveBeenCalledWith("c1", "返信本文");
+
+    await user.click(within(item).getByTestId("comment-resolve-toggle"));
+    expect(h.onResolveToggle).toHaveBeenCalledWith("c1", "resolved");
+  });
+
+  it("7. an ai-authored selected card's edit/delete stay disabled (comment and reply)", () => {
+    renderPane({
+      comments: [
+        comment("c1", {
+          author: "ai",
+          replies: [{ author: "ai", date: "2026-05-20", body: "ai reply" }],
+        }),
+      ],
+      selectedId: "c1",
+    });
+    const item = screen.getByTestId("comment-item");
+    expect(within(item).getByTestId("comment-edit")).toBeDisabled();
+    expect(within(item).getByTestId("comment-delete")).toBeDisabled();
+    expect(within(item).getByTestId("comment-reply-edit")).toBeDisabled();
+    expect(within(item).getByTestId("comment-reply-delete")).toBeDisabled();
+  });
+});
