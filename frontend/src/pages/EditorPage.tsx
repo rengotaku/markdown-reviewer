@@ -3143,7 +3143,15 @@ export function EditorPage() {
               restoring={restoringRevision}
             />
           ) : activeFile ? (
-            <TiptapEditor />
+            <TiptapEditor
+              comments={comments}
+              onDeleteComment={handleDeleteComment}
+              onResolveToggleComment={handleResolveToggle}
+              onReplyComment={handleReplyComment}
+              onEditComment={handleEditComment}
+              onEditCommentReply={handleEditReply}
+              onDeleteCommentReply={handleDeleteReply}
+            />
           ) : (
             <Box
               sx={{

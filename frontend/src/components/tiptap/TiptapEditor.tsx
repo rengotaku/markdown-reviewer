@@ -19,6 +19,8 @@ import { useEditorPrefs } from "@/hooks/useEditorPrefs";
 import { splitPreamble, parseFrontmatter } from "@/utils/frontmatter";
 import { resolveInternalLink } from "@/utils/internalLink";
 import { FrontmatterTable } from "./FrontmatterTable";
+import { DocumentTopComments } from "../DocumentTopComments";
+import type { CommentJSON } from "@/api";
 import { TableMenu } from "./toolbar/TableMenu";
 import { BlockCopyButton } from "./toolbar/BlockCopyButton";
 import { SlashCommand } from "./extensions/SlashCommand";
@@ -75,7 +77,39 @@ function resyncDecorations(ed: Editor): void {
   ed.commands.resyncLinkDecorations();
 }
 
-export function TiptapEditor() {
+export interface TiptapEditorProps {
+  /** Full comment list for the active file (all scopes). Only the
+   *  global-scope / orphan subset is rendered here, at the top of the
+   *  document body (#309) — anchored comments stay in the side pane's rail. */
+  comments?: ReadonlyArray<CommentJSON>;
+  onDeleteComment?: (id: string) => void;
+  onResolveToggleComment?: (id: string, next: "open" | "resolved") => void;
+  onReplyComment?: (id: string, body: string) => void;
+  onEditComment?: (id: string, body: string) => void;
+  onEditCommentReply?: (id: string, index: number, body: string) => void;
+  onDeleteCommentReply?: (id: string, index: number) => void;
+}
+
+// Default no-op handlers used when TiptapEditor is mounted without the
+// comment props (e.g. existing tests that render `<TiptapEditor />` bare).
+// A single untyped no-op cast to each shape avoids unused-parameter lint
+// noise from naming parameters no implementation ever reads.
+const NOOP_ANY = (() => {}) as unknown;
+const NOOP = NOOP_ANY as () => void;
+const NOOP_STRING = NOOP_ANY as (id: string, body: string) => void;
+const NOOP_INDEXED = NOOP_ANY as (id: string, index: number, body: string) => void;
+const NOOP_DELETE_REPLY = NOOP_ANY as (id: string, index: number) => void;
+const NOOP_RESOLVE = NOOP_ANY as (id: string, next: "open" | "resolved") => void;
+
+export function TiptapEditor({
+  comments = [],
+  onDeleteComment = NOOP,
+  onResolveToggleComment = NOOP_RESOLVE,
+  onReplyComment = NOOP_STRING,
+  onEditComment = NOOP_STRING,
+  onEditCommentReply = NOOP_INDEXED,
+  onDeleteCommentReply = NOOP_DELETE_REPLY,
+}: TiptapEditorProps = {}) {
   const centered = useEditorPrefs((s) => s.centered);
   const { active: activeRoot } = useActiveRoot();
   const activeId = useOpenFiles((s) =>
@@ -485,6 +519,17 @@ export function TiptapEditor() {
       {editor && (
         <BlockCopyButton editor={editor} containerRef={containerRef} />
       )}
+      <DocumentTopComments
+        root={activeRoot ?? undefined}
+        filePath={activeFilePath || undefined}
+        comments={comments}
+        onDelete={onDeleteComment}
+        onResolveToggle={onResolveToggleComment}
+        onReply={onReplyComment}
+        onEdit={onEditComment}
+        onEditReply={onEditCommentReply}
+        onDeleteReply={onDeleteCommentReply}
+      />
       <FrontmatterTable entries={frontmatter} />
       <EditorContent editor={editor} />
       <LinkPreviewCard
