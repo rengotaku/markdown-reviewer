@@ -798,3 +798,78 @@ describe("CommentSidePane", () => {
     vi.unstubAllGlobals();
   });
 });
+
+// #298: the pane's "aligned" (段落整列) layout mode. `railMode` defaults to
+// "list" (unchanged behaviour, asserted throughout the suite above) and only
+// switches to the rail arithmetic (commentRailLayout.ts) when a caller opts
+// in — which is what EditorPage always does in the app.
+describe("CommentSidePane rail mode (#298)", () => {
+  it("12. keeps global/orphan comments in the pinned section in aligned mode too, out of the rail", () => {
+    renderPane({
+      railMode: "aligned",
+      anchorTops: { c1: 10 },
+      comments: [
+        comment("c1"),
+        pinned("g1"),
+        comment("o1", { orphan: true, context: null }),
+      ],
+    });
+    const section = screen.getByTestId("comment-pinned-section");
+    expect(within(section).getAllByTestId("comment-item")).toHaveLength(2);
+    const rail = screen.getByTestId("comment-rail-aligned");
+    expect(within(rail).getAllByTestId("comment-item")).toHaveLength(1);
+    expect(within(rail).getByTestId("comment-id")).toHaveTextContent("c1");
+  });
+
+  it("renders anchored comments inside the aligned rail container, not the plain list", () => {
+    renderPane({
+      railMode: "aligned",
+      anchorTops: { c1: 10, c2: 20 },
+      comments: [comment("c1"), comment("c2")],
+    });
+    expect(screen.getByTestId("comment-rail-aligned")).toBeInTheDocument();
+  });
+
+  it("falls back to the plain list when railMode is omitted", () => {
+    renderPane({ comments: [comment("c1"), comment("c2")] });
+    expect(screen.queryByTestId("comment-rail-aligned")).not.toBeInTheDocument();
+    expect(screen.getAllByTestId("comment-item")).toHaveLength(2);
+  });
+
+  it("a card the rail can't fit is dropped and counted, and jumping from the count uses onJump", async () => {
+    const user = userEvent.setup();
+    // jsdom has no layout, so the pane's own box measures 0×0 — the first
+    // card still gets placed (shrink-to-fit for a lone leading card), and a
+    // second card whose anchor sits below the (zero-height) pane can't fit
+    // and is counted as belowCount instead.
+    const h = renderPane({
+      railMode: "aligned",
+      anchorTops: { c1: 0, c2: 500 },
+      comments: [comment("c1"), comment("c2")],
+    });
+    const rail = screen.getByTestId("comment-rail-aligned");
+    expect(within(rail).getAllByTestId("comment-item")).toHaveLength(1);
+    const below = screen.getByTestId("comment-rail-below");
+    expect(below).toHaveTextContent("下に 1 件");
+    await user.click(below);
+    expect(h.onJump).toHaveBeenCalledWith("c2");
+  });
+
+  it("shows the mode toggle only when onRailModeChange is supplied, and switches modes", async () => {
+    const user = userEvent.setup();
+    const onRailModeChange = vi.fn();
+    renderPane({
+      railMode: "list",
+      onRailModeChange,
+      comments: [comment("c1")],
+    });
+    expect(screen.getByTestId("comment-rail-mode")).toBeInTheDocument();
+    await user.click(screen.getByTestId("comment-rail-mode-aligned"));
+    expect(onRailModeChange).toHaveBeenCalledWith("aligned");
+  });
+
+  it("hides the mode toggle when the caller doesn't track a mode", () => {
+    renderPane({ comments: [comment("c1")] });
+    expect(screen.queryByTestId("comment-rail-mode")).not.toBeInTheDocument();
+  });
+});
