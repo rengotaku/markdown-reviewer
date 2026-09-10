@@ -16,7 +16,6 @@ import ToggleButton from "@mui/material/ToggleButton";
 import ToggleButtonGroup from "@mui/material/ToggleButtonGroup";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
-import CommentsDisabledIcon from "@mui/icons-material/CommentsDisabled";
 import AddCommentIcon from "@mui/icons-material/AddComment";
 import PublicIcon from "@mui/icons-material/Public";
 import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutline";
@@ -37,8 +36,6 @@ import { contextLabel } from "@/utils/commentContext";
 import { isAiAuthored } from "@/utils/commentPresentation";
 import { CommentAuthor } from "./CommentAuthor";
 import { CommentId } from "./CommentId";
-import ViewAgendaIcon from "@mui/icons-material/ViewAgenda";
-import ViewListIcon from "@mui/icons-material/ViewList";
 import { layoutCommentRail, type RailItem } from "@/utils/commentRailLayout";
 
 /** Placeholder height for a card whose real height hasn't been measured yet
@@ -57,10 +54,14 @@ const BODY_PREVIEW_LIMIT = 200;
 /** CSS-only height clamp for a collapsed long body: unlike slicing the
  *  Markdown source (which breaks mid-syntax — a table or fence cut in half),
  *  the full source is always rendered and only the *visual* height is capped,
- *  with a bottom fade hinting there's more. */
-function clampSx(theme: Theme): SystemStyleObject<Theme> {
+ *  with a bottom fade hinting there's more. `maxHeight` is caller-supplied so
+ *  the rail's cards (#304: 3 lines, to keep neighbouring cards from being
+ *  pushed too far down now that list mode is gone) and the pinned section's
+ *  rows (6 lines, unchanged) can clamp to different heights with the same
+ *  mechanism. */
+function clampSx(theme: Theme, maxHeight: string): SystemStyleObject<Theme> {
   return {
-    maxHeight: "6em",
+    maxHeight,
     overflow: "hidden",
     position: "relative",
     "&::after": {
@@ -81,15 +82,18 @@ function clampSx(theme: Theme): SystemStyleObject<Theme> {
  *  body and each of its replies collapse independently. The clamp is purely
  *  visual — the full source is always in the DOM, so mid-syntax truncation
  *  (a half-rendered table/fence) can't happen. Short text renders in full
- *  with no toggle. */
+ *  with no toggle. Never auto-expanded (#304): selecting or deep-linking to a
+ *  card leaves it collapsed — the reader clicks "続きを表示" themselves. */
 function CollapsibleText({
   text,
   testid,
   sx,
+  clampHeight = "6em",
 }: {
   text: string;
   testid: string;
   sx?: SxProps<Theme>;
+  clampHeight?: string;
 }) {
   const [expanded, setExpanded] = useState(false);
   const long = text.length > BODY_PREVIEW_LIMIT;
@@ -103,9 +107,13 @@ function CollapsibleText({
         data-collapsed={String(collapsed)}
         // XSS-safe: see commentMarkdown.ts (html:false + unmodified validateLink()).
         dangerouslySetInnerHTML={{ __html: renderCommentMarkdown(text) }}
-        sx={[sx ?? false, markdownBodySx, collapsed ? clampSx : false].filter(
-          Boolean
-        ) as SxProps<Theme>}
+        sx={
+          [
+            sx ?? false,
+            markdownBodySx,
+            collapsed ? (theme: Theme) => clampSx(theme, clampHeight) : false,
+          ].filter(Boolean) as SxProps<Theme>
+        }
       />
       {long && (
         <Link
@@ -137,7 +145,6 @@ interface Props {
   comments: ReadonlyArray<CommentJSON>;
   /** The active file is under review (draft files cannot take comments). */
   reviewActive: boolean;
-  onClose?: () => void;
   /** Re-fetch the comment list from the sidecar (e.g. to pick up AI replies
    *  added out-of-band). */
   onRefresh: () => void;
@@ -162,16 +169,11 @@ interface Props {
   onSelect: (id: string) => void;
   /** The comment whose thread is currently open, if it is one of these. */
   selectedId?: string | null;
-  /** "aligned": cards line up with the paragraph they're anchored to
-   *  (Notion-style rail, #298). "list": the plain top-to-bottom list this
-   *  pane used before. Defaults to "list" — callers that don't track a rail
-   *  mode (and don't supply `anchorTops`) keep the pane they already had. */
-  railMode?: "aligned" | "list";
-  onRailModeChange?: (mode: "aligned" | "list") => void;
   /** Viewport top (px) of each anchored comment's first decoration, keyed by
-   *  comment id. Only meaningful in "aligned" mode; the caller (EditorPage)
-   *  owns the editor DOM this is measured from. A comment missing an entry
-   *  here is treated as having no live anchor for layout purposes. */
+   *  comment id — what the paragraph-aligned rail layout positions cards
+   *  against (#298). The caller (EditorPage) owns the editor DOM this is
+   *  measured from. A comment missing an entry here is treated as having no
+   *  live anchor for layout purposes. */
   anchorTops?: Readonly<Record<string, number>>;
 }
 
@@ -182,7 +184,6 @@ export function CommentSidePane({
   filePath,
   comments,
   reviewActive,
-  onClose,
   onRefresh,
   canAddComment,
   onAddComment,
@@ -196,8 +197,6 @@ export function CommentSidePane({
   onJump,
   onSelect,
   selectedId,
-  railMode = "list",
-  onRailModeChange,
   anchorTops = {},
 }: Props) {
   const canCopyLink = Boolean(root && filePath);
@@ -237,15 +236,15 @@ export function CommentSidePane({
     () => visible.filter((c) => c.scope === "global" || c.orphan),
     [visible]
   );
-  // Aligned mode (#298) needs the rail to claim nearly the whole pane
+  // The paragraph-aligned rail (#298) needs to claim nearly the whole pane
   // height — a paragraph anchored near the top of the file otherwise has no
   // band left to render its card in at all (#301 follow-up: capping this
   // section to 40% still left it "collapsed above 300px" for anything with
-  // 5+ pinned comments). So in aligned mode this section defaults to a
-  // single collapsed header row and its full content only appears as an
-  // overlay on demand, never as a permanent claim on the rail's height.
-  // List mode is untouched: it never competed with the rail for space to
-  // begin with, so it keeps always showing its full content inline.
+  // 5+ pinned comments). So this section defaults to a single collapsed
+  // header row and its full content only appears as an overlay on demand,
+  // never as a permanent claim on the rail's height. Local (unpersisted)
+  // state: every mount starts collapsed (#304), and switching files or
+  // selecting a card never expands it automatically.
   const [pinnedExpanded, setPinnedExpanded] = useState(false);
   const anchored = useMemo(
     () => visible.filter((c) => !(c.scope === "global" || c.orphan)),
@@ -290,18 +289,6 @@ export function CommentSidePane({
             <RefreshIcon fontSize="small" />
           </IconButton>
         </Tooltip>
-        {onClose && (
-          <Tooltip title="コメントペインを閉じる">
-            <IconButton
-              size="small"
-              onClick={onClose}
-              aria-label="close comment pane"
-              data-testid="comment-pane-close"
-            >
-              <CommentsDisabledIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-        )}
       </Box>
 
       {/* Filter + add actions share one row (#196). They used to occupy two
@@ -402,47 +389,13 @@ export function CommentSidePane({
             </IconButton>
           </span>
         </Tooltip>
-        {onRailModeChange && (
-          <ToggleButtonGroup
-            value={railMode}
-            exclusive
-            size="small"
-            onChange={(_, v) => {
-              if (v !== null) onRailModeChange(v as "aligned" | "list");
-            }}
-            aria-label="コメントカードの並べ方"
-            data-testid="comment-rail-mode"
-            sx={{ flexShrink: 0 }}
-          >
-            <ToggleButton
-              value="aligned"
-              aria-label="段落整列"
-              data-testid="comment-rail-mode-aligned"
-              sx={{ p: 0.5 }}
-            >
-              <Tooltip title="段落と縦位置を揃える">
-                <ViewAgendaIcon fontSize="small" />
-              </Tooltip>
-            </ToggleButton>
-            <ToggleButton
-              value="list"
-              aria-label="一覧"
-              data-testid="comment-rail-mode-list"
-              sx={{ p: 0.5 }}
-            >
-              <Tooltip title="一覧表示">
-                <ViewListIcon fontSize="small" />
-              </Tooltip>
-            </ToggleButton>
-          </ToggleButtonGroup>
-        )}
       </Box>
 
       <Box
         sx={{
           flex: 1,
-          overflow: railMode === "aligned" ? "hidden" : "auto",
-          display: railMode === "aligned" ? "flex" : "block",
+          overflow: "hidden",
+          display: "flex",
           flexDirection: "column",
         }}
       >
@@ -471,153 +424,98 @@ export function CommentSidePane({
             {pinned.length > 0 && (
               <Box
                 data-testid="comment-pinned-section"
-                sx={
-                  railMode === "aligned"
-                    ? // This section is a sibling of a `flex: 1` rail whose
-                      // own content is entirely absolutely-positioned (so
-                      // its content-box height is 0). A flex item's shrink
-                      // share is weighted by its flex-basis, and `flex: 1`
-                      // sets that basis to 0 — so however tall this section
-                      // renders, it claims 0% of any shrinking and the rail
-                      // gets none of the shrink either. `position: relative`
-                      // lets the expanded content below render as an
-                      // absolutely-positioned overlay instead of adding to
-                      // this box's own (flex-participating) height — the
-                      // collapsed header row is all this box actually
-                      // occupies in the layout, so the rail keeps nearly
-                      // the whole pane regardless of how many comments are
-                      // pinned or whether the overlay is open (#301
-                      // follow-up: capping this section's height to a % of
-                      // the pane, as done before, still shrank the rail's
-                      // usable band below 300px with 5+ pinned comments).
-                      { flexShrink: 0, position: "relative" }
-                    : undefined
-                }
+                // This section is a sibling of a `flex: 1` rail whose own
+                // content is entirely absolutely-positioned (so its
+                // content-box height is 0). A flex item's shrink share is
+                // weighted by its flex-basis, and `flex: 1` sets that basis
+                // to 0 — so however tall this section renders, it claims 0%
+                // of any shrinking and the rail gets none of the shrink
+                // either. `position: relative` lets the expanded content
+                // below render as an absolutely-positioned overlay instead
+                // of adding to this box's own (flex-participating) height —
+                // the collapsed header row is all this box actually
+                // occupies in the layout, so the rail keeps nearly the
+                // whole pane regardless of how many comments are pinned or
+                // whether the overlay is open (#301 follow-up: capping this
+                // section's height to a % of the pane, as done before,
+                // still shrank the rail's usable band below 300px with 5+
+                // pinned comments).
+                sx={{ flexShrink: 0, position: "relative" }}
               >
-                {railMode === "aligned" ? (
-                  <Box
-                    component="button"
-                    type="button"
-                    onClick={() => setPinnedExpanded((v) => !v)}
-                    aria-expanded={pinnedExpanded}
-                    data-testid="comment-pinned-toggle"
-                    sx={{
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      width: "100%",
-                      px: 1.5,
-                      py: 0.75,
-                      border: 0,
-                      borderBottom: "1px solid",
-                      borderColor: "divider",
-                      bgcolor: "action.hover",
-                      color: "text.secondary",
-                      font: "inherit",
-                      cursor: "pointer",
-                      textAlign: "left",
-                    }}
-                  >
-                    <Typography variant="caption" sx={{ letterSpacing: ".04em" }}>
-                      全体・位置不明 {pinned.length}
-                    </Typography>
-                    <Typography variant="caption">{pinnedExpanded ? "閉じる" : "表示"}</Typography>
-                  </Box>
-                ) : (
-                  <Typography
-                    variant="caption"
-                    sx={{
-                      display: "block",
-                      px: 1.5,
-                      py: 0.75,
-                      color: "text.secondary",
-                      bgcolor: "action.hover",
-                      borderBottom: "1px solid",
-                      borderColor: "divider",
-                      letterSpacing: ".04em",
-                    }}
-                  >
+                <Box
+                  component="button"
+                  type="button"
+                  onClick={() => setPinnedExpanded((v) => !v)}
+                  aria-expanded={pinnedExpanded}
+                  data-testid="comment-pinned-toggle"
+                  sx={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    width: "100%",
+                    px: 1.5,
+                    py: 0.75,
+                    border: 0,
+                    borderBottom: "1px solid",
+                    borderColor: "divider",
+                    bgcolor: "action.hover",
+                    color: "text.secondary",
+                    font: "inherit",
+                    cursor: "pointer",
+                    textAlign: "left",
+                  }}
+                >
+                  <Typography variant="caption" sx={{ letterSpacing: ".04em" }}>
                     全体・位置不明 {pinned.length}
                   </Typography>
-                )}
-                {railMode === "aligned" ? (
-                  pinnedExpanded && (
-                    <Box
-                      data-testid="comment-pinned-overlay"
-                      sx={{
-                        position: "absolute",
-                        top: "100%",
-                        left: 0,
-                        right: 0,
-                        zIndex: 10,
-                        maxHeight: "60%",
-                        overflowY: "auto",
-                        bgcolor: "background.paper",
-                        boxShadow: 3,
-                        borderBottom: "1px solid",
-                        borderColor: "divider",
-                      }}
-                    >
-                      {pinned.map((c) => (
-                        <CommentRow
-                          key={c.id}
-                          comment={c}
-                          onDelete={onDelete}
-                          onResolveToggle={onResolveToggle}
-                          onReply={onReply}
-                          onEdit={onEdit}
-                          onEditReply={onEditReply}
-                          onDeleteReply={onDeleteReply}
-                          onJump={onJump}
-                          onOpenDetail={setDetailId}
-                          onCopyLink={handleCopyLink}
-                          canCopyLink={canCopyLink}
-                        />
-                      ))}
-                    </Box>
-                  )
-                ) : (
-                  pinned.map((c) => (
-                    <CommentRow
-                      key={c.id}
-                      comment={c}
-                      onDelete={onDelete}
-                      onResolveToggle={onResolveToggle}
-                      onReply={onReply}
-                      onEdit={onEdit}
-                      onEditReply={onEditReply}
-                      onDeleteReply={onDeleteReply}
-                      onJump={onJump}
-                      onOpenDetail={setDetailId}
-                      onCopyLink={handleCopyLink}
-                      canCopyLink={canCopyLink}
-                    />
-                  ))
+                  <Typography variant="caption">{pinnedExpanded ? "閉じる" : "表示"}</Typography>
+                </Box>
+                {pinnedExpanded && (
+                  <Box
+                    data-testid="comment-pinned-overlay"
+                    sx={{
+                      position: "absolute",
+                      top: "100%",
+                      left: 0,
+                      right: 0,
+                      zIndex: 10,
+                      maxHeight: "60%",
+                      overflowY: "auto",
+                      bgcolor: "background.paper",
+                      boxShadow: 3,
+                      borderBottom: "1px solid",
+                      borderColor: "divider",
+                    }}
+                  >
+                    {pinned.map((c) => (
+                      <CommentRow
+                        key={c.id}
+                        comment={c}
+                        onDelete={onDelete}
+                        onResolveToggle={onResolveToggle}
+                        onReply={onReply}
+                        onEdit={onEdit}
+                        onEditReply={onEditReply}
+                        onDeleteReply={onDeleteReply}
+                        onJump={onJump}
+                        onOpenDetail={setDetailId}
+                        onCopyLink={handleCopyLink}
+                        canCopyLink={canCopyLink}
+                      />
+                    ))}
+                  </Box>
                 )}
               </Box>
             )}
-            {railMode === "aligned" ? (
-              <AlignedCommentRail
-                comments={anchored}
-                anchorTops={anchorTops}
-                selectedId={selectedId ?? null}
-                onSelect={onSelect}
-                onJump={onJump}
-                onCopyLink={handleCopyLink}
-                canCopyLink={canCopyLink}
-              />
-            ) : (
-              anchored.map((c) => (
-                <CommentCard
-                  key={c.id}
-                  comment={c}
-                  selected={c.id === selectedId}
-                  onSelect={onSelect}
-                  onCopyLink={handleCopyLink}
-                  canCopyLink={canCopyLink}
-                />
-              ))
-            )}
+            <AlignedCommentRail
+              comments={anchored}
+              anchorTops={anchorTops}
+              selectedId={selectedId ?? null}
+              onSelect={onSelect}
+              onJump={onJump}
+              onCopyLink={handleCopyLink}
+              canCopyLink={canCopyLink}
+            />
           </>
         )}
       </Box>
@@ -765,6 +663,10 @@ function CommentCard({
         text={c.body}
         testid="comment-body"
         sx={{ mt: 0.5, wordBreak: "break-word" }}
+        // #304: clamp to ~3 lines instead of the pinned section's 6 — with
+        // list mode gone, every anchored comment renders as this card, so a
+        // tall body pushes its neighbours further down the rail.
+        clampHeight="3em"
       />
 
       {replies > 0 && (

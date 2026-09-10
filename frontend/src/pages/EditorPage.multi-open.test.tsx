@@ -8,7 +8,6 @@ import { useOpenFiles } from "@/hooks/useOpenFiles";
 import { useToast } from "@/hooks/useToast";
 import { useConfirm } from "@/hooks/useConfirm";
 import { useRecentOpened } from "@/hooks/useRecentOpened";
-import { useUIStore } from "@/hooks/useUIStore";
 
 const API_BASE = "http://localhost:8080";
 const OTHER_ROOT = "root-b";
@@ -63,7 +62,6 @@ describe("EditorPage multi-file deeplink (#289)", () => {
     useToast.setState({ toasts: [] });
     useConfirm.setState({ pending: null, queue: [] });
     useRecentOpened.setState({ entries: [] });
-    useUIStore.setState({ isCommentPaneOpen: true });
   });
 
   it("opens the main path and every open= path, main stays active, tabs in main→open order", async () => {
