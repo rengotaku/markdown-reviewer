@@ -23,6 +23,13 @@ describe("GlobalCommentBadges", () => {
     expect(screen.queryByTestId("global-comment-badge")).toBeNull();
   });
 
+  it("carries the warning mark only once, from the icon (#318)", () => {
+    render(<GlobalCommentBadges globalCount={0} orphanCount={3} onOpen={vi.fn()} />);
+    const badge = screen.getByTestId("orphan-comment-badge");
+    expect(badge.textContent).not.toContain("⚠");
+    expect(badge.querySelectorAll("svg")).toHaveLength(1);
+  });
+
   it("shows both badges when both counts are non-zero", () => {
     render(<GlobalCommentBadges globalCount={1} orphanCount={1} onOpen={vi.fn()} />);
     expect(screen.getByTestId("global-comment-badge")).toBeInTheDocument();
