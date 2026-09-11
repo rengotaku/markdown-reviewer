@@ -37,6 +37,8 @@ import { isAiAuthored } from "@/utils/commentPresentation";
 import { CommentAuthor } from "./CommentAuthor";
 import { CommentId } from "./CommentId";
 import { layoutCommentRail, type RailItem } from "@/utils/commentRailLayout";
+import { GlobalCommentBadges, type GlobalBadgeKind } from "./GlobalCommentBadges";
+import { GlobalCommentsDialog } from "./GlobalCommentsDialog";
 
 /** Placeholder height for a card whose real height hasn't been measured yet
  *  (first paint, before its ResizeObserver fires) — enough to avoid every
@@ -231,13 +233,21 @@ export function CommentSidePane({
     [comments, filter]
   );
   // Comments with no live anchor (全体スコープ / orphan) cannot open a popover
-  // beside the text, and no longer get a section inside this pane (#309):
-  // they render at the top of the document body instead (DocumentTopComments,
-  // rendered by TiptapEditor). This pane's rail is anchored-comments-only.
+  // beside the text, so they never get a card in the rail below. #309 used
+  // to render them permanently above the document body; #316 replaced that
+  // with a pressable one-line badge (count only) at the top of this pane's
+  // list, opening GlobalCommentsDialog on click instead.
   const anchored = useMemo(
     () => visible.filter((c) => !(c.scope === "global" || c.orphan)),
     [visible]
   );
+  const globalComments = useMemo(
+    () => visible.filter((c) => c.scope === "global" && !c.orphan),
+    [visible]
+  );
+  const orphanComments = useMemo(() => visible.filter((c) => c.orphan), [visible]);
+  const [globalDialogOpen, setGlobalDialogOpen] = useState(false);
+  const [globalDialogTab, setGlobalDialogTab] = useState<GlobalBadgeKind>("global");
 
   return (
     <Box
@@ -387,6 +397,16 @@ export function CommentSidePane({
           flexDirection: "column",
         }}
       >
+        {reviewActive && (
+          <GlobalCommentBadges
+            globalCount={globalComments.length}
+            orphanCount={orphanComments.length}
+            onOpen={(kind) => {
+              setGlobalDialogTab(kind);
+              setGlobalDialogOpen(true);
+            }}
+          />
+        )}
         {!reviewActive ? (
           <Box sx={{ p: 2 }}>
             <Typography variant="body2" color="text.secondary">
@@ -408,11 +428,11 @@ export function CommentSidePane({
             </Typography>
           </Box>
         ) : anchored.length === 0 ? (
-          // #309: every visible comment is global/orphan (no live anchor) —
-          // those render at the top of the document body now, not here.
+          // #316: every visible comment is global/orphan (no live anchor) —
+          // those surface only via the badge row above, not a card here.
           <Box sx={{ p: 2 }}>
             <Typography variant="body2" color="text.secondary">
-              本文にひもづくコメントはありません。全体・位置不明のコメントは本文の先頭に表示されています。
+              本文にひもづくコメントはありません。全体・位置不明のコメントは上部のバッジから確認できます。
             </Typography>
           </Box>
         ) : (
@@ -453,6 +473,23 @@ export function CommentSidePane({
         }}
         onCopyLink={handleCopyLink}
         canCopyLink={canCopyLink}
+      />
+
+      <GlobalCommentsDialog
+        open={globalDialogOpen}
+        initialTab={globalDialogTab}
+        globalComments={globalComments}
+        orphanComments={orphanComments}
+        onClose={() => setGlobalDialogOpen(false)}
+        onDelete={onDelete}
+        onResolveToggle={onResolveToggle}
+        onReply={onReply}
+        onEdit={onEdit}
+        onEditReply={onEditReply}
+        onDeleteReply={onDeleteReply}
+        onCopyLink={handleCopyLink}
+        canCopyLink={canCopyLink}
+        onAddGlobal={onAddGlobal}
       />
     </Box>
   );
@@ -1125,6 +1162,9 @@ export interface CommentRowProps {
   onOpenDetail: (id: string) => void;
   onCopyLink: (id: string) => void;
   canCopyLink?: boolean;
+  /** #316: the global/orphan dialog already IS a centered view, so it hides
+   *  this button instead of offering one that opens a dialog over a dialog. */
+  showDetail?: boolean;
 }
 
 export function CommentRow({
@@ -1139,6 +1179,7 @@ export function CommentRow({
   onOpenDetail,
   onCopyLink,
   canCopyLink = true,
+  showDetail = true,
 }: CommentRowProps) {
   const [replyOpen, setReplyOpen] = useState(false);
   const [replyBody, setReplyBody] = useState("");
@@ -1423,16 +1464,18 @@ export function CommentRow({
             )}
           </IconButton>
         </Tooltip>
-        <Tooltip title="詳細を中央に開く">
-          <IconButton
-            size="small"
-            onClick={() => onOpenDetail(c.id)}
-            aria-label="open comment detail"
-            data-testid="comment-open-detail"
-          >
-            <OpenInFullIcon fontSize="small" />
-          </IconButton>
-        </Tooltip>
+        {showDetail && (
+          <Tooltip title="詳細を中央に開く">
+            <IconButton
+              size="small"
+              onClick={() => onOpenDetail(c.id)}
+              aria-label="open comment detail"
+              data-testid="comment-open-detail"
+            >
+              <OpenInFullIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        )}
         <Tooltip title={canCopyLink ? "リンクをコピー" : "ファイルが開かれていないためコピーできません"}>
           <span>
             <IconButton

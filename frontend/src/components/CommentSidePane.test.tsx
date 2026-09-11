@@ -237,11 +237,9 @@ describe("CommentSidePane", () => {
     expect(h.onSelect).not.toHaveBeenCalled();
   });
 
-  // #309: global-scope and orphan comments no longer get a section inside
-  // this pane at all — they render at the top of the document body
-  // (DocumentTopComments, rendered by TiptapEditor). This pane's rail is
-  // anchored-comments-only.
-  it("never renders global or orphan comments in this pane; only the anchored one appears", () => {
+  // #316: global-scope and orphan comments no longer get a card in this
+  // pane's rail — they surface only via the badge row above it.
+  it("never renders global or orphan comments as rail cards; only the anchored one appears", () => {
     renderPane({
       comments: [
         comment("c1"),
@@ -253,6 +251,63 @@ describe("CommentSidePane", () => {
     const items = screen.getAllByTestId("comment-item");
     expect(items).toHaveLength(1);
     expect(within(items[0]).getByTestId("comment-id")).toHaveTextContent("c1");
+  });
+
+  describe("global/orphan badges (#316)", () => {
+    it("shows only the global badge when there are global comments and no orphans", () => {
+      renderPane({ comments: [pinned("g1"), pinned("g2")] });
+      expect(screen.getByTestId("global-comment-badge")).toHaveTextContent("全体 2");
+      expect(screen.queryByTestId("orphan-comment-badge")).toBeNull();
+    });
+
+    it("renders no badges when there are no global or orphan comments", () => {
+      renderPane({ comments: [comment("c1")] });
+      expect(screen.queryByTestId("global-comment-badges")).toBeNull();
+    });
+
+    it("opens the dialog with the comment body when a badge is pressed", async () => {
+      const user = userEvent.setup();
+      renderPane({ comments: [pinned("g1", { body: "global body" })] });
+      await user.click(screen.getByTestId("global-comment-badge"));
+      expect(screen.getByTestId("global-comments-dialog")).toBeInTheDocument();
+      expect(screen.getByText("global body")).toBeInTheDocument();
+    });
+
+    it("shows tabs only when both global and orphan comments exist", async () => {
+      const user = userEvent.setup();
+      renderPane({
+        comments: [pinned("g1"), comment("o1", { orphan: true, context: null })],
+      });
+      await user.click(screen.getByTestId("global-comment-badge"));
+      expect(screen.getByTestId("global-comments-tab-global")).toBeInTheDocument();
+      expect(screen.getByTestId("global-comments-tab-orphan")).toBeInTheDocument();
+    });
+
+    it("replying inside the dialog calls onReply with the id and body", async () => {
+      const user = userEvent.setup();
+      const h = renderPane({ comments: [pinned("g1")] });
+      await user.click(screen.getByTestId("global-comment-badge"));
+      await user.click(screen.getByTestId("comment-reply-toggle"));
+      await user.type(screen.getByTestId("comment-reply-input"), "hello");
+      await user.click(screen.getByTestId("comment-reply-submit"));
+      expect(h.onReply).toHaveBeenCalledWith("g1", "hello");
+    });
+
+    it("follows the status filter: switching to resolved only counts resolved global/orphan comments", async () => {
+      const user = userEvent.setup();
+      renderPane({
+        comments: [
+          pinned("g1", { status: "open" }),
+          pinned("g2", { status: "resolved" }),
+        ],
+      });
+      // Default filter is 未解決 (open).
+      expect(screen.getByTestId("global-comment-badge")).toHaveTextContent("全体 1");
+      await user.click(screen.getByTestId("comment-filter-resolved"));
+      expect(screen.getByTestId("global-comment-badge")).toHaveTextContent("全体 1");
+      await user.click(screen.getByTestId("comment-filter-all"));
+      expect(screen.getByTestId("global-comment-badge")).toHaveTextContent("全体 2");
+    });
   });
 
   it("invokes the add-comment callbacks from the toolbar", async () => {
