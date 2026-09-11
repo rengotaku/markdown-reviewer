@@ -397,18 +397,6 @@
   margin: 0 auto;
 }
 
-/* Global/orphan comments (#309), surfaced above the editor body — same
-   horizontal rhythm as the frontmatter panel just below it. */
-.document-top-comments {
-  padding: 12px 48px 0;
-  box-sizing: border-box;
-}
-
-.editor-centered .document-top-comments {
-  max-width: 720px;
-  margin: 0 auto;
-}
-
 .ProseMirror-dropcursor,
 .prosemirror-dropcursor-block,
 .prosemirror-dropcursor-inline {
