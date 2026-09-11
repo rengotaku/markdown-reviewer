@@ -49,7 +49,9 @@ export function GlobalCommentBadges({ globalCount, orphanCount, onOpen }: Props)
       {orphanCount > 0 && (
         <Chip
           icon={<WarningAmberIcon fontSize="small" />}
-          label={`⚠ 位置不明 ${orphanCount}`}
+          // The warning mark comes from the Chip's icon — repeating it in
+          // the label showed two of them side by side (#318).
+          label={`位置不明 ${orphanCount}`}
           size="small"
           color="warning"
           variant="outlined"
