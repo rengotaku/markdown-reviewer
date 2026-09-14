@@ -39,15 +39,18 @@ CLI(推奨):  mr review <このファイルのパス>   # 返信: mr reply <path
 mr inbox    [--root NAME] [--all]                        # open コメントを持つファイル一覧
 mr comments <path> [--json] [--since ID] [--unanswered]  # コメント一覧
 mr review   <path> [--all] [--since ID] [--unanswered]   # open コメントを整形 Markdown で
-mr reply    <path> <id> <text> [--author NAME]           # スレッド返信（既定 author=ai）
-mr resolve  <path> <id>                                  # resolved にする
-mr reopen   <path> <id>                                  # resolved を open に戻す
+mr reply    <path> <id> <text> [--author NAME] [--force] # スレッド返信（既定 author=ai）
+mr resolve  <path> <id> [--force]                        # resolved にする
+mr reopen   <path> <id> [--force]                        # resolved を open に戻す
 mr open     <path> [<extra-path>...] [--comment ID] [--print]  # Web UI で開く（--print: URL のみ出力）
 mr revisions <path> [--json]                              # 履歴一覧（新しい順・id / 日時 / author）
 mr restore  <path> <id> [--author NAME]                   # その版へ書き戻す（既定 author=external）
+mr diff     <path> [--since ID] [--since-last-read]       # 前回 mr で読んだ時（既定）/ 指定 revision との差分
 ```
 
 パスは絶対 / cwd 相対のどちらでもよい。サーバ未起動でも動作する（`mr open` の URL 出力も同様。ブラウザで開くにはサーバが必要）。
+
+`mr comments` / `mr review` は読み取りに成功するたびに `last_read`（本文の sha・その時点の最新 revision・時刻）を記録し、前回の `last_read` から本文が変わっていれば冒頭に変更バナーを出す（変わっていなければ何も出さない）。バナーの「影響」に載るのは、アンカーが解決できなくなったコメント（位置不明）と、アンカー先の行そのものが書き換わったコメント（アンカー行が変更）だけで、単に位置がずれただけのコメントは載らない。`mr reply` / `mr resolve` / `mr reopen` は、`last_read` を記録した後に本文が変わっていると exit 1 で止まる（`mr diff <path> --since-last-read` で差分を確認してから `mr comments` で読み直すか、意図的に無視する場合のみ `--force` を付ける）。
 
 人間に「この画面を見てほしい」と伝えるときは `mr open <path> --print` の URL を貼る（deeplink を手で組まない）。特定のコメント1件を指したいときは `mr open <path> --comment <id> --print` で、そのコメントへ自動スクロールするリンクを貼れる（`id` は `mr comments <path> --json` で確認できる）。指定した `id` がそのファイルに存在しない場合はエラーになる。
 
