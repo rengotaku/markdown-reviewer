@@ -414,7 +414,15 @@
 /* Comment mark — inline body inserted by the reviewer (issue #6).
    Layout-neutral by design: horizontal padding would widen the inline box and
    shift surrounding text whenever a highlight is added/removed (issue #145). */
-.ProseMirror .comment-mark {
+.ProseMirror .comment-mark,
+/* A highlight that covers a link keeps running across the external-link glyph
+   (#323): the glyph is an `::after` on the `<a>`, outside the decorated span,
+   so without this the band breaks in two right where the icon sits. Painting
+   the `<a>` box itself covers the glyph and its margin, and the band meets the
+   span that follows with no gap. `:last-child` keeps this to the case the
+   glyph actually sits in: a comment that covers only the head of the link ends
+   before the glyph, and the link must stay unpainted there. */
+.ProseMirror a:has(> .comment-mark:last-child) {
   background-color: #fff8c5;
   border-bottom: 1px dashed #c9a700;
   border-radius: 2px;
@@ -435,7 +443,8 @@
 
 /* Set while this comment's thread is open, so the anchor of the popover is
    obvious when several highlights sit in the same paragraph. */
-.ProseMirror .comment-mark.is-active {
+.ProseMirror .comment-mark.is-active,
+.ProseMirror a:has(> .comment-mark.is-active:last-child) {
   background-color: #ffec99;
   /* A range that crosses a link (or any other mark) is rendered as several
      spans, and `outline` boxes each one — drawing vertical edges in the middle
