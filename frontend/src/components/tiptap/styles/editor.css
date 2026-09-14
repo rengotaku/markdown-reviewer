@@ -209,8 +209,15 @@
    wraps rendered text in a <span>, it never touches the doc/markdown, so
    this is pure CSS with no effect on getMarkdown() output. `currentColor` +
    mask keeps the glyph tinted the same blue as the link text in both
-   light/dark without a second hardcoded color. */
-.ProseMirror a .ext-link-icon::after {
+   light/dark without a second hardcoded color.
+
+   The glyph hangs off the `<a>` itself, not off the decorated span inside it
+   (#320): a comment highlight that starts inside the link renders the link
+   text as its own span, and an `::after` on that span puts the glyph *inside*
+   the highlight — the yellow background and the dashed underline ran over the
+   icon and the gap that follows it. `:has()` also keeps it at one glyph per
+   link when the link text is split across several text nodes. */
+.ProseMirror a:has(.ext-link-icon)::after {
   content: "";
   display: inline-block;
   width: 0.7em;
@@ -430,8 +437,12 @@
    obvious when several highlights sit in the same paragraph. */
 .ProseMirror .comment-mark.is-active {
   background-color: #ffec99;
-  outline: 2px solid #f4b400;
-  outline-offset: 1px;
+  /* A range that crosses a link (or any other mark) is rendered as several
+     spans, and `outline` boxes each one — drawing vertical edges in the middle
+     of what the reader sees as a single highlight (#320). An inset shadow on
+     the bottom edge stays continuous across the split and, unlike a thicker
+     border, costs no layout. */
+  box-shadow: inset 0 -2px 0 #f4b400;
 }
 
 @keyframes comment-flash {
