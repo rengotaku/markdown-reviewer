@@ -335,6 +335,33 @@ func shortSha(content string) string {
 	return hex.EncodeToString(sum[:])[:12]
 }
 
+// ShortSha exposes the store's content hash to out-of-package callers (the mr
+// CLI's last_read bookkeeping and its drift guard, #322) so they compute it
+// exactly the way AppendRevision/SyncExternalEdit do. content must already be
+// hint-stripped by the caller (StripAIHint), mirroring every other sha
+// comparison in this package — otherwise the per-save hint churn would count
+// as a content change.
+func ShortSha(content string) string { return shortSha(content) }
+
+// NewestRevisionID returns the id of the most recent history.jsonl snapshot,
+// if any. It exists so callers that only need "what's the newest revision
+// right now" (the mr CLI's last_read bookkeeping, #322) do not have to pay
+// for ListRevisions' full projection or GetRevision's content read.
+func NewestRevisionID(root, relPath string) (id string, ok bool, err error) {
+	dir, err := EntryDir(root, relPath)
+	if err != nil {
+		return "", false, err
+	}
+	revs, err := readRevisions(filepath.Join(dir, historyFile))
+	if err != nil {
+		return "", false, err
+	}
+	if len(revs) == 0 {
+		return "", false, nil
+	}
+	return revs[len(revs)-1].ID, true, nil
+}
+
 // atomicWrite writes via a temp file + rename in the same directory so a
 // crash never leaves a half-written review.json / history.jsonl. The parent
 // directory is created if missing.
