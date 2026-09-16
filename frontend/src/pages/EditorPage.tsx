@@ -153,6 +153,19 @@ function shallowEqualRecord(a: Record<string, number>, b: Record<string, number>
   return aKeys.every((k) => a[k] === b[k]);
 }
 
+/** How many candidate blocks docHoldsActiveFile will test before giving up
+ *  (#328). One match is enough to identify the document, and the first few
+ *  blocks of any real file include at least one plain-text one. */
+const DOC_IDENTITY_SAMPLE = 20;
+
+/** Same purpose as shallowEqualRecord, for the unresolved-anchor id set
+ *  (#328): a recompute that reached the same verdict must not re-render. */
+function sameIdSet(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
+  if (a.size !== b.size) return false;
+  for (const id of a) if (!b.has(id)) return false;
+  return true;
+}
+
 // Walks up from `el` to find the nearest ancestor that actually scrolls
 // (`overflow-y: auto|scroll` and content taller than its box). The DOM
 // structure between the ProseMirror root and its real scroll container
@@ -1455,23 +1468,31 @@ export function EditorPage() {
   // (#304 — the pane is always open, so there is no popover to open instead).
   const [railSelectedId, setRailSelectedId] = useState<string | null>(null);
 
-  // Viewport top (px) of a comment's first live anchor, measured from the
-  // document rather than from a rendered decoration. Returns null when no
-  // anchor resolves (orphan) or the view has no layout for it yet.
+  // Where a comment's first live anchor sits, measured from the document
+  // rather than from a rendered decoration.
+  //
+  // The two failure cases are deliberately distinct (#328): "this anchor does
+  // not resolve in the live document" is a property of the data and makes the
+  // comment unplaceable for good, while "resolved but not measurable" is
+  // transient (no layout yet, jsdom) and must not be reported as the former.
   // `blocks` is the doc flattened once by the caller, for the same reason
   // buildDeco flattens once: this runs per rAF-coalesced recompute, and
   // re-extracting per anchor would make it O(anchors × doc size).
-  const anchorViewportTop = (
+  type AnchorMeasurement =
+    | { kind: "measured"; top: number }
+    | { kind: "unmeasurable" }
+    | { kind: "unresolvable" };
+  const measureAnchor = (
     c: CommentJSON,
     blocks: AnchorBlock[]
-  ): number | null => {
-    if (!editor || editor.isDestroyed) return null;
+  ): AnchorMeasurement => {
+    if (!editor || editor.isDestroyed) return { kind: "unmeasurable" };
     const first = firstAnchorPosInBlocks(blocks, c);
-    if (first === null) return null;
+    if (first === null) return { kind: "unresolvable" };
     try {
-      return editor.view.coordsAtPos(first).top;
+      return { kind: "measured", top: editor.view.coordsAtPos(first).top };
     } catch {
-      return null; // no layout for this position (jsdom, or not rendered yet)
+      return { kind: "unmeasurable" };
     }
   };
 
@@ -1480,11 +1501,53 @@ export function EditorPage() {
   // against (#298). Comments with no live anchor (global/orphan) never get an
   // entry and stay in the pane's pinned section.
   const [anchorTops, setAnchorTops] = useState<Record<string, number>>({});
+  // Ids of anchored comments whose anchor does not resolve in the live
+  // document, so the pane can show them as 位置不明 instead of dropping them
+  // (#328). Empty while the document isn't ready to be judged against — see
+  // the guard in recomputeAnchorTops.
+  const [unresolvedIds, setUnresolvedIds] = useState<ReadonlySet<string>>(
+    () => new Set()
+  );
+  // Whether the document the editor currently holds is the active file's
+  // (#328). "This anchor resolves nowhere" is only worth reporting to the
+  // reader once that is true: on a tab switch the editor still holds the
+  // previous file's doc for a frame or two (TiptapEditor replaces it in its
+  // own effect), and judging against that would fail every anchor and flash
+  // 位置不明 on a file that is merely still loading.
+  //
+  // The test is containment rather than equality, and it only needs *one*
+  // block to land: `blocks` carries rendered text (inline markup stripped),
+  // so a block that happens to hold a link or emphasis is not a substring of
+  // the markdown it came from (`[t](u)` renders as `t`) — but a block of
+  // plain text is, and no block of this file matches another file's markdown.
+  // Requiring only the first block to match rejected a real document whose
+  // opening line carried a link. Erring towards "not this file" costs only
+  // that the reader keeps the old silent behaviour for that frame; erring the
+  // other way shows a warning they would act on.
+  const docHoldsActiveFile = (blocks: ReadonlyArray<AnchorBlock>): boolean => {
+    if (commentsLoadedForPath !== activePath) return false;
+    const markdown = activeFile?.markdown;
+    if (!markdown) return false;
+    let checked = 0;
+    for (const b of blocks) {
+      const text = b.text.trim();
+      // Very short blocks (a lone table cell, a one-word heading) match by
+      // coincidence across files, so they don't count as evidence.
+      if (text.length < 8) continue;
+      if (markdown.includes(text)) return true;
+      // Bounded so a mismatching document (the tab-switch window) can't turn
+      // this into a full scan of every block on every recompute.
+      if (++checked >= DOC_IDENTITY_SAMPLE) break;
+    }
+    return false;
+  };
+
   const anchorRafRef = useRef<number | null>(null);
   const recomputeAnchorTops = () => {
     if (!editor || editor.isDestroyed) return;
     const root = editor.view.dom;
     const next: Record<string, number> = {};
+    const unresolved = new Set<string>();
     let blocks: AnchorBlock[] | null = null;
     for (const c of comments) {
       if (c.scope === "global" || c.orphan) continue;
@@ -1493,24 +1556,23 @@ export function EditorPage() {
         next[c.id] = el.getBoundingClientRect().top;
         continue;
       }
-      // #326: a resolved comment carries no decoration by design (#96/#97), so
-      // the DOM lookup above can never find one — measuring only decorations
-      // left every resolved card at the rail's top (the `?? 0` fallback in
-      // CommentSidePane), stacked on top of each other and detached from the
-      // paragraphs they point at. Read the position from the comment's own
-      // anchors instead, the same decoration-independent route
-      // handleJumpToComment takes for resolved comments.
-      if (c.status !== "resolved") continue;
-      // Flattened on first use only: a review with no resolved comments (or
-      // none anchored) never pays for it.
+      // No decoration to measure. Either the comment is resolved — those
+      // paint none by design (#96/#97) — or its anchor found nothing to
+      // decorate. Both are answered by resolving the anchor against the
+      // document, the same decoration-independent route handleJumpToComment
+      // takes (#167 / #326). Flattened on first use only, so a review whose
+      // comments all carry decorations never pays for it.
       blocks ??= extractAnchorBlocks(editor.state.doc);
-      const top = anchorViewportTop(c, blocks);
-      if (top !== null) next[c.id] = top;
+      const m = measureAnchor(c, blocks);
+      if (m.kind === "measured") next[c.id] = m.top;
+      else if (m.kind === "unresolvable" && docHoldsActiveFile(blocks))
+        unresolved.add(c.id);
     }
     // Skip the state update (and the render + downstream effects it would
     // trigger) when nothing actually moved — a `transaction` fires on every
     // keystroke/selection change, most of which don't shift any decoration.
     setAnchorTops((prev) => (shallowEqualRecord(prev, next) ? prev : next));
+    setUnresolvedIds((prev) => (sameIdSet(prev, unresolved) ? prev : unresolved));
   };
   // #306 root cause: `scheduleAnchorRecalc` coalesces bursts of triggers onto
   // a single rAF via `anchorRafRef` — but the callback closed over
@@ -3242,6 +3304,7 @@ export function EditorPage() {
           onSelect={handleSelectComment}
           selectedId={railSelectedId}
           anchorTops={anchorTops}
+          unresolvedIds={unresolvedIds}
         />
       </Box>
 

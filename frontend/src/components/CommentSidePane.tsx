@@ -177,9 +177,20 @@ interface Props {
    *  measured from. A comment missing an entry here is treated as having no
    *  live anchor for layout purposes. */
   anchorTops?: Readonly<Record<string, number>>;
+  /** Ids of anchored comments whose anchor the caller could not resolve in
+   *  the live document (#328). The server's own `orphan` flag is computed
+   *  from the raw markdown lines, so it can say "anchored" for a comment the
+   *  editor cannot place; these join the orphan bucket here rather than
+   *  falling out of the pane entirely. */
+  unresolvedIds?: ReadonlySet<string>;
 }
 
 type StatusFilter = "all" | "open" | "resolved";
+
+/** Stable default for the optional `unresolvedIds` prop: a fresh `new Set()`
+ *  in the parameter list would be a new identity every render and defeat the
+ *  memos below. */
+const EMPTY_IDS: ReadonlySet<string> = new Set();
 
 export function CommentSidePane({
   root,
@@ -200,6 +211,7 @@ export function CommentSidePane({
   onSelect,
   selectedId,
   anchorTops = {},
+  unresolvedIds = EMPTY_IDS,
 }: Props) {
   const canCopyLink = Boolean(root && filePath);
   const handleCopyLink = async (id: string) => {
@@ -237,15 +249,30 @@ export function CommentSidePane({
   // to render them permanently above the document body; #316 replaced that
   // with a pressable one-line badge (count only) at the top of this pane's
   // list, opening GlobalCommentsDialog on click instead.
+  // #328: "has no live anchor" is the union of the server's `orphan` flag and
+  // the caller's own resolution failures. The server resolves anchors against
+  // the raw markdown lines and the editor against the rendered document, so
+  // the two can disagree (e.g. a snippet holding a raw table row: the server
+  // finds the line, the editor finds no such text because the cells are split
+  // into separate nodes). Trusting only the flag left those comments in
+  // `anchored` with no position to place them at — no card, no badge, no
+  // above/below count: they vanished with the header still counting them.
+  const hasNoLiveAnchor = useCallback(
+    (c: CommentJSON) => c.orphan || unresolvedIds.has(c.id),
+    [unresolvedIds]
+  );
   const anchored = useMemo(
-    () => visible.filter((c) => !(c.scope === "global" || c.orphan)),
-    [visible]
+    () => visible.filter((c) => !(c.scope === "global" || hasNoLiveAnchor(c))),
+    [visible, hasNoLiveAnchor]
   );
   const globalComments = useMemo(
-    () => visible.filter((c) => c.scope === "global" && !c.orphan),
-    [visible]
+    () => visible.filter((c) => c.scope === "global" && !hasNoLiveAnchor(c)),
+    [visible, hasNoLiveAnchor]
   );
-  const orphanComments = useMemo(() => visible.filter((c) => c.orphan), [visible]);
+  const orphanComments = useMemo(
+    () => visible.filter((c) => hasNoLiveAnchor(c)),
+    [visible, hasNoLiveAnchor]
+  );
   const [globalDialogOpen, setGlobalDialogOpen] = useState(false);
   const [globalDialogTab, setGlobalDialogTab] = useState<GlobalBadgeKind>("global");
 
