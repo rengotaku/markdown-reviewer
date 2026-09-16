@@ -2147,6 +2147,59 @@ describe("EditorPage jump to comment (#167)", () => {
     );
   });
 
+  // #328: the server resolves anchors against the raw markdown lines, the
+  // editor against the rendered document. A comment the editor cannot place
+  // used to fall out of the pane entirely — no card, no badge, no
+  // above/below count — while the header kept counting it.
+  describe("unresolvable anchors surface as 位置不明 (#328)", () => {
+    const unplaceable = (): CommentJSON => ({
+      id: "c-050",
+      scope: "inline",
+      body: "表の行にアンカーしたコメント",
+      status: "resolved",
+      // The raw-markdown table row the anchor contract forbids: the rendered
+      // document splits the cells into separate nodes, so this exact text
+      // exists nowhere in it and cannot resolve.
+      anchor: {
+        heading_path: ["## production（本番移行）"],
+        snippet: "| 手段 | インターコム |",
+        occurrence: 0,
+      },
+      context: { heading_path: ["## production（本番移行）"], line_range: [19, 19] },
+      // The server says it IS anchored — that disagreement is the bug.
+      orphan: false,
+    });
+
+    it("badges a comment the editor cannot place, even though the server reports it anchored", async () => {
+      await openReadmeWithComments([unplaceable()]);
+      // "mock content" is the mocked README.md body (see the files handler),
+      // so this doc is recognizably the active file's — the verdict counts.
+      // The table below carries the anchor's cells as separate nodes, which
+      // is exactly why the raw-row snippet resolves nowhere.
+      installFakeEditor(
+        "<p>mock content</p><table><tbody><tr><td>手段</td><td>インターコム</td></tr></tbody></table>"
+      );
+
+      const badge = await screen.findByTestId("orphan-comment-badge");
+      expect(badge).toHaveTextContent("位置不明 1");
+    });
+
+    it("withholds the verdict while the editor still holds another file's document", async () => {
+      await openReadmeWithComments([unplaceable()]);
+      // The tab-switch window: comments for the new file have landed but
+      // TiptapEditor has not replaced the document yet, so every anchor would
+      // fail against it. None of this text is in the active file's markdown,
+      // which is how the guard tells the two apart.
+      installFakeEditor("<p>まったく別のファイルの本文です</p>");
+
+      await act(async () => {
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+      });
+      expect(screen.queryByTestId("orphan-comment-badge")).toBeNull();
+    });
+  });
+
   describe("comment_id deeplink (STEP 3)", () => {
     it("ケース 3: comment_id 付きで開く → ジャンプする", async () => {
       const comment: CommentJSON = {

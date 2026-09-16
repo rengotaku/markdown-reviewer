@@ -260,6 +260,51 @@ describe("CommentSidePane", () => {
       expect(screen.queryByTestId("orphan-comment-badge")).toBeNull();
     });
 
+    // #328: the server resolves anchors against the raw markdown lines and the
+    // editor against the rendered document, so the server can report
+    // `orphan: false` for a comment the editor cannot place. Before the fix
+    // such a comment stayed in the anchored set with no measurement — no
+    // card, no badge, no above/below count — while the header kept counting
+    // it, so it simply disappeared.
+    it("counts a caller-unresolvable comment as 位置不明 even though the server says it is anchored", async () => {
+      const user = userEvent.setup();
+      renderPane({
+        anchorTops: { c1: 10 },
+        unresolvedIds: new Set(["u1"]),
+        comments: [
+          comment("c1"),
+          comment("u1", { orphan: false, body: "表の行にアンカーしたコメント" }),
+        ],
+      });
+      expect(screen.getByTestId("orphan-comment-badge")).toHaveTextContent("位置不明 1");
+      // and it stays out of the rail — it has no position to be placed at
+      const rail = screen.getByTestId("comment-rail-aligned");
+      expect(within(rail).getAllByTestId("comment-item")).toHaveLength(1);
+      expect(within(rail).getByTestId("comment-id")).toHaveTextContent("c1");
+      // the thread is reachable from the badge, so the comment is readable
+      await user.click(screen.getByTestId("orphan-comment-badge"));
+      expect(screen.getByText("表の行にアンカーしたコメント")).toBeInTheDocument();
+    });
+
+    it("adds up: rail + 全体 + 位置不明 covers every comment the header counts", () => {
+      renderPane({
+        anchorTops: { c1: 10 },
+        unresolvedIds: new Set(["u1"]),
+        comments: [
+          comment("c1"),
+          comment("u1"),
+          pinned("g1"),
+          comment("o1", { orphan: true, context: null }),
+        ],
+      });
+      expect(screen.getByTestId("comment-filter-all")).toHaveTextContent("すべて 4");
+      const rail = screen.getByTestId("comment-rail-aligned");
+      expect(within(rail).getAllByTestId("comment-item")).toHaveLength(1);
+      expect(screen.getByTestId("global-comment-badge")).toHaveTextContent("全体 1");
+      // o1 (server orphan) + u1 (caller could not resolve it)
+      expect(screen.getByTestId("orphan-comment-badge")).toHaveTextContent("位置不明 2");
+    });
+
     it("renders no badges when there are no global or orphan comments", () => {
       renderPane({ comments: [comment("c1")] });
       expect(screen.queryByTestId("global-comment-badges")).toBeNull();
