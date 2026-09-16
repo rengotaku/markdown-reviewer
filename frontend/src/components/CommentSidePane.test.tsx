@@ -551,6 +551,49 @@ describe("CommentSidePane rail anchor measurement (#306)", () => {
     expect(within(rail).getByTestId("comment-id")).toHaveTextContent("c1");
   });
 
+  // #326: a resolved comment used to be the one exception to case 1 — it kept
+  // a `?? 0` fallback, on the reasoning that it paints no decoration and so
+  // could never be measured. The caller now measures resolved comments from
+  // their anchors instead, so the exception is gone and a missing entry means
+  // the same "not measured yet" it means for an open comment. Without the
+  // fix, every resolved card lands at viewport top 0 — stacked on each other
+  // at the rail's head, detached from the paragraphs they point at.
+  it("3. a resolved comment missing from anchorTops is not drawn at the rail's top either (#326)", async () => {
+    const user = userEvent.setup();
+    renderPane({
+      anchorTops: { c1: 10 },
+      comments: [comment("c1"), comment("r1", { status: "resolved" })],
+    });
+    // The pane defaults to 未解決 (#253); r1 is only reachable via すべて.
+    await user.click(screen.getByTestId("comment-filter-all"));
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+    const rail = screen.getByTestId("comment-rail-aligned");
+    expect(within(rail).getAllByTestId("comment-item")).toHaveLength(1);
+    expect(within(rail).getByTestId("comment-id")).toHaveTextContent("c1");
+  });
+
+  // #326 positive control: once the caller *does* measure a resolved comment,
+  // its card sits at that measurement like any other — the removal above is
+  // not "resolved comments never render".
+  it("4. a resolved comment with a measurement is drawn in the rail (#326)", async () => {
+    const user = userEvent.setup();
+    renderPane({
+      anchorTops: { r1: 10 },
+      comments: [comment("r1", { status: "resolved" })],
+    });
+    await user.click(screen.getByTestId("comment-filter-resolved"));
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+    const rail = screen.getByTestId("comment-rail-aligned");
+    expect(within(rail).getAllByTestId("comment-item")).toHaveLength(1);
+    expect(within(rail).getByTestId("comment-id")).toHaveTextContent("r1");
+  });
+
   // #306 case 2: this must not be confused with case 1. A comment with no
   // anchor at all (global scope, or orphaned) is a different, permanent
   // state — it never renders in this pane at all (#309: moved to the top of

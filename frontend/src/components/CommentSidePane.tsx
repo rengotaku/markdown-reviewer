@@ -940,14 +940,16 @@ function AlignedCommentRail({
       comments.map((c, i) => ({
         id: c.id,
         // `comments` here is already the anchored subset (no global/orphan).
-        // A resolved comment paints no persistent decoration by design
-        // (CommentHighlight's buildDeco skips `status === "resolved"`), so
-        // the caller's measurement can never produce an entry for one —
-        // that isn't "not yet measured", it's permanent, so it keeps the
-        // pre-#306 0 fallback (out of this issue's scope; unrelated to the
-        // race below).
+        // #326: a resolved comment paints no persistent decoration by design
+        // (CommentHighlight's buildDeco skips `status === "resolved"`), and
+        // the caller used to measure decorations only — so resolved cards
+        // never got an entry and the old `?? 0` fallback stacked them all at
+        // the rail's top. The caller now measures a resolved comment from its
+        // anchors instead (EditorPage's anchorViewportTop), so a missing
+        // entry means the same thing it means for an open comment: not
+        // measured yet. Both take the `null` path below.
         //
-        // An *open* comment's missing lookup, though, only means the caller
+        // A missing lookup only means the caller
         // hasn't measured this frame's decoration yet (editor not mounted,
         // decoration not rendered on this render pass, or the comment list
         // just changed and a fresh measurement hasn't landed). #306: falling
@@ -958,12 +960,7 @@ function AlignedCommentRail({
         // layoutCommentRail, which drops the card from `visible` (and out of
         // above/below) rather than misplacing it; it reappears once the
         // caller's measurement produces a real entry.
-        anchorTop:
-          c.status === "resolved"
-            ? (anchorTops[c.id] ?? 0)
-            : Object.hasOwn(anchorTops, c.id)
-              ? anchorTops[c.id]
-              : null,
+        anchorTop: Object.hasOwn(anchorTops, c.id) ? anchorTops[c.id] : null,
         height: cardHeights[c.id] ?? RAIL_DEFAULT_CARD_HEIGHT,
         order: i,
       })),
