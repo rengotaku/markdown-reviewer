@@ -1874,6 +1874,19 @@ describe("EditorPage jump to comment (#167)", () => {
       ],
       content: html,
     });
+    // #326: the rail measures a *resolved* comment's position through
+    // `view.coordsAtPos` — it paints no decoration to read a DOM rect from.
+    // jsdom has no layout (coordsAtPos throws "target.getClientRects is not a
+    // function"), so without this stub every resolved comment below would
+    // count as unmeasured and be dropped from the rail, leaving these jump
+    // tests no card to click. Only the stub's presence matters here, not its
+    // value — same idiom as the selection-bubble helpers above.
+    fakeEditor.view.coordsAtPos = () => ({
+      top: 0,
+      bottom: 0,
+      left: 0,
+      right: 0,
+    });
     useEditorInstance.getState().setEditor(fakeEditor);
     return fakeEditor;
   }
@@ -1973,7 +1986,11 @@ describe("EditorPage jump to comment (#167)", () => {
     );
 
     const scrollSpy = vi.mocked(Element.prototype.scrollIntoView);
-    await user.click(screen.getByTestId("comment-item"));
+    // #326: a resolved comment's card is now measurement-gated like an open
+    // one (the rail reads its position from the comment's anchors, since it
+    // paints no decoration), so it appears one rAF after the editor is
+    // installed rather than on the first render — wait for it.
+    await user.click(await screen.findByTestId("comment-item"));
 
     await waitFor(() => expect(scrollSpy).toHaveBeenCalled());
     // Assert *which* element was scrolled to: the live anchor position, not
@@ -2078,7 +2095,11 @@ describe("EditorPage jump to comment (#167)", () => {
     );
 
     const scrollSpy = vi.mocked(Element.prototype.scrollIntoView);
-    await user.click(screen.getByTestId("comment-item"));
+    // #326: a resolved comment's card is now measurement-gated like an open
+    // one (the rail reads its position from the comment's anchors, since it
+    // paints no decoration), so it appears one rAF after the editor is
+    // installed rather than on the first render — wait for it.
+    await user.click(await screen.findByTestId("comment-item"));
 
     await waitFor(() => expect(scrollSpy).toHaveBeenCalled());
     const scrolledEl = scrollSpy.mock.instances[0] as HTMLElement;
@@ -2113,7 +2134,11 @@ describe("EditorPage jump to comment (#167)", () => {
     );
 
     const scrollSpy = vi.mocked(Element.prototype.scrollIntoView);
-    await user.click(screen.getByTestId("comment-item"));
+    // #326: a resolved comment's card is now measurement-gated like an open
+    // one (the rail reads its position from the comment's anchors, since it
+    // paints no decoration), so it appears one rAF after the editor is
+    // installed rather than on the first render — wait for it.
+    await user.click(await screen.findByTestId("comment-item"));
 
     await waitFor(() => expect(scrollSpy).toHaveBeenCalled());
     expect((scrollSpy.mock.instances[0] as HTMLElement).textContent).toContain("first");

@@ -80,7 +80,13 @@ import {
 import { stripHint } from "@/utils/stripHint";
 import { firstH1 } from "@/utils/firstH1";
 import { formatLocalTimestamp } from "@/utils/formatTimestamp";
-import { computeAnchorsFromSelection, resolveAnchorInDoc } from "@/utils/pmAnchor";
+import {
+  computeAnchorsFromSelection,
+  resolveAnchorInDoc,
+  firstAnchorPosInBlocks,
+  extractAnchorBlocks,
+  type AnchorBlock,
+} from "@/utils/pmAnchor";
 import { lineDiff, hasChanges } from "@/utils/lineDiff";
 import { dirOf } from "@/utils/dirOf";
 import { splitPreamble } from "@/utils/frontmatter";
@@ -1449,7 +1455,27 @@ export function EditorPage() {
   // (#304 — the pane is always open, so there is no popover to open instead).
   const [railSelectedId, setRailSelectedId] = useState<string | null>(null);
 
-  // Viewport top (px) of each anchored comment's first decoration, keyed by
+  // Viewport top (px) of a comment's first live anchor, measured from the
+  // document rather than from a rendered decoration. Returns null when no
+  // anchor resolves (orphan) or the view has no layout for it yet.
+  // `blocks` is the doc flattened once by the caller, for the same reason
+  // buildDeco flattens once: this runs per rAF-coalesced recompute, and
+  // re-extracting per anchor would make it O(anchors × doc size).
+  const anchorViewportTop = (
+    c: CommentJSON,
+    blocks: AnchorBlock[]
+  ): number | null => {
+    if (!editor || editor.isDestroyed) return null;
+    const first = firstAnchorPosInBlocks(blocks, c);
+    if (first === null) return null;
+    try {
+      return editor.view.coordsAtPos(first).top;
+    } catch {
+      return null; // no layout for this position (jsdom, or not rendered yet)
+    }
+  };
+
+  // Viewport top (px) of each anchored comment's live position, keyed by
   // comment id — what the rail's paragraph-aligned layout positions cards
   // against (#298). Comments with no live anchor (global/orphan) never get an
   // entry and stay in the pane's pinned section.
@@ -1459,10 +1485,27 @@ export function EditorPage() {
     if (!editor || editor.isDestroyed) return;
     const root = editor.view.dom;
     const next: Record<string, number> = {};
+    let blocks: AnchorBlock[] | null = null;
     for (const c of comments) {
       if (c.scope === "global" || c.orphan) continue;
       const el = root.querySelector<HTMLElement>(`[data-comment-id="${CSS.escape(c.id)}"]`);
-      if (el) next[c.id] = el.getBoundingClientRect().top;
+      if (el) {
+        next[c.id] = el.getBoundingClientRect().top;
+        continue;
+      }
+      // #326: a resolved comment carries no decoration by design (#96/#97), so
+      // the DOM lookup above can never find one — measuring only decorations
+      // left every resolved card at the rail's top (the `?? 0` fallback in
+      // CommentSidePane), stacked on top of each other and detached from the
+      // paragraphs they point at. Read the position from the comment's own
+      // anchors instead, the same decoration-independent route
+      // handleJumpToComment takes for resolved comments.
+      if (c.status !== "resolved") continue;
+      // Flattened on first use only: a review with no resolved comments (or
+      // none anchored) never pays for it.
+      blocks ??= extractAnchorBlocks(editor.state.doc);
+      const top = anchorViewportTop(c, blocks);
+      if (top !== null) next[c.id] = top;
     }
     // Skip the state update (and the render + downstream effects it would
     // trigger) when nothing actually moved — a `transaction` fires on every
