@@ -13,6 +13,20 @@ export default defineConfig({
     globals: true,
     environment: "jsdom",
     setupFiles: ["./src/test/setup.ts"],
+    // Cap the worker fan-out. Vitest defaults to one worker per core, and
+    // each one carries its own jsdom, so on an 8-core machine the suite
+    // takes every core: load average hits 15-19 and anything else running
+    // alongside (the Go tests in the same `make ci`, an editor, a browser)
+    // starts losing. Measured symptoms of that contention: this phase grows
+    // from 50s to 120s, the events-package fsnotify watcher test times out
+    // with a queue overflow, and a couple of timing-sensitive frontend tests
+    // fail — all of which pass on a re-run. Half the cores costs 11s (46s ->
+    // 57s standalone) and buys back the ability to run next to other work.
+    poolOptions: {
+      threads: {
+        maxThreads: 4,
+      },
+    },
     coverage: {
       provider: "v8",
       reporter: ["text", "json", "json-summary", "html"],
