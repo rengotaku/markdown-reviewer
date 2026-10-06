@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { layoutCommentRail, type RailItem } from "./commentRailLayout";
+import {
+  layoutCommentRail,
+  layoutCommentRailWithEdgeButtons,
+  type RailItem,
+} from "./commentRailLayout";
 
 // Pane sits with its own top at viewport y=100 and is 600px tall, so anchors
 // at 100..700 (viewport-absolute) are the ones actually inside the pane.
@@ -208,5 +212,48 @@ describe("layoutCommentRail", () => {
       insetBottom: 34,
     });
     expect(result.visible).toEqual([{ id: "a", top: 34, maxHeight: 200 - 34 - 34 }]);
+  });
+});
+
+describe("layoutCommentRailWithEdgeButtons (#330)", () => {
+  const INSET = 34;
+
+  /** No visible card may reach into the strip under a rendered button. */
+  function expectNoCardUnderButtons(
+    result: ReturnType<typeof layoutCommentRail>,
+    paneHeight: number
+  ) {
+    for (const v of result.visible) {
+      if (result.aboveCount > 0) expect(v.top).toBeGreaterThanOrEqual(INSET);
+      if (result.belowCount > 0) expect(v.top + v.maxHeight).toBeLessThanOrEqual(paneHeight - INSET);
+    }
+  }
+
+  it("returns the plain layout untouched when no button renders", () => {
+    const items = [item("a", 150, 40, 0), item("b", 300, 40, 1)];
+    expect(layoutCommentRailWithEdgeButtons(items, VIEWPORT, INSET)).toEqual(
+      layoutCommentRail(items, VIEWPORT)
+    );
+  });
+
+  it("reserves the top edge too when reserving the bottom makes the 上に button appear", () => {
+    // First pass: below=1 only. Reserving the bottom pushes b off the pane;
+    // its anchor is slightly above, so it's counted above — a top button
+    // appears that the first pass didn't know about.
+    const items = [item("a", -20, 80, 0), item("b", -10, 80, 1), item("c", 190, 80, 2)];
+    const viewport = { paneTop: 0, paneHeight: 200 };
+    const result = layoutCommentRailWithEdgeButtons(items, viewport, INSET);
+    expect(result.aboveCount).toBeGreaterThan(0);
+    expect(result.belowCount).toBeGreaterThan(0);
+    expectNoCardUnderButtons(result, 200);
+  });
+
+  it("reserves the bottom edge too when reserving the top makes the 下に button appear", () => {
+    const items = [item("a", -100, 80, 0), item("b", 0, 160, 1), item("c", 168, 30, 2)];
+    const viewport = { paneTop: 0, paneHeight: 200 };
+    const result = layoutCommentRailWithEdgeButtons(items, viewport, INSET);
+    expect(result.aboveCount).toBeGreaterThan(0);
+    expect(result.belowCount).toBeGreaterThan(0);
+    expectNoCardUnderButtons(result, 200);
   });
 });

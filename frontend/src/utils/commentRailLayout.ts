@@ -170,3 +170,31 @@ export function layoutCommentRail(
 
   return { visible, aboveCount, belowCount, excluded };
 }
+
+/**
+ * layoutCommentRail, with the edge under each rendered "上に / 下に N 件"
+ * button kept free of cards (#330: a card placed there lost its header under
+ * the button). An edge is reserved only once its button actually renders, so
+ * a rail with nothing scrolled past above keeps its first card aligned to its
+ * paragraph. Reserving one edge can make the *other* edge's button appear (a
+ * card pushed off the bottom, or a slightly-above card that no longer fits
+ * now counted above), so this re-runs until the reserved edges stop changing.
+ * Reserving space never lets a dropped card back in, so counts only grow,
+ * edges are only ever added, and it settles within three passes.
+ */
+export function layoutCommentRailWithEdgeButtons(
+  items: readonly RailItem[],
+  viewport: Omit<RailViewport, "insetTop" | "insetBottom">,
+  buttonInset: number
+): RailLayoutResult {
+  let insetTop = 0;
+  let insetBottom = 0;
+  for (;;) {
+    const result = layoutCommentRail(items, { ...viewport, insetTop, insetBottom });
+    const nextTop = result.aboveCount > 0 ? buttonInset : insetTop;
+    const nextBottom = result.belowCount > 0 ? buttonInset : insetBottom;
+    if (nextTop === insetTop && nextBottom === insetBottom) return result;
+    insetTop = nextTop;
+    insetBottom = nextBottom;
+  }
+}

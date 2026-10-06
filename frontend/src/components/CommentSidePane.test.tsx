@@ -521,6 +521,36 @@ describe("CommentSidePane", () => {
     expect(screen.queryByTestId("comment-body-toggle")).toBeNull();
   });
 
+  it("#330: a rail card's body is clamped from first paint, before any measurement lands", () => {
+    // setup.ts's no-op ResizeObserver never calls back — the state a card is
+    // in when the rail's own card observer reports its height first. If the
+    // body were unclamped here, that full height would place (or drop) the
+    // card, and a dropped card never re-measures.
+    renderPane({ comments: [comment("c1", { body: "あ".repeat(130) })] });
+    const body = screen.getByTestId("comment-body");
+    expect(getComputedStyle(body).maxHeight).toBe("3em");
+    // Not known to overflow yet: no fade/toggle claim.
+    expect(body).toHaveAttribute("data-collapsed", "false");
+    expect(screen.queryByTestId("comment-body-toggle")).toBeNull();
+  });
+
+  it("#330: pressing a card's 続きを表示 (click or keyboard) expands it without selecting the card", async () => {
+    // Selecting would drop the toggle (the selected card shows its body in
+    // full), pulling the pressed button out from under the pointer/focus.
+    const user = userEvent.setup();
+    const h = renderPane({ comments: [comment("c1", { body: "あ".repeat(250) })] });
+
+    await user.click(screen.getByTestId("comment-body-toggle"));
+    expect(screen.getByTestId("comment-body")).toHaveAttribute("data-collapsed", "false");
+
+    screen.getByTestId("comment-body-toggle").focus();
+    await user.keyboard("{Enter}");
+    expect(screen.getByTestId("comment-body")).toHaveAttribute("data-collapsed", "true");
+    expect(screen.getByTestId("comment-body-toggle")).toHaveFocus();
+
+    expect(h.onSelect).not.toHaveBeenCalled();
+  });
+
   it("#330: the selected card shows its body in full with no toggle, even past the preview limit", async () => {
     stubRenderedHeight(400);
     renderPane({ comments: [comment("c1", { body: "あ".repeat(250) })], selectedId: "c1" });
