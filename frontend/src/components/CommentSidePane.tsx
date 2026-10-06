@@ -24,9 +24,12 @@ import ReplyIcon from "@mui/icons-material/Reply";
 import OpenInFullIcon from "@mui/icons-material/OpenInFull";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import LinkIcon from "@mui/icons-material/Link";
+import ViewAgendaIcon from "@mui/icons-material/ViewAgenda";
+import ViewListIcon from "@mui/icons-material/ViewList";
 import type { SxProps, Theme } from "@mui/material/styles";
 import type { SystemStyleObject } from "@mui/system";
 import type { CommentJSON, CommentReply } from "@/api";
+import type { CommentRailMode } from "@/hooks/useEditorPrefs";
 import { BAR_HEIGHT } from "@/theme/dimensions";
 import { renderCommentMarkdown } from "@/utils/commentMarkdown";
 import { buildCommentDeepLink } from "@/utils/deeplink";
@@ -260,6 +263,11 @@ interface Props {
    *  editor cannot place; these join the orphan bucket here rather than
    *  falling out of the pane entirely. */
   unresolvedIds?: ReadonlySet<string>;
+  /** "aligned" (default): cards level with their paragraphs. "list": every
+   *  anchored card in document order in one scrollable column (#333). */
+  railMode?: CommentRailMode;
+  /** Renders the mode switch when given; without it the pane stays aligned. */
+  onRailModeChange?: (mode: CommentRailMode) => void;
 }
 
 type StatusFilter = "all" | "open" | "resolved";
@@ -289,6 +297,8 @@ export function CommentSidePane({
   selectedId,
   anchorTops = {},
   unresolvedIds = EMPTY_IDS,
+  railMode = "aligned",
+  onRailModeChange,
 }: Props) {
   const canCopyLink = Boolean(root && filePath);
   const handleCopyLink = async (id: string) => {
@@ -338,8 +348,21 @@ export function CommentSidePane({
     (c: CommentJSON) => c.orphan || unresolvedIds.has(c.id),
     [unresolvedIds]
   );
+  // #333: in document order. The API returns comments in the order they were
+  // added (reviewstore appends), so a comment added later near the top would
+  // otherwise follow one added earlier near the bottom — wrong for the list,
+  // and for the aligned rail's stacking order too. `context.line_range` is
+  // the server's resolved position (covering every anchor of a multi-block
+  // comment); a comment without one sorts last. Array.sort is stable, so
+  // comments on the same line keep their creation order.
   const anchored = useMemo(
-    () => visible.filter((c) => !(c.scope === "global" || hasNoLiveAnchor(c))),
+    () =>
+      visible
+        .filter((c) => !(c.scope === "global" || hasNoLiveAnchor(c)))
+        .sort(
+          (a, b) =>
+            (a.context?.line_range[0] ?? Infinity) - (b.context?.line_range[0] ?? Infinity)
+        ),
     [visible, hasNoLiveAnchor]
   );
   const globalComments = useMemo(
@@ -391,6 +414,43 @@ export function CommentSidePane({
             <RefreshIcon fontSize="small" />
           </IconButton>
         </Tooltip>
+        {/* #333: in the title row, not the filter row below — that one is
+            already measured full (#196: filter ~225px + two add buttons in a
+            295px row). */}
+        {onRailModeChange && (
+          <ToggleButtonGroup
+            value={railMode}
+            exclusive
+            size="small"
+            onChange={(_, v) => {
+              if (v !== null) onRailModeChange(v as CommentRailMode);
+            }}
+            aria-label="コメントカードの並べ方"
+            data-testid="comment-rail-mode"
+            sx={{ flexShrink: 0 }}
+          >
+            <ToggleButton
+              value="aligned"
+              aria-label="段落の横に並べる"
+              data-testid="comment-rail-mode-aligned"
+              sx={{ p: 0.5 }}
+            >
+              <Tooltip title="段落の横に並べる">
+                <ViewAgendaIcon fontSize="small" />
+              </Tooltip>
+            </ToggleButton>
+            <ToggleButton
+              value="list"
+              aria-label="一覧"
+              data-testid="comment-rail-mode-list"
+              sx={{ p: 0.5 }}
+            >
+              <Tooltip title="一覧（文書順に全件）">
+                <ViewListIcon fontSize="small" />
+              </Tooltip>
+            </ToggleButton>
+          </ToggleButtonGroup>
+        )}
       </Box>
 
       {/* Filter + add actions share one row (#196). They used to occupy two
@@ -539,6 +599,21 @@ export function CommentSidePane({
               本文にひもづくコメントはありません。全体・位置不明のコメントは上部のバッジから確認できます。
             </Typography>
           </Box>
+        ) : railMode === "list" ? (
+          <CommentList
+            comments={anchored}
+            selectedId={selectedId ?? null}
+            onSelect={onSelect}
+            onCopyLink={handleCopyLink}
+            canCopyLink={canCopyLink}
+            onDelete={onDelete}
+            onResolveToggle={onResolveToggle}
+            onReply={onReply}
+            onEdit={onEdit}
+            onEditReply={onEditReply}
+            onDeleteReply={onDeleteReply}
+            onOpenDetail={setDetailId}
+          />
         ) : (
           <AlignedCommentRail
             comments={anchored}
@@ -964,6 +1039,39 @@ function CommentCard({
           </Typography>
         )
       )}
+    </Box>
+  );
+}
+
+interface CommentListProps extends Omit<CardProps, "comment" | "selected"> {
+  comments: ReadonlyArray<CommentJSON>;
+  selectedId: string | null;
+}
+
+/** #333: every anchored card in document order, scrolling inside the pane —
+ *  nothing is pushed to an "上に / 下に N 件" count, so a dense document can
+ *  be read in one pass. Selecting a highlight in the editor scrolls its card
+ *  into view here, the way the aligned rail brings it level. */
+function CommentList({ comments, selectedId, ...cardProps }: CommentListProps) {
+  const listRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!selectedId) return;
+    const card = Array.from(
+      listRef.current?.querySelectorAll<HTMLElement>('[data-testid="comment-item"]') ?? []
+    ).find((el) => el.dataset.commentId === selectedId);
+    card?.scrollIntoView?.({ block: "nearest" });
+  }, [selectedId]);
+
+  return (
+    <Box
+      ref={listRef}
+      data-testid="comment-list"
+      sx={{ flex: 1, minHeight: 0, overflowY: "auto" }}
+    >
+      {comments.map((c) => (
+        <CommentCard key={c.id} comment={c} selected={c.id === selectedId} {...cardProps} />
+      ))}
     </Box>
   );
 }

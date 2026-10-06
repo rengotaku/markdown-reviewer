@@ -952,3 +952,89 @@ describe("CommentSidePane rail card compact height (#312)", () => {
     expect(within(item).getByTestId("comment-reply-input")).toBeInTheDocument();
   });
 });
+
+describe("CommentSidePane list mode (#333)", () => {
+  it("renders no mode switch when the caller doesn't track a mode, and stays aligned", () => {
+    renderPane({ comments: [comment("c1")] });
+    expect(screen.queryByTestId("comment-rail-mode")).toBeNull();
+    expect(screen.getByTestId("comment-rail-aligned")).toBeInTheDocument();
+    expect(screen.queryByTestId("comment-list")).toBeNull();
+  });
+
+  it("switching the mode reports the chosen mode to the caller", async () => {
+    const user = userEvent.setup();
+    const onRailModeChange = vi.fn();
+    renderPane({ comments: [comment("c1")], railMode: "aligned", onRailModeChange });
+    await user.click(screen.getByTestId("comment-rail-mode-list"));
+    expect(onRailModeChange).toHaveBeenCalledWith("list");
+  });
+
+  it("lists every anchored card in document order, even ones the aligned rail could not fit or place", () => {
+    // Anchors far apart / unmeasured: the aligned rail would push most of
+    // these to 上に / 下に N 件 (or drop c3, which has no measurement at all).
+    // The list shows all of them, with no overflow counts.
+    renderPane({
+      comments: [comment("c1"), comment("c2"), comment("c3"), pinned("g1")],
+      anchorTops: { c1: 0, c2: 100_000 },
+      railMode: "list",
+      onRailModeChange: vi.fn(),
+    });
+    const list = screen.getByTestId("comment-list");
+    expect(within(list).getAllByTestId("comment-id").map((el) => el.textContent)).toEqual([
+      "c1",
+      "c2",
+      "c3",
+    ]);
+    expect(screen.queryByTestId("comment-rail-aligned")).toBeNull();
+    expect(screen.queryByTestId("comment-rail-below")).toBeNull();
+    expect(screen.queryByTestId("comment-rail-above")).toBeNull();
+  });
+
+  it("orders the list by position in the document, not by when each comment was added", () => {
+    // Added bottom-first: the API returns c-late (line 40) before c-early (line 2).
+    renderPane({
+      comments: [
+        comment("c-late", { context: { heading_path: ["## Sec"], line_range: [40, 40] } }),
+        comment("c-early", { context: { heading_path: ["## Sec"], line_range: [2, 5] } }),
+        comment("c-mid", { context: { heading_path: ["## Sec"], line_range: [20, 20] } }),
+      ],
+      railMode: "list",
+      onRailModeChange: vi.fn(),
+    });
+    const list = screen.getByTestId("comment-list");
+    expect(within(list).getAllByTestId("comment-id").map((el) => el.textContent)).toEqual([
+      "c-early",
+      "c-mid",
+      "c-late",
+    ]);
+  });
+
+  it("clicking a listed card selects it", async () => {
+    const user = userEvent.setup();
+    const h = renderPane({
+      comments: [comment("c1"), comment("c2")],
+      railMode: "list",
+      onRailModeChange: vi.fn(),
+    });
+    const items = within(screen.getByTestId("comment-list")).getAllByTestId("comment-item");
+    await user.click(items[1]);
+    expect(h.onSelect).toHaveBeenCalledWith("c2");
+  });
+
+  it("scrolls the selected card into view when the selection changes", () => {
+    const scrollIntoView = vi.fn();
+    HTMLElement.prototype.scrollIntoView = scrollIntoView;
+    onTestFinished(() => {
+      // jsdom has no scrollIntoView of its own; don't leave the stub behind.
+      delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
+    });
+    renderPane({
+      comments: [comment("c1"), comment("c2")],
+      railMode: "list",
+      onRailModeChange: vi.fn(),
+      selectedId: "c2",
+    });
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(scrollIntoView.mock.contexts[0]).toHaveAttribute("data-comment-id", "c2");
+  });
+});
