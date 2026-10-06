@@ -96,7 +96,14 @@ describe("layoutCommentRail", () => {
   it("7. empty input returns zeroed counts without throwing", () => {
     expect(() => layoutCommentRail([], VIEWPORT)).not.toThrow();
     const result = layoutCommentRail([], VIEWPORT);
-    expect(result).toEqual({ visible: [], aboveCount: 0, belowCount: 0, excluded: [] });
+    expect(result).toEqual({
+      visible: [],
+      aboveCount: 0,
+      belowCount: 0,
+      aboveIds: [],
+      belowIds: [],
+      excluded: [],
+    });
   });
 
   it("8. a lone card taller than the pane is placed at top 0 and shrunk to the pane's height", () => {
@@ -228,6 +235,16 @@ describe("layoutCommentRailWithEdgeButtons (#330)", () => {
       if (result.belowCount > 0) expect(v.top + v.maxHeight).toBeLessThanOrEqual(paneHeight - INSET);
     }
   }
+
+  it("reports which items went above / below, not just how many (#332)", () => {
+    // a: fully above the pane; c: far below it.
+    const items = [item("a", -500, 40, 0), item("b", 300, 40, 1), item("c", 100_000, 40, 2)];
+    const result = layoutCommentRail(items, VIEWPORT);
+    expect(result.aboveIds).toEqual(["a"]);
+    expect(result.belowIds).toEqual(["c"]);
+    expect(result.aboveCount).toBe(1);
+    expect(result.belowCount).toBe(1);
+  });
 
   it("returns the plain layout untouched when no button renders", () => {
     const items = [item("a", 150, 40, 0), item("b", 300, 40, 1)];

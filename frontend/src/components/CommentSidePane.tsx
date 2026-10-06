@@ -26,6 +26,7 @@ import RefreshIcon from "@mui/icons-material/Refresh";
 import LinkIcon from "@mui/icons-material/Link";
 import ViewAgendaIcon from "@mui/icons-material/ViewAgenda";
 import ViewListIcon from "@mui/icons-material/ViewList";
+import ChatBubbleOutlineIcon from "@mui/icons-material/ChatBubbleOutline";
 import type { SxProps, Theme } from "@mui/material/styles";
 import type { SystemStyleObject } from "@mui/system";
 import type { CommentJSON, CommentReply } from "@/api";
@@ -40,6 +41,7 @@ import { isAiAuthored } from "@/utils/commentPresentation";
 import { CommentAuthor } from "./CommentAuthor";
 import { CommentId } from "./CommentId";
 import { layoutCommentRailWithEdgeButtons, type RailItem } from "@/utils/commentRailLayout";
+import { groupIconRailEntries, type IconRailEntry } from "@/utils/commentIconGroups";
 import { GlobalCommentBadges, type GlobalBadgeKind } from "./GlobalCommentBadges";
 import { GlobalCommentsDialog } from "./GlobalCommentsDialog";
 
@@ -51,6 +53,13 @@ const RAIL_DEFAULT_CARD_HEIGHT = 96;
 /** Height of the rail's "上に / 下に N 件" button (0.75rem text + padding +
  *  border ≈ 28px) plus a little air, kept free of cards at that edge (#330). */
 const RAIL_EDGE_BUTTON_INSET = 34;
+
+/** Height of one icon in the rail's icon mode (#332). Fixed, so icons need
+ *  no measurement: 18px icon + padding + border. */
+const RAIL_ICON_HEIGHT = 28;
+
+/** Characters of each comment's body shown in an icon's hover preview. */
+const ICON_PREVIEW_CHARS = 60;
 
 /** AI-authored comments/replies are read-only to the human reviewer: they can
  *  reply, resolve, and jump to them, but not edit the body or delete them. */
@@ -264,7 +273,8 @@ interface Props {
    *  falling out of the pane entirely. */
   unresolvedIds?: ReadonlySet<string>;
   /** "aligned" (default): cards level with their paragraphs. "list": every
-   *  anchored card in document order in one scrollable column (#333). */
+   *  anchored card in document order in one scrollable column (#333).
+   *  "icons": a count icon per line, only the selected card opened (#332). */
   railMode?: CommentRailMode;
   /** Renders the mode switch when given; without it the pane stays aligned. */
   onRailModeChange?: (mode: CommentRailMode) => void;
@@ -437,6 +447,16 @@ export function CommentSidePane({
             >
               <Tooltip title="段落の横に並べる">
                 <ViewAgendaIcon fontSize="small" />
+              </Tooltip>
+            </ToggleButton>
+            <ToggleButton
+              value="icons"
+              aria-label="アイコンだけ"
+              data-testid="comment-rail-mode-icons"
+              sx={{ p: 0.5 }}
+            >
+              <Tooltip title="アイコンだけ（クリックで開く）">
+                <ChatBubbleOutlineIcon fontSize="small" />
               </Tooltip>
             </ToggleButton>
             <ToggleButton
@@ -617,6 +637,7 @@ export function CommentSidePane({
         ) : (
           <AlignedCommentRail
             comments={anchored}
+            iconMode={railMode === "icons"}
             anchorTops={anchorTops}
             selectedId={selectedId ?? null}
             onSelect={onSelect}
@@ -1092,6 +1113,8 @@ interface AlignedRailProps {
   onEditReply: (id: string, index: number, body: string) => void;
   onDeleteReply: (id: string, index: number) => void;
   onOpenDetail: (id: string) => void;
+  /** #332: show a count icon per line instead of each non-selected card. */
+  iconMode?: boolean;
 }
 
 /** Lays anchored cards out down the rail, level with the paragraph each is
@@ -1112,6 +1135,7 @@ function AlignedCommentRail({
   onEditReply,
   onDeleteReply,
   onOpenDetail,
+  iconMode = false,
 }: AlignedRailProps) {
   const railRef = useRef<HTMLDivElement | null>(null);
   const [paneBox, setPaneBox] = useState({ top: 0, height: 0 });
@@ -1155,10 +1179,59 @@ function AlignedCommentRail({
     setCardHeights((prev) => (prev[id] === height ? prev : { ...prev, [id]: height }));
   }, []);
 
+  // #332: a newly selected comment's cached height may be stale — measured
+  // when it was last a card (say, with its reply form open), before icon mode
+  // turned it back into an icon. Laid out by that height it can fail to fit,
+  // and a card that doesn't fit is never mounted, so it never re-measures:
+  // the click would open nothing. Forget it on selection so the card is
+  // placed at the default height and measured afresh. Done during render
+  // (React's derived-state pattern) so the stale value never reaches layout.
+  // Not done on every unmount: an overflowing card would then bounce between
+  // the default height (fits, mounts) and its real one (doesn't, unmounts).
+  const [prevSelectedId, setPrevSelectedId] = useState(selectedId);
+  if (selectedId !== prevSelectedId) {
+    setPrevSelectedId(selectedId);
+    if (iconMode && selectedId && Object.hasOwn(cardHeights, selectedId)) {
+      setCardHeights((prev) => {
+        const next = { ...prev };
+        delete next[selectedId];
+        return next;
+      });
+    }
+  }
+
+  // #332: an icon opened from the keyboard is replaced by its card, taking
+  // the focused element with it. Hand focus to the card once it mounts.
+  const [focusCardId, setFocusCardId] = useState<string | null>(null);
+  const selectFromIcon = useCallback(
+    (id: string) => {
+      setFocusCardId(id);
+      onSelect(id);
+    },
+    [onSelect]
+  );
+  const clearFocusCard = useCallback(() => setFocusCardId(null), []);
+
+  // One rail entry per card, or (#332 icon mode) per run of same-line
+  // comments behind one icon. Everything below lays out and counts entries,
+  // then maps back to comments through `ids`.
+  const entries: IconRailEntry[] = useMemo(
+    () =>
+      iconMode
+        ? groupIconRailEntries(
+            comments.map((c) => c.id),
+            anchorTops,
+            selectedId
+          )
+        : comments.map((c) => ({ kind: "card" as const, key: c.id, ids: [c.id] as [string] })),
+    [iconMode, comments, anchorTops, selectedId]
+  );
+  const entryByKey = useMemo(() => new Map(entries.map((e) => [e.key, e])), [entries]);
+
   const items: RailItem[] = useMemo(
     () =>
-      comments.map((c, i) => ({
-        id: c.id,
+      entries.map((e, i) => ({
+        id: e.key,
         // `comments` here is already the anchored subset (no global/orphan).
         // #326: a resolved comment paints no persistent decoration by design
         // (CommentHighlight's buildDeco skips `status === "resolved"`), and
@@ -1180,11 +1253,14 @@ function AlignedCommentRail({
         // layoutCommentRail, which drops the card from `visible` (and out of
         // above/below) rather than misplacing it; it reappears once the
         // caller's measurement produces a real entry.
-        anchorTop: Object.hasOwn(anchorTops, c.id) ? anchorTops[c.id] : null,
-        height: cardHeights[c.id] ?? RAIL_DEFAULT_CARD_HEIGHT,
+        anchorTop: Object.hasOwn(anchorTops, e.ids[0]) ? anchorTops[e.ids[0]] : null,
+        height:
+          e.kind === "icon"
+            ? RAIL_ICON_HEIGHT
+            : (cardHeights[e.key] ?? RAIL_DEFAULT_CARD_HEIGHT),
         order: i,
       })),
-    [comments, anchorTops, cardHeights]
+    [entries, anchorTops, cardHeights]
   );
 
   const layout = useMemo(
@@ -1197,26 +1273,20 @@ function AlignedCommentRail({
     [items, paneBox]
   );
 
-  const visibleIds = useMemo(() => new Set(layout.visible.map((v) => v.id)), [layout.visible]);
-  const firstVisibleIdx = comments.findIndex((c) => visibleIds.has(c.id));
-  const lastVisibleIdx = (() => {
-    for (let i = comments.length - 1; i >= 0; i -= 1) {
-      if (visibleIds.has(comments[i].id)) return i;
-    }
-    return -1;
-  })();
-  const nearestAboveId =
-    firstVisibleIdx > 0
-      ? comments[firstVisibleIdx - 1].id
-      : firstVisibleIdx === -1 && layout.aboveCount > 0
-        ? comments[comments.length - 1].id
-        : null;
-  const nearestBelowId =
-    lastVisibleIdx >= 0 && lastVisibleIdx < comments.length - 1
-      ? comments[lastVisibleIdx + 1].id
-      : lastVisibleIdx === -1 && layout.belowCount > 0
-        ? comments[0].id
-        : null;
+  // Counted in comments, not entries: an icon can stand for several.
+  const countComments = (keys: readonly string[]) =>
+    keys.reduce((n, k) => n + (entryByKey.get(k)?.ids.length ?? 0), 0);
+  const aboveComments = countComments(layout.aboveIds);
+  const belowComments = countComments(layout.belowIds);
+  // Jump targets come straight from what the layout pushed out, not from
+  // "the comment next to the visible range": with icons and a card mixed
+  // (#332), the visible entries need not be one contiguous run of comments —
+  // a selected card can be pushed below while the icon after it still fits,
+  // which left 下に 1 件 pointing at nothing. aboveIds / belowIds are in
+  // document order, so the nearest is the last above / the first below.
+  const lastAbove = entryByKey.get(layout.aboveIds[layout.aboveIds.length - 1] ?? "");
+  const nearestAboveId = lastAbove ? lastAbove.ids[lastAbove.ids.length - 1] : null;
+  const nearestBelowId = entryByKey.get(layout.belowIds[0] ?? "")?.ids[0] ?? null;
 
   const byId = useMemo(() => new Map(comments.map((c) => [c.id, c])), [comments]);
 
@@ -1227,6 +1297,19 @@ function AlignedCommentRail({
       data-testid="comment-rail-aligned"
     >
       {layout.visible.map((placed) => {
+        const entry = entryByKey.get(placed.id);
+        if (entry?.kind === "icon") {
+          const members = entry.ids.flatMap((id) => byId.get(id) ?? []);
+          if (members.length === 0) return null;
+          return (
+            <AlignedIcon
+              key={entry.key}
+              comments={members}
+              top={placed.top}
+              onSelect={selectFromIcon}
+            />
+          );
+        }
         const c = byId.get(placed.id);
         if (!c) return null;
         return (
@@ -1247,6 +1330,8 @@ function AlignedCommentRail({
             onDeleteReply={onDeleteReply}
             onOpenDetail={onOpenDetail}
             onHeightChange={handleHeightChange}
+            focusOnMount={c.id === focusCardId}
+            onFocused={clearFocusCard}
           />
         );
       })}
@@ -1278,7 +1363,7 @@ function AlignedCommentRail({
             boxShadow: 1,
           }}
         >
-          上に {layout.aboveCount} 件
+          上に {aboveComments} 件
         </Box>
       )}
       {layout.belowCount > 0 && (
@@ -1309,7 +1394,7 @@ function AlignedCommentRail({
             boxShadow: 1,
           }}
         >
-          下に {layout.belowCount} 件
+          下に {belowComments} 件
         </Box>
       )}
     </Box>
@@ -1320,14 +1405,31 @@ interface AlignedCardProps extends CardProps {
   top: number;
   maxHeight: number;
   onHeightChange: (id: string, height: number) => void;
+  /** Take focus once mounted (#332: opened from an icon). */
+  focusOnMount?: boolean;
+  onFocused?: () => void;
 }
 
 /** One card, absolutely positioned at the top the layout gave it. Its own
  *  height feeds back into the layout via ResizeObserver — a reply/edit form
  *  opening inside it, or a body's "続きを表示" toggle, changes the height the
  *  next card has to stack below. */
-function AlignedCard({ comment, top, maxHeight, onHeightChange, ...cardProps }: AlignedCardProps) {
+function AlignedCard({
+  comment,
+  top,
+  maxHeight,
+  onHeightChange,
+  focusOnMount = false,
+  onFocused,
+  ...cardProps
+}: AlignedCardProps) {
   const contentRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!focusOnMount) return;
+    contentRef.current?.querySelector<HTMLElement>('[data-testid="comment-item"]')?.focus();
+    onFocused?.();
+  }, [focusOnMount, onFocused]);
 
   useEffect(() => {
     const el = contentRef.current;
@@ -1369,6 +1471,76 @@ function AlignedCard({ comment, top, maxHeight, onHeightChange, ...cardProps }: 
         <CommentCard comment={comment} {...cardProps} />
       </Box>
     </Box>
+  );
+}
+
+/** First characters of a comment body for the icon's hover preview — the
+ *  raw source, whitespace collapsed (Markdown syntax left as typed). */
+function previewLine(body: string): string {
+  const flat = body.replace(/\s+/g, " ").trim();
+  return flat.length > ICON_PREVIEW_CHARS ? `${flat.slice(0, ICON_PREVIEW_CHARS)}…` : flat;
+}
+
+/** #332: one small icon standing for the comments anchored on one line,
+ *  absolutely positioned like a card. Hover previews each body's opening;
+ *  clicking selects the first, which then opens as a full card in its place
+ *  (the rest stay behind a smaller icon). */
+function AlignedIcon({
+  comments,
+  top,
+  onSelect,
+}: {
+  comments: ReadonlyArray<CommentJSON>;
+  top: number;
+  onSelect: (id: string) => void;
+}) {
+  const first = comments[0];
+  return (
+    <Tooltip
+      placement="left"
+      title={
+        <Box component="ul" sx={{ m: 0, pl: 2 }}>
+          {comments.map((c) => (
+            <li key={c.id}>
+              {c.id}: {previewLine(c.body)}
+            </li>
+          ))}
+        </Box>
+      }
+    >
+      <Box
+        component="button"
+        type="button"
+        data-testid="comment-rail-icon"
+        data-comment-ids={comments.map((c) => c.id).join(" ")}
+        aria-label={`コメント ${comments.length} 件を開く`}
+        onClick={() => onSelect(first.id)}
+        sx={{
+          position: "absolute",
+          left: 8,
+          top,
+          height: RAIL_ICON_HEIGHT,
+          boxSizing: "border-box",
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 0.5,
+          px: 1,
+          border: "1px solid",
+          borderColor: "divider",
+          borderRadius: 1,
+          bgcolor: "background.paper",
+          color: "text.secondary",
+          font: "inherit",
+          fontSize: "0.75rem",
+          cursor: "pointer",
+          opacity: comments.every((c) => c.status === "resolved") ? 0.6 : 1,
+          "&:hover": { bgcolor: "action.hover" },
+        }}
+      >
+        <ChatBubbleOutlineIcon sx={{ fontSize: 16 }} />
+        {comments.length}
+      </Box>
+    </Tooltip>
   );
 }
 
