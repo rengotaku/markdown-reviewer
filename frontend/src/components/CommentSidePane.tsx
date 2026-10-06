@@ -1179,6 +1179,39 @@ function AlignedCommentRail({
     setCardHeights((prev) => (prev[id] === height ? prev : { ...prev, [id]: height }));
   }, []);
 
+  // #332: a newly selected comment's cached height may be stale — measured
+  // when it was last a card (say, with its reply form open), before icon mode
+  // turned it back into an icon. Laid out by that height it can fail to fit,
+  // and a card that doesn't fit is never mounted, so it never re-measures:
+  // the click would open nothing. Forget it on selection so the card is
+  // placed at the default height and measured afresh. Done during render
+  // (React's derived-state pattern) so the stale value never reaches layout.
+  // Not done on every unmount: an overflowing card would then bounce between
+  // the default height (fits, mounts) and its real one (doesn't, unmounts).
+  const [prevSelectedId, setPrevSelectedId] = useState(selectedId);
+  if (selectedId !== prevSelectedId) {
+    setPrevSelectedId(selectedId);
+    if (iconMode && selectedId && Object.hasOwn(cardHeights, selectedId)) {
+      setCardHeights((prev) => {
+        const next = { ...prev };
+        delete next[selectedId];
+        return next;
+      });
+    }
+  }
+
+  // #332: an icon opened from the keyboard is replaced by its card, taking
+  // the focused element with it. Hand focus to the card once it mounts.
+  const [focusCardId, setFocusCardId] = useState<string | null>(null);
+  const selectFromIcon = useCallback(
+    (id: string) => {
+      setFocusCardId(id);
+      onSelect(id);
+    },
+    [onSelect]
+  );
+  const clearFocusCard = useCallback(() => setFocusCardId(null), []);
+
   // One rail entry per card, or (#332 icon mode) per run of same-line
   // comments behind one icon. Everything below lays out and counts entries,
   // then maps back to comments through `ids`.
@@ -1240,34 +1273,20 @@ function AlignedCommentRail({
     [items, paneBox]
   );
 
-  const visibleIds = useMemo(
-    () => new Set(layout.visible.flatMap((v) => entryByKey.get(v.id)?.ids ?? [])),
-    [layout.visible, entryByKey]
-  );
   // Counted in comments, not entries: an icon can stand for several.
   const countComments = (keys: readonly string[]) =>
     keys.reduce((n, k) => n + (entryByKey.get(k)?.ids.length ?? 0), 0);
   const aboveComments = countComments(layout.aboveIds);
   const belowComments = countComments(layout.belowIds);
-  const firstVisibleIdx = comments.findIndex((c) => visibleIds.has(c.id));
-  const lastVisibleIdx = (() => {
-    for (let i = comments.length - 1; i >= 0; i -= 1) {
-      if (visibleIds.has(comments[i].id)) return i;
-    }
-    return -1;
-  })();
-  const nearestAboveId =
-    firstVisibleIdx > 0
-      ? comments[firstVisibleIdx - 1].id
-      : firstVisibleIdx === -1 && layout.aboveCount > 0
-        ? comments[comments.length - 1].id
-        : null;
-  const nearestBelowId =
-    lastVisibleIdx >= 0 && lastVisibleIdx < comments.length - 1
-      ? comments[lastVisibleIdx + 1].id
-      : lastVisibleIdx === -1 && layout.belowCount > 0
-        ? comments[0].id
-        : null;
+  // Jump targets come straight from what the layout pushed out, not from
+  // "the comment next to the visible range": with icons and a card mixed
+  // (#332), the visible entries need not be one contiguous run of comments —
+  // a selected card can be pushed below while the icon after it still fits,
+  // which left 下に 1 件 pointing at nothing. aboveIds / belowIds are in
+  // document order, so the nearest is the last above / the first below.
+  const lastAbove = entryByKey.get(layout.aboveIds[layout.aboveIds.length - 1] ?? "");
+  const nearestAboveId = lastAbove ? lastAbove.ids[lastAbove.ids.length - 1] : null;
+  const nearestBelowId = entryByKey.get(layout.belowIds[0] ?? "")?.ids[0] ?? null;
 
   const byId = useMemo(() => new Map(comments.map((c) => [c.id, c])), [comments]);
 
@@ -1287,7 +1306,7 @@ function AlignedCommentRail({
               key={entry.key}
               comments={members}
               top={placed.top}
-              onSelect={onSelect}
+              onSelect={selectFromIcon}
             />
           );
         }
@@ -1311,6 +1330,8 @@ function AlignedCommentRail({
             onDeleteReply={onDeleteReply}
             onOpenDetail={onOpenDetail}
             onHeightChange={handleHeightChange}
+            focusOnMount={c.id === focusCardId}
+            onFocused={clearFocusCard}
           />
         );
       })}
@@ -1384,14 +1405,31 @@ interface AlignedCardProps extends CardProps {
   top: number;
   maxHeight: number;
   onHeightChange: (id: string, height: number) => void;
+  /** Take focus once mounted (#332: opened from an icon). */
+  focusOnMount?: boolean;
+  onFocused?: () => void;
 }
 
 /** One card, absolutely positioned at the top the layout gave it. Its own
  *  height feeds back into the layout via ResizeObserver — a reply/edit form
  *  opening inside it, or a body's "続きを表示" toggle, changes the height the
  *  next card has to stack below. */
-function AlignedCard({ comment, top, maxHeight, onHeightChange, ...cardProps }: AlignedCardProps) {
+function AlignedCard({
+  comment,
+  top,
+  maxHeight,
+  onHeightChange,
+  focusOnMount = false,
+  onFocused,
+  ...cardProps
+}: AlignedCardProps) {
   const contentRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!focusOnMount) return;
+    contentRef.current?.querySelector<HTMLElement>('[data-testid="comment-item"]')?.focus();
+    onFocused?.();
+  }, [focusOnMount, onFocused]);
 
   useEffect(() => {
     const el = contentRef.current;

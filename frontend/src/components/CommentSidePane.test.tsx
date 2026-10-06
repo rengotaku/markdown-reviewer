@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach, onTestFinished } from "vitest";
+import { useState } from "react";
 import { render, screen, within, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { CommentSidePane } from "./CommentSidePane";
@@ -1101,5 +1102,153 @@ describe("CommentSidePane icon mode (#332)", () => {
     await waitFor(() =>
       expect(screen.getByTestId("comment-rail-below")).toHaveTextContent("下に 2 件")
     );
+  });
+
+  /** Every element reports this pane height (the rail measures its own box). */
+  function stubPaneHeight(height: number) {
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+      top: 0,
+      left: 0,
+      right: 300,
+      bottom: height,
+      width: 300,
+      height,
+      x: 0,
+      y: 0,
+      toJSON() {},
+    } as DOMRect);
+  }
+
+  const noopHandlers = () => ({
+    onRefresh: vi.fn(),
+    onAddComment: vi.fn(),
+    onAddGlobal: vi.fn(),
+    onDelete: vi.fn(),
+    onResolveToggle: vi.fn(),
+    onReply: vi.fn(),
+    onEdit: vi.fn(),
+    onEditReply: vi.fn(),
+    onDeleteReply: vi.fn(),
+    onJump: vi.fn(),
+    onRailModeChange: vi.fn(),
+  });
+
+  it("下に N 件 jumps to the pushed-out comment even when an icon after it is still shown", async () => {
+    // a icon 180..208, b's card (96px default) pushed to 216..312 — past the
+    // bottom (300 minus the button inset) — while c's icon at 228 still fits.
+    // The visible entries (a, c) aren't a contiguous run of comments, so
+    // "the comment after the last visible one" doesn't exist; b is the target.
+    stubPaneHeight(300);
+    const user = userEvent.setup();
+    const h = renderPane({
+      comments: [comment("a"), comment("b"), comment("c")],
+      anchorTops: { a: 180, b: 204, c: 228 },
+      railMode: "icons",
+      onRailModeChange: vi.fn(),
+      selectedId: "b",
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("comment-rail-below")).toHaveTextContent("下に 1 件")
+    );
+    await user.click(screen.getByTestId("comment-rail-below"));
+    expect(h.onJump).toHaveBeenCalledWith("b");
+  });
+
+  it("re-selecting a comment opens its card even if it was taller the last time it was open", async () => {
+    // The card's first measurement (320px, e.g. reply form open) would not
+    // fit under c1's icon in a 500px pane; its real height now is 150px.
+    // Kept, the stale 320 drops the card and it never mounts to re-measure.
+    stubPaneHeight(500);
+    const reported = [320];
+    class ReportingResizeObserver {
+      private cb: ResizeObserverCallback;
+      constructor(cb: ResizeObserverCallback) {
+        this.cb = cb;
+      }
+      observe(el: Element) {
+        // Only the card's own content box reports a height; other observers
+        // (the body's overflow check) get a callback with nothing to read.
+        if ((el.parentElement as HTMLElement | null)?.dataset.testid !== "comment-rail-card") {
+          this.cb([], this as unknown as ResizeObserver);
+          return;
+        }
+        const height = reported.shift() ?? 150;
+        this.cb(
+          [{ contentRect: { height } } as ResizeObserverEntry],
+          this as unknown as ResizeObserver
+        );
+      }
+      unobserve() {}
+      disconnect() {}
+    }
+    const original = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = ReportingResizeObserver as unknown as typeof ResizeObserver;
+    onTestFinished(() => {
+      globalThis.ResizeObserver = original;
+    });
+
+    const props = {
+      root: "works",
+      filePath: "doc.md",
+      comments: [comment("c1"), comment("c2")],
+      reviewActive: true,
+      canAddComment: true,
+      onSelect: vi.fn(),
+      anchorTops: { c1: 250, c2: 250 },
+      railMode: "icons" as const,
+      ...noopHandlers(),
+    };
+    const { rerender } = render(<CommentSidePane {...props} selectedId="c2" />);
+    // Let the rail measure its own box (rAF); until then its height reads 0
+    // and nothing past the first entry is placed.
+    await act(async () => {
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    });
+    expect(reported).toEqual([]); // c2's card mounted and was measured at 320
+    // Mounted at the default height, measured 320, then dropped as too tall.
+    await waitFor(() =>
+      expect(screen.getByTestId("comment-rail-below")).toHaveTextContent("下に 1 件")
+    );
+    rerender(<CommentSidePane {...props} selectedId="c1" />);
+    rerender(<CommentSidePane {...props} selectedId="c2" />);
+    await waitFor(() => {
+      const cards = screen.getAllByTestId("comment-rail-card");
+      expect(cards.map((el) => el.dataset.commentId)).toEqual(["c2"]);
+    });
+    expect(screen.queryByTestId("comment-rail-below")).toBeNull();
+  });
+
+  it("opening an icon from the keyboard moves focus to the opened card", async () => {
+    const user = userEvent.setup();
+    function Harness() {
+      const [selectedId, setSelectedId] = useState<string | null>(null);
+      return (
+        <CommentSidePane
+          root="works"
+          filePath="doc.md"
+          comments={[comment("c1"), comment("c2")]}
+          reviewActive
+          canAddComment
+          anchorTops={{ c1: 100, c2: 400 }}
+          railMode="icons"
+          selectedId={selectedId}
+          onSelect={setSelectedId}
+          {...noopHandlers()}
+        />
+      );
+    }
+    render(<Harness />);
+    const icon = await waitFor(() => {
+      const els = screen.getAllByTestId("comment-rail-icon");
+      expect(els).toHaveLength(2);
+      return els[0];
+    });
+    icon.focus();
+    await user.keyboard("{Enter}");
+    await waitFor(() => {
+      const card = screen.getByTestId("comment-item");
+      expect(card).toHaveAttribute("data-comment-id", "c1");
+      expect(card).toHaveFocus();
+    });
   });
 });
