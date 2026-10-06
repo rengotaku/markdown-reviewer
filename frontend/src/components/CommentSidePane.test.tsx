@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, onTestFinished } from "vitest";
 import { render, screen, within, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { CommentSidePane } from "./CommentSidePane";
@@ -461,6 +461,101 @@ describe("CommentSidePane", () => {
 
   it("B5: shows no toggle for a body at/under the preview limit (regression guard)", () => {
     renderPane({ comments: [comment("c1", { body: "x".repeat(200) })] });
+    expect(screen.queryByTestId("comment-body-toggle")).toBeNull();
+  });
+
+  // #330: a source under BODY_PREVIEW_LIMIT that still wraps taller than the
+  // rail card's clamp must collapse too. jsdom lays nothing out, so stub the
+  // two measurements useClampOverflow reads: the body's scrollHeight and the
+  // px height of the probe it sizes to the clamp (`3em`).
+  function stubRenderedHeight(bodyScrollHeight: number) {
+    const clampPx = 42;
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
+      this: HTMLElement
+    ) {
+      const h = this.style.height === "3em" ? clampPx : 4000;
+      return { top: 0, left: 0, right: 300, bottom: h, width: 300, height: h, x: 0, y: 0, toJSON() {} } as DOMRect;
+    });
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (
+      this: HTMLElement
+    ) {
+      return this.dataset.testid === "comment-body" ? bodyScrollHeight : 0;
+    });
+    // setup.ts's no-op observer never calls back; a real one fires once on
+    // observe(), which is when the hook takes its first measurement.
+    class ImmediateResizeObserver {
+      private cb: ResizeObserverCallback;
+      constructor(cb: ResizeObserverCallback) {
+        this.cb = cb;
+      }
+      observe() {
+        this.cb([], this as unknown as ResizeObserver);
+      }
+      unobserve() {}
+      disconnect() {}
+    }
+    // setup.ts defines the global writable but not configurable, so assign
+    // (vi.stubGlobal would redefine it) and put the original back after.
+    const original = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = ImmediateResizeObserver as unknown as typeof ResizeObserver;
+    onTestFinished(() => {
+      globalThis.ResizeObserver = original;
+    });
+  }
+
+  it("#330: collapses a short source whose rendered body is taller than the card's clamp", async () => {
+    stubRenderedHeight(140);
+    renderPane({ comments: [comment("c1", { body: "あ".repeat(130) })] });
+    await waitFor(() =>
+      expect(screen.getByTestId("comment-body")).toHaveAttribute("data-collapsed", "true")
+    );
+    expect(screen.getByTestId("comment-body-toggle")).toHaveTextContent("続きを表示");
+  });
+
+  it("#330: leaves a short source that fits within the clamp uncollapsed, with no toggle", async () => {
+    stubRenderedHeight(40);
+    renderPane({ comments: [comment("c1", { body: "あ".repeat(20) })] });
+    // Let the ResizeObserver/effect measurement run before asserting absence.
+    await act(async () => {});
+    expect(screen.getByTestId("comment-body")).toHaveAttribute("data-collapsed", "false");
+    expect(screen.queryByTestId("comment-body-toggle")).toBeNull();
+  });
+
+  it("#330: a rail card's body is clamped from first paint, before any measurement lands", () => {
+    // setup.ts's no-op ResizeObserver never calls back — the state a card is
+    // in when the rail's own card observer reports its height first. If the
+    // body were unclamped here, that full height would place (or drop) the
+    // card, and a dropped card never re-measures.
+    renderPane({ comments: [comment("c1", { body: "あ".repeat(130) })] });
+    const body = screen.getByTestId("comment-body");
+    expect(getComputedStyle(body).maxHeight).toBe("3em");
+    // Not known to overflow yet: no fade/toggle claim.
+    expect(body).toHaveAttribute("data-collapsed", "false");
+    expect(screen.queryByTestId("comment-body-toggle")).toBeNull();
+  });
+
+  it("#330: pressing a card's 続きを表示 (click or keyboard) expands it without selecting the card", async () => {
+    // Selecting would drop the toggle (the selected card shows its body in
+    // full), pulling the pressed button out from under the pointer/focus.
+    const user = userEvent.setup();
+    const h = renderPane({ comments: [comment("c1", { body: "あ".repeat(250) })] });
+
+    await user.click(screen.getByTestId("comment-body-toggle"));
+    expect(screen.getByTestId("comment-body")).toHaveAttribute("data-collapsed", "false");
+
+    screen.getByTestId("comment-body-toggle").focus();
+    await user.keyboard("{Enter}");
+    expect(screen.getByTestId("comment-body")).toHaveAttribute("data-collapsed", "true");
+    expect(screen.getByTestId("comment-body-toggle")).toHaveFocus();
+
+    expect(h.onSelect).not.toHaveBeenCalled();
+  });
+
+  it("#330: the selected card shows its body in full with no toggle, even past the preview limit", async () => {
+    stubRenderedHeight(400);
+    renderPane({ comments: [comment("c1", { body: "あ".repeat(250) })], selectedId: "c1" });
+    await act(async () => {});
+    expect(screen.getByTestId("comment-body")).toHaveAttribute("data-collapsed", "false");
     expect(screen.queryByTestId("comment-body-toggle")).toBeNull();
   });
 

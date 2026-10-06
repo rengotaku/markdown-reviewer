@@ -2175,8 +2175,8 @@ export function EditorPage() {
   /**
    * Open a comment from the list (#253): scroll to it, flash its highlight,
    * and select its card in the rail (#304: the pane is always open, so there
-   * is nothing left to "open" beyond that — no popover, and the card itself
-   * stays collapsed until the reader expands it). Comments the jump cannot
+   * is nothing left to "open" beyond that — no popover; #330: the selected
+   * card shows its body in full). Comments the jump cannot
    * resolve (global, orphan) never reach here; the pane keeps those operable
    * in its own section.
    */

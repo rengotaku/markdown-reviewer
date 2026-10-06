@@ -36,7 +36,7 @@ import { contextLabel } from "@/utils/commentContext";
 import { isAiAuthored } from "@/utils/commentPresentation";
 import { CommentAuthor } from "./CommentAuthor";
 import { CommentId } from "./CommentId";
-import { layoutCommentRail, type RailItem } from "@/utils/commentRailLayout";
+import { layoutCommentRailWithEdgeButtons, type RailItem } from "@/utils/commentRailLayout";
 import { GlobalCommentBadges, type GlobalBadgeKind } from "./GlobalCommentBadges";
 import { GlobalCommentsDialog } from "./GlobalCommentsDialog";
 
@@ -44,6 +44,10 @@ import { GlobalCommentsDialog } from "./GlobalCommentsDialog";
  *  (first paint, before its ResizeObserver fires) — enough to avoid every
  *  card starting stacked at the same spot before layout settles. */
 const RAIL_DEFAULT_CARD_HEIGHT = 96;
+
+/** Height of the rail's "上に / 下に N 件" button (0.75rem text + padding +
+ *  border ≈ 28px) plus a little air, kept free of cards at that edge (#330). */
+const RAIL_EDGE_BUTTON_INSET = 34;
 
 /** AI-authored comments/replies are read-only to the human reviewer: they can
  *  reply, resolve, and jump to them, but not edit the body or delete them. */
@@ -60,8 +64,10 @@ const BODY_PREVIEW_LIMIT = 200;
  *  the rail's cards (#304: 3 lines, to keep neighbouring cards from being
  *  pushed too far down now that list mode is gone) and the pinned section's
  *  rows (6 lines, unchanged) can clamp to different heights with the same
- *  mechanism. */
-function clampSx(theme: Theme, maxHeight: string): SystemStyleObject<Theme> {
+ *  mechanism. `fade` is off for a clamp applied before anything is known to
+ *  be hidden (#330's measured bodies), so short text gets no stray fade. */
+function clampSx(theme: Theme, maxHeight: string, fade = true): SystemStyleObject<Theme> {
+  if (!fade) return { maxHeight, overflow: "hidden" };
   return {
     maxHeight,
     overflow: "hidden",
@@ -84,25 +90,49 @@ function clampSx(theme: Theme, maxHeight: string): SystemStyleObject<Theme> {
  *  body and each of its replies collapse independently. The clamp is purely
  *  visual — the full source is always in the DOM, so mid-syntax truncation
  *  (a half-rendered table/fence) can't happen. Short text renders in full
- *  with no toggle. Never auto-expanded (#304): selecting or deep-linking to a
- *  card leaves it collapsed — the reader clicks "続きを表示" themselves. */
+ *  with no toggle.
+ *
+ *  #330: `measureOverflow` additionally collapses a body whose *rendered*
+ *  height exceeds the clamp even though its source is under
+ *  BODY_PREVIEW_LIMIT — in the rail's narrow cards ~130 Japanese characters
+ *  wrap to 6–7 lines, so the source-length rule alone never clamped them and
+ *  each card grew past the paragraph spacing it is aligned to. Such a body is
+ *  clamped from its very first paint, before the measurement lands: the
+ *  rail's card observer would otherwise record the full height first, place
+ *  (or drop) the card by it, and an unmounted card never re-measures. The
+ *  measurement only decides whether the fade and toggle show. `clampDisabled`
+ *  shows the full body with no toggle (the rail's selected card). */
 function CollapsibleText({
   text,
   testid,
   sx,
   clampHeight = "6em",
+  measureOverflow = false,
+  clampDisabled = false,
 }: {
   text: string;
   testid: string;
   sx?: SxProps<Theme>;
   clampHeight?: string;
+  measureOverflow?: boolean;
+  clampDisabled?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const long = text.length > BODY_PREVIEW_LIMIT;
+  const [overflowing, setBodyEl] = useClampOverflow(
+    measureOverflow && !clampDisabled,
+    clampHeight,
+    text
+  );
+  const measured = measureOverflow && !clampDisabled;
+  const long = !clampDisabled && (text.length > BODY_PREVIEW_LIMIT || overflowing);
   const collapsed = long && !expanded;
+  // A measured body stays clamped until expanded even while it isn't known
+  // to overflow yet — for text that fits, the clamp is a no-op.
+  const clamped = collapsed || (measured && !expanded);
   return (
     <Box>
       <Typography
+        ref={setBodyEl}
         variant="body2"
         component="div"
         data-testid={testid}
@@ -113,7 +143,7 @@ function CollapsibleText({
           [
             sx ?? false,
             markdownBodySx,
-            collapsed ? (theme: Theme) => clampSx(theme, clampHeight) : false,
+            clamped ? (theme: Theme) => clampSx(theme, clampHeight, collapsed) : false,
           ].filter(Boolean) as SxProps<Theme>
         }
       />
@@ -123,7 +153,13 @@ function CollapsibleText({
           type="button"
           variant="caption"
           underline="hover"
-          onClick={() => setExpanded((v) => !v)}
+          // #330: a click reaching the rail card would also select it, and the
+          // selected card drops this toggle (full body, no clamp) — the
+          // button being pressed would vanish from under the pointer/focus.
+          onClick={(e) => {
+            e.stopPropagation();
+            setExpanded((v) => !v);
+          }}
           data-testid={`${testid}-toggle`}
           sx={{ display: "block", mt: 0.25 }}
         >
@@ -132,6 +168,47 @@ function CollapsibleText({
       )}
     </Box>
   );
+}
+
+/** Whether an element's natural (unclamped) content height exceeds
+ *  `clampHeight`. scrollHeight reports the full content whether or not the
+ *  clamp is currently applied, so the result doesn't flip when the toggle
+ *  switches between the two states. The clamp is resolved to px through a
+ *  throwaway probe inside the element, so `em` uses the element's own font
+ *  size exactly as the clamp's `maxHeight` does. jsdom lays nothing out
+ *  (every height reads 0), so there it always reports false and the
+ *  source-length rule alone decides. */
+function useClampOverflow(
+  enabled: boolean,
+  clampHeight: string,
+  // Re-measure when the body changes: a clamped element keeps the same box
+  // when its content grows, so the observer alone wouldn't fire.
+  text: string
+): readonly [boolean, (el: HTMLElement | null) => void] {
+  const [value, setValue] = useState(false);
+  const [el, setEl] = useState<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (!enabled || !el || typeof ResizeObserver === "undefined") return;
+    const measure = () => {
+      const probe = document.createElement("div");
+      probe.style.cssText = `position:absolute;visibility:hidden;height:${clampHeight}`;
+      el.appendChild(probe);
+      const limit = probe.getBoundingClientRect().height;
+      probe.remove();
+      // +1 absorbs rounding between scrollHeight (integer) and the probe's
+      // fractional px.
+      setValue(limit > 0 && el.scrollHeight > limit + 1);
+    };
+    // The observer's initial callback (fired on observe) does the first
+    // measurement; jsdom's no-op stand-in never calls back, see the doc above.
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [enabled, el, clampHeight, text]);
+
+  // A stale `true` from before the clamp was disabled must not leak through.
+  return [enabled && value, setEl] as const;
 }
 
 const SCOPE_BADGE: Record<string, { label: string; color: string }> = {
@@ -602,6 +679,10 @@ function CommentCard({
       data-selected={String(selected)}
       onClick={() => onSelect(c.id)}
       onKeyDown={(e) => {
+        // #330: Enter/Space on a control inside the card (the body toggle,
+        // the link-copy button) belongs to that control — preventDefault here
+        // would cancel its own activation and select the card instead.
+        if (e.target !== e.currentTarget) return;
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
           onSelect(c.id);
@@ -770,10 +851,14 @@ function CommentCard({
           text={c.body}
           testid="comment-body"
           sx={{ mt: 0.5, wordBreak: "break-word" }}
-          // #304: clamp to ~3 lines instead of the pinned section's 6 — with
+          // #304: clamp to ~2 lines instead of the pinned section's 6 — with
           // list mode gone, every anchored comment renders as this card, so a
-          // tall body pushes its neighbours further down the rail.
+          // tall body pushes its neighbours further down the rail. #330: judged
+          // by rendered height (a short source still wraps tall in this
+          // narrow column), and the selected card shows its body in full.
           clampHeight="3em"
+          measureOverflow
+          clampDisabled={selected}
         />
       )}
 
@@ -995,7 +1080,12 @@ function AlignedCommentRail({
   );
 
   const layout = useMemo(
-    () => layoutCommentRail(items, { paneTop: paneBox.top, paneHeight: paneBox.height }),
+    () =>
+      layoutCommentRailWithEdgeButtons(
+        items,
+        { paneTop: paneBox.top, paneHeight: paneBox.height },
+        RAIL_EDGE_BUTTON_INSET
+      ),
     [items, paneBox]
   );
 
