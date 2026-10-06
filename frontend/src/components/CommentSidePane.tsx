@@ -1,4 +1,12 @@
-import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
 import IconButton from "@mui/material/IconButton";
@@ -287,6 +295,49 @@ type StatusFilter = "all" | "open" | "resolved";
  *  memos below. */
 const EMPTY_IDS: ReadonlySet<string> = new Set();
 
+/** A card's half-written reply/edit and whether each form is open (#334).
+ *  Held by CommentSidePane per comment, not in CommentCard's own state: a card
+ *  unmounts whenever the aligned rail pushes it out to 上に / 下に N 件 on
+ *  scroll, icon mode folds it back into an icon, or the rail mode is switched
+ *  — and its useState went with it, dropping what was typed without a word. */
+interface CardDraft {
+  replyOpen: boolean;
+  replyBody: string;
+  editOpen: boolean;
+  editBody: string;
+}
+
+const EMPTY_DRAFT: CardDraft = { replyOpen: false, replyBody: "", editOpen: false, editBody: "" };
+
+/** Nothing worth keeping: both forms closed and no reply text (a closed edit
+ *  form's text is discarded anyway — startEdit reloads the comment body). */
+function isEmptyDraft(d: CardDraft): boolean {
+  return !d.replyOpen && !d.replyBody && !d.editOpen;
+}
+
+interface CardDrafts {
+  get: (id: string) => CardDraft;
+  update: (id: string, patch: Partial<CardDraft>) => void;
+}
+
+const CardDraftsContext = createContext<CardDrafts | null>(null);
+
+function omitKeys<T>(
+  record: Readonly<Record<string, T>>,
+  keys: readonly string[]
+): Readonly<Record<string, T>> {
+  if (!keys.some((k) => Object.hasOwn(record, k))) return record;
+  const rest = { ...record };
+  for (const k of keys) delete rest[k];
+  return rest;
+}
+
+function useCardDraft(id: string): [CardDraft, (patch: Partial<CardDraft>) => void] {
+  const drafts = useContext(CardDraftsContext);
+  if (!drafts) throw new Error("CommentCard must be rendered inside CommentSidePane");
+  return [drafts.get(id), (patch) => drafts.update(id, patch)];
+}
+
 export function CommentSidePane({
   root,
   filePath,
@@ -386,7 +437,42 @@ export function CommentSidePane({
   const [globalDialogOpen, setGlobalDialogOpen] = useState(false);
   const [globalDialogTab, setGlobalDialogTab] = useState<GlobalBadgeKind>("global");
 
-  return (
+  // #334: drafts belong to the open file's comments, by id. Ids are only
+  // unique within one file's sidecar, and EditorPage keeps this pane mounted
+  // when the open file changes, so a file change starts from none. Done during
+  // render (React's derived-state pattern) so no card sees the old file's.
+  const [drafts, setDrafts] = useState<Readonly<Record<string, CardDraft>>>({});
+  const fileKey = JSON.stringify([root ?? "", filePath ?? ""]);
+  const [draftsFileKey, setDraftsFileKey] = useState(fileKey);
+  if (fileKey !== draftsFileKey) {
+    setDraftsFileKey(fileKey);
+    setDrafts({});
+  }
+  // reviewstore numbers a new comment max+1, so once a comment is deleted its
+  // id can come back on a different comment — which must not open with the old
+  // one's reply, or an edit that would overwrite the new body. A draft whose
+  // comment is no longer listed goes.
+  const staleDraftIds = Object.keys(drafts).filter((id) => !comments.some((c) => c.id === id));
+  if (staleDraftIds.length > 0) setDrafts((prev) => omitKeys(prev, staleDraftIds));
+  const cardDrafts = useMemo<CardDrafts>(
+    () => ({
+      get: (id) => drafts[id] ?? EMPTY_DRAFT,
+      update: (id, patch) =>
+        setDrafts((prev) => {
+          const merged = { ...(prev[id] ?? EMPTY_DRAFT), ...patch };
+          return isEmptyDraft(merged) ? omitKeys(prev, [id]) : { ...prev, [id]: merged };
+        }),
+    }),
+    [drafts]
+  );
+  // Deleted here: drop the draft now rather than wait for the refetch, which
+  // may come back with the id already reused (delete + add in one fetch).
+  const handleDelete = (id: string) => {
+    setDrafts((prev) => omitKeys(prev, [id]));
+    onDelete(id);
+  };
+
+  const pane = (
     <Box
       sx={{
         display: "flex",
@@ -626,7 +712,7 @@ export function CommentSidePane({
             onSelect={onSelect}
             onCopyLink={handleCopyLink}
             canCopyLink={canCopyLink}
-            onDelete={onDelete}
+            onDelete={handleDelete}
             onResolveToggle={onResolveToggle}
             onReply={onReply}
             onEdit={onEdit}
@@ -644,7 +730,7 @@ export function CommentSidePane({
             onJump={onJump}
             onCopyLink={handleCopyLink}
             canCopyLink={canCopyLink}
-            onDelete={onDelete}
+            onDelete={handleDelete}
             onResolveToggle={onResolveToggle}
             onReply={onReply}
             onEdit={onEdit}
@@ -659,7 +745,7 @@ export function CommentSidePane({
         comment={detailComment}
         onClose={() => setDetailId(null)}
         onDelete={(id) => {
-          onDelete(id);
+          handleDelete(id);
           setDetailId(null);
         }}
         onResolveToggle={onResolveToggle}
@@ -681,7 +767,7 @@ export function CommentSidePane({
         globalComments={globalComments}
         orphanComments={orphanComments}
         onClose={() => setGlobalDialogOpen(false)}
-        onDelete={onDelete}
+        onDelete={handleDelete}
         onResolveToggle={onResolveToggle}
         onReply={onReply}
         onEdit={onEdit}
@@ -693,6 +779,8 @@ export function CommentSidePane({
       />
     </Box>
   );
+
+  return <CardDraftsContext.Provider value={cardDrafts}>{pane}</CardDraftsContext.Provider>;
 }
 
 interface CardProps {
@@ -737,32 +825,32 @@ function CommentCard({
   const resolved = c.status === "resolved";
   const aiOwned = isAiAuthored(c.author);
 
-  const [replyOpen, setReplyOpen] = useState(false);
-  const [replyBody, setReplyBody] = useState("");
-  const [editOpen, setEditOpen] = useState(false);
-  const [editBody, setEditBody] = useState(c.body);
+  const [{ replyOpen, replyBody, editOpen, editBody }, updateDraft] = useCardDraft(c.id);
+  // #334: focus a form only when the reader opens it. A draft's form also
+  // reappears when the card remounts (scroll, mode switch), and autoFocus there
+  // would pull focus out of the editor mid-sentence into this field.
+  const [focusForm, setFocusForm] = useState(false);
 
   const submitReply = () => {
     const body = replyBody.trim();
     if (!body) return;
     onReply(c.id, body);
-    setReplyBody("");
-    setReplyOpen(false);
+    updateDraft({ replyBody: "", replyOpen: false });
   };
 
   const startEdit = () => {
-    setEditBody(c.body);
-    setEditOpen(true);
+    updateDraft({ editBody: c.body, editOpen: true });
+    setFocusForm(true);
   };
 
   const submitEdit = () => {
     const body = editBody.trim();
     if (!body || body === c.body) {
-      setEditOpen(false);
+      updateDraft({ editOpen: false });
       return;
     }
     onEdit(c.id, body);
-    setEditOpen(false);
+    updateDraft({ editOpen: false });
   };
 
   return (
@@ -919,16 +1007,16 @@ function CommentCard({
         <Box sx={{ mt: 0.5 }} onClick={(e) => e.stopPropagation()}>
           <TextField
             value={editBody}
-            onChange={(e) => setEditBody(e.target.value)}
+            onChange={(e) => updateDraft({ editBody: e.target.value })}
             multiline
             minRows={2}
             fullWidth
             size="small"
-            autoFocus
+            autoFocus={focusForm}
             inputProps={{ "data-testid": "comment-edit-input" }}
           />
           <Box sx={{ display: "flex", justifyContent: "flex-end", gap: 0.5, mt: 0.5 }}>
-            <Button size="small" onClick={() => setEditOpen(false)}>
+            <Button size="small" onClick={() => updateDraft({ editOpen: false })}>
               キャンセル
             </Button>
             <Button
@@ -981,17 +1069,17 @@ function CommentCard({
             <Box sx={{ mt: 1 }} onClick={(e) => e.stopPropagation()}>
               <TextField
                 value={replyBody}
-                onChange={(e) => setReplyBody(e.target.value)}
+                onChange={(e) => updateDraft({ replyBody: e.target.value })}
                 placeholder="返信を入力"
                 multiline
                 minRows={2}
                 fullWidth
                 size="small"
-                autoFocus
+                autoFocus={focusForm}
                 inputProps={{ "data-testid": "comment-reply-input" }}
               />
               <Box sx={{ display: "flex", justifyContent: "flex-end", gap: 0.5, mt: 0.5 }}>
-                <Button size="small" onClick={() => setReplyOpen(false)}>
+                <Button size="small" onClick={() => updateDraft({ replyOpen: false })}>
                   キャンセル
                 </Button>
                 <Button
@@ -1014,7 +1102,10 @@ function CommentCard({
                 <IconButton
                   size="small"
                   disabled={resolved}
-                  onClick={() => setReplyOpen((v) => !v)}
+                  onClick={() => {
+                    updateDraft({ replyOpen: !replyOpen });
+                    setFocusForm(true);
+                  }}
                   aria-label="reply to comment"
                   data-testid="comment-reply-toggle"
                 >

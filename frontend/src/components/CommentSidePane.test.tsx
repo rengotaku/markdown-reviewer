@@ -1252,3 +1252,197 @@ describe("CommentSidePane icon mode (#332)", () => {
     });
   });
 });
+
+describe("CommentSidePane drafts survive the card unmounting (#334)", () => {
+  const baseProps = () => ({
+    root: "works",
+    filePath: "doc.md",
+    reviewActive: true,
+    canAddComment: true,
+    onRefresh: vi.fn(),
+    onAddComment: vi.fn(),
+    onAddGlobal: vi.fn(),
+    onDelete: vi.fn(),
+    onResolveToggle: vi.fn(),
+    onReply: vi.fn(),
+    onEdit: vi.fn(),
+    onEditReply: vi.fn(),
+    onDeleteReply: vi.fn(),
+    onJump: vi.fn(),
+    onSelect: vi.fn(),
+    onRailModeChange: vi.fn(),
+  });
+
+  async function startReply(user: ReturnType<typeof userEvent.setup>, text: string) {
+    await user.click(screen.getByTestId("comment-reply-toggle"));
+    await user.type(screen.getByTestId("comment-reply-input"), text);
+  }
+
+  it("keeps a half-written reply when switching between the aligned rail and the list", async () => {
+    const user = userEvent.setup();
+    const props = { ...baseProps(), comments: [comment("c1")], selectedId: "c1" };
+    const { rerender } = render(
+      <CommentSidePane {...props} anchorTops={{ c1: 10 }} railMode="aligned" />
+    );
+    await startReply(user, "書きかけ");
+
+    rerender(<CommentSidePane {...props} anchorTops={{ c1: 10 }} railMode="list" />);
+    expect(screen.getByTestId("comment-list")).toBeInTheDocument();
+    expect(screen.getByTestId("comment-reply-input")).toHaveValue("書きかけ");
+
+    rerender(<CommentSidePane {...props} anchorTops={{ c1: 10 }} railMode="aligned" />);
+    expect(screen.getByTestId("comment-rail-aligned")).toBeInTheDocument();
+    expect(screen.getByTestId("comment-reply-input")).toHaveValue("書きかけ");
+  });
+
+  it("keeps a half-written edit when switching between the aligned rail and the list", async () => {
+    const user = userEvent.setup();
+    const props = { ...baseProps(), comments: [comment("c1")], selectedId: "c1" };
+    const { rerender } = render(
+      <CommentSidePane {...props} anchorTops={{ c1: 10 }} railMode="aligned" />
+    );
+    await user.click(screen.getByTestId("comment-edit"));
+    await user.type(screen.getByTestId("comment-edit-input"), " 追記");
+
+    rerender(<CommentSidePane {...props} anchorTops={{ c1: 10 }} railMode="list" />);
+    expect(screen.getByTestId("comment-edit-input")).toHaveValue("body of c1 追記");
+  });
+
+  it("keeps a half-written reply when scrolling pushes the card out to 下に N 件 and back", async () => {
+    const user = userEvent.setup();
+    const props = {
+      ...baseProps(),
+      comments: [comment("c0"), comment("c1")],
+      selectedId: "c1",
+      railMode: "aligned" as const,
+    };
+    const { rerender } = render(<CommentSidePane {...props} anchorTops={{ c0: 0, c1: 200 }} />);
+    await waitFor(() => expect(screen.getByTestId("comment-reply-toggle")).toBeInTheDocument());
+    await startReply(user, "スクロール前");
+
+    // Scrolled: c1's paragraph is now far below the pane.
+    rerender(<CommentSidePane {...props} anchorTops={{ c0: 0, c1: 100_000 }} />);
+    await waitFor(() =>
+      expect(screen.getByTestId("comment-rail-below")).toHaveTextContent("下に 1 件")
+    );
+    expect(screen.queryByTestId("comment-reply-input")).toBeNull();
+
+    rerender(<CommentSidePane {...props} anchorTops={{ c0: 0, c1: 200 }} />);
+    await waitFor(() =>
+      expect(screen.getByTestId("comment-reply-input")).toHaveValue("スクロール前")
+    );
+  });
+
+  it("keeps a half-written reply when icon mode folds the card back into an icon", async () => {
+    const user = userEvent.setup();
+    const props = {
+      ...baseProps(),
+      comments: [comment("c1"), comment("c2")],
+      anchorTops: { c1: 100, c2: 400 },
+      railMode: "icons" as const,
+    };
+    const { rerender } = render(<CommentSidePane {...props} selectedId="c1" />);
+    await startReply(user, "アイコン前");
+
+    rerender(<CommentSidePane {...props} selectedId="c2" />);
+    await waitFor(() =>
+      expect(screen.getByTestId("comment-item")).toHaveAttribute("data-comment-id", "c2")
+    );
+    // The other card's draft is its own: c2 opens with no reply form.
+    expect(screen.queryByTestId("comment-reply-input")).toBeNull();
+
+    rerender(<CommentSidePane {...props} selectedId="c1" />);
+    await waitFor(() =>
+      expect(screen.getByTestId("comment-reply-input")).toHaveValue("アイコン前")
+    );
+  });
+
+  it("clears the draft once the reply is sent", async () => {
+    const user = userEvent.setup();
+    const props = { ...baseProps(), comments: [comment("c1")], selectedId: "c1" };
+    const { rerender } = render(
+      <CommentSidePane {...props} anchorTops={{ c1: 10 }} railMode="aligned" />
+    );
+    await startReply(user, "送信する");
+    await user.click(screen.getByTestId("comment-reply-submit"));
+    expect(props.onReply).toHaveBeenCalledWith("c1", "送信する");
+
+    rerender(<CommentSidePane {...props} anchorTops={{ c1: 10 }} railMode="list" />);
+    expect(screen.queryByTestId("comment-reply-input")).toBeNull();
+    await user.click(screen.getByTestId("comment-reply-toggle"));
+    expect(screen.getByTestId("comment-reply-input")).toHaveValue("");
+  });
+
+  it("drops a deleted comment's draft so a new comment reusing its id starts clean", async () => {
+    // reviewstore numbers a new comment max+1, so deleting the highest id and
+    // adding again hands the same id to a different comment.
+    const user = userEvent.setup();
+    const props = { ...baseProps(), selectedId: "c1", anchorTops: { c1: 10 } };
+    const { rerender } = render(<CommentSidePane {...props} comments={[comment("c1")]} />);
+    await user.click(screen.getByTestId("comment-edit"));
+    await user.type(screen.getByTestId("comment-edit-input"), " 旧");
+    await user.click(screen.getByTestId("comment-reply-toggle"));
+    await user.type(screen.getByTestId("comment-reply-input"), "旧い返信");
+
+    rerender(<CommentSidePane {...props} comments={[]} />);
+    rerender(
+      <CommentSidePane {...props} comments={[comment("c1", { body: "新しいコメント" })]} />
+    );
+    expect(screen.queryByTestId("comment-edit-input")).toBeNull();
+    expect(screen.queryByTestId("comment-reply-input")).toBeNull();
+  });
+
+  it("drops the draft as soon as the comment is deleted from this pane", async () => {
+    const user = userEvent.setup();
+    const props = { ...baseProps(), selectedId: "c1", anchorTops: { c1: 10 } };
+    const { rerender } = render(<CommentSidePane {...props} comments={[comment("c1")]} />);
+    await startReply(user, "旧い返信");
+    await user.click(screen.getByTestId("comment-delete"));
+    expect(props.onDelete).toHaveBeenCalledWith("c1");
+
+    // The refetch skipped the moment c1 was missing: delete + add landed in one.
+    rerender(
+      <CommentSidePane {...props} comments={[comment("c1", { body: "新しいコメント" })]} />
+    );
+    expect(screen.queryByTestId("comment-reply-input")).toBeNull();
+  });
+
+  it("a restored form does not take focus away from where the reader is typing", async () => {
+    const user = userEvent.setup();
+    const props = { ...baseProps(), comments: [comment("c1")], selectedId: "c1" };
+    const { rerender } = render(
+      <>
+        <input data-testid="outside" />
+        <CommentSidePane {...props} anchorTops={{ c1: 10 }} railMode="aligned" />
+      </>
+    );
+    await startReply(user, "書きかけ");
+    expect(screen.getByTestId("comment-reply-input")).toHaveFocus();
+    await user.click(screen.getByTestId("outside"));
+
+    rerender(
+      <>
+        <input data-testid="outside" />
+        <CommentSidePane {...props} anchorTops={{ c1: 10 }} railMode="list" />
+      </>
+    );
+    expect(screen.getByTestId("comment-reply-input")).toHaveValue("書きかけ");
+    expect(screen.getByTestId("outside")).toHaveFocus();
+  });
+
+  it("does not carry a draft over to a same-id comment in another file", async () => {
+    const user = userEvent.setup();
+    const props = {
+      ...baseProps(),
+      comments: [comment("c1")],
+      selectedId: "c1",
+      anchorTops: { c1: 10 },
+      railMode: "aligned" as const,
+    };
+    const { rerender } = render(<CommentSidePane {...props} />);
+    await startReply(user, "doc.md 向け");
+
+    rerender(<CommentSidePane {...props} filePath="other.md" />);
+    expect(screen.queryByTestId("comment-reply-input")).toBeNull();
+  });
+});
