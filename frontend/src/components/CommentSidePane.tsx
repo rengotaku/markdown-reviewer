@@ -1,4 +1,12 @@
-import { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
 import IconButton from "@mui/material/IconButton";
@@ -287,6 +295,39 @@ type StatusFilter = "all" | "open" | "resolved";
  *  memos below. */
 const EMPTY_IDS: ReadonlySet<string> = new Set();
 
+/** A card's half-written reply/edit and whether each form is open (#334).
+ *  Held by CommentSidePane per comment, not in CommentCard's own state: a card
+ *  unmounts whenever the aligned rail pushes it out to 上に / 下に N 件 on
+ *  scroll, icon mode folds it back into an icon, or the rail mode is switched
+ *  — and its useState went with it, dropping what was typed without a word. */
+interface CardDraft {
+  replyOpen: boolean;
+  replyBody: string;
+  editOpen: boolean;
+  editBody: string;
+}
+
+const EMPTY_DRAFT: CardDraft = { replyOpen: false, replyBody: "", editOpen: false, editBody: "" };
+
+/** Nothing worth keeping: both forms closed and no reply text (a closed edit
+ *  form's text is discarded anyway — startEdit reloads the comment body). */
+function isEmptyDraft(d: CardDraft): boolean {
+  return !d.replyOpen && !d.replyBody && !d.editOpen;
+}
+
+interface CardDrafts {
+  get: (id: string) => CardDraft;
+  update: (id: string, patch: Partial<CardDraft>) => void;
+}
+
+const CardDraftsContext = createContext<CardDrafts | null>(null);
+
+function useCardDraft(id: string): [CardDraft, (patch: Partial<CardDraft>) => void] {
+  const drafts = useContext(CardDraftsContext);
+  if (!drafts) throw new Error("CommentCard must be rendered inside CommentSidePane");
+  return [drafts.get(id), (patch) => drafts.update(id, patch)];
+}
+
 export function CommentSidePane({
   root,
   filePath,
@@ -386,7 +427,27 @@ export function CommentSidePane({
   const [globalDialogOpen, setGlobalDialogOpen] = useState(false);
   const [globalDialogTab, setGlobalDialogTab] = useState<GlobalBadgeKind>("global");
 
-  return (
+  // #334: keyed by file as well as id — ids are only unique within one file's
+  // sidecar, and EditorPage keeps this pane mounted when the open file changes.
+  const [drafts, setDrafts] = useState<Readonly<Record<string, CardDraft>>>({});
+  const cardDrafts = useMemo<CardDrafts>(() => {
+    const keyOf = (id: string) => JSON.stringify([root ?? "", filePath ?? "", id]);
+    return {
+      get: (id) => drafts[keyOf(id)] ?? EMPTY_DRAFT,
+      update: (id, patch) =>
+        setDrafts((prev) => {
+          const key = keyOf(id);
+          const merged = { ...(prev[key] ?? EMPTY_DRAFT), ...patch };
+          if (!isEmptyDraft(merged)) return { ...prev, [key]: merged };
+          if (!Object.hasOwn(prev, key)) return prev;
+          const rest = { ...prev };
+          delete rest[key];
+          return rest;
+        }),
+    };
+  }, [drafts, root, filePath]);
+
+  const pane = (
     <Box
       sx={{
         display: "flex",
@@ -693,6 +754,8 @@ export function CommentSidePane({
       />
     </Box>
   );
+
+  return <CardDraftsContext.Provider value={cardDrafts}>{pane}</CardDraftsContext.Provider>;
 }
 
 interface CardProps {
@@ -737,32 +800,27 @@ function CommentCard({
   const resolved = c.status === "resolved";
   const aiOwned = isAiAuthored(c.author);
 
-  const [replyOpen, setReplyOpen] = useState(false);
-  const [replyBody, setReplyBody] = useState("");
-  const [editOpen, setEditOpen] = useState(false);
-  const [editBody, setEditBody] = useState(c.body);
+  const [{ replyOpen, replyBody, editOpen, editBody }, updateDraft] = useCardDraft(c.id);
 
   const submitReply = () => {
     const body = replyBody.trim();
     if (!body) return;
     onReply(c.id, body);
-    setReplyBody("");
-    setReplyOpen(false);
+    updateDraft({ replyBody: "", replyOpen: false });
   };
 
   const startEdit = () => {
-    setEditBody(c.body);
-    setEditOpen(true);
+    updateDraft({ editBody: c.body, editOpen: true });
   };
 
   const submitEdit = () => {
     const body = editBody.trim();
     if (!body || body === c.body) {
-      setEditOpen(false);
+      updateDraft({ editOpen: false });
       return;
     }
     onEdit(c.id, body);
-    setEditOpen(false);
+    updateDraft({ editOpen: false });
   };
 
   return (
@@ -919,7 +977,7 @@ function CommentCard({
         <Box sx={{ mt: 0.5 }} onClick={(e) => e.stopPropagation()}>
           <TextField
             value={editBody}
-            onChange={(e) => setEditBody(e.target.value)}
+            onChange={(e) => updateDraft({ editBody: e.target.value })}
             multiline
             minRows={2}
             fullWidth
@@ -928,7 +986,7 @@ function CommentCard({
             inputProps={{ "data-testid": "comment-edit-input" }}
           />
           <Box sx={{ display: "flex", justifyContent: "flex-end", gap: 0.5, mt: 0.5 }}>
-            <Button size="small" onClick={() => setEditOpen(false)}>
+            <Button size="small" onClick={() => updateDraft({ editOpen: false })}>
               キャンセル
             </Button>
             <Button
@@ -981,7 +1039,7 @@ function CommentCard({
             <Box sx={{ mt: 1 }} onClick={(e) => e.stopPropagation()}>
               <TextField
                 value={replyBody}
-                onChange={(e) => setReplyBody(e.target.value)}
+                onChange={(e) => updateDraft({ replyBody: e.target.value })}
                 placeholder="返信を入力"
                 multiline
                 minRows={2}
@@ -991,7 +1049,7 @@ function CommentCard({
                 inputProps={{ "data-testid": "comment-reply-input" }}
               />
               <Box sx={{ display: "flex", justifyContent: "flex-end", gap: 0.5, mt: 0.5 }}>
-                <Button size="small" onClick={() => setReplyOpen(false)}>
+                <Button size="small" onClick={() => updateDraft({ replyOpen: false })}>
                   キャンセル
                 </Button>
                 <Button
@@ -1014,7 +1072,7 @@ function CommentCard({
                 <IconButton
                   size="small"
                   disabled={resolved}
-                  onClick={() => setReplyOpen((v) => !v)}
+                  onClick={() => updateDraft({ replyOpen: !replyOpen })}
                   aria-label="reply to comment"
                   data-testid="comment-reply-toggle"
                 >
