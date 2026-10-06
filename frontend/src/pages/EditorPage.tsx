@@ -343,6 +343,8 @@ export function EditorPage() {
   const registerSelfWrite = useChangedPaths((s) => s.registerSelfWrite);
   const editor = useEditorInstance((s) => s.editor);
   const centered = useEditorPrefs((s) => s.centered);
+  const commentRailMode = useEditorPrefs((s) => s.commentRailMode);
+  const setCommentRailMode = useEditorPrefs((s) => s.setCommentRailMode);
   const toggleCentered = useEditorPrefs((s) => s.toggleCentered);
   const { author } = useCommentAuthor();
   const queryClient = useQueryClient();
@@ -3305,6 +3307,8 @@ export function EditorPage() {
           selectedId={railSelectedId}
           anchorTops={anchorTops}
           unresolvedIds={unresolvedIds}
+          railMode={commentRailMode}
+          onRailModeChange={setCommentRailMode}
         />
       </Box>
 
