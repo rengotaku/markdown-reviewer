@@ -45,6 +45,10 @@ import { GlobalCommentsDialog } from "./GlobalCommentsDialog";
  *  card starting stacked at the same spot before layout settles. */
 const RAIL_DEFAULT_CARD_HEIGHT = 96;
 
+/** Height of the rail's "上に / 下に N 件" button (0.75rem text + padding +
+ *  border ≈ 28px) plus a little air, kept free of cards at that edge (#330). */
+const RAIL_EDGE_BUTTON_INSET = 34;
+
 /** AI-authored comments/replies are read-only to the human reviewer: they can
  *  reply, resolve, and jump to them, but not edit the body or delete them. */
 
@@ -84,25 +88,40 @@ function clampSx(theme: Theme, maxHeight: string): SystemStyleObject<Theme> {
  *  body and each of its replies collapse independently. The clamp is purely
  *  visual — the full source is always in the DOM, so mid-syntax truncation
  *  (a half-rendered table/fence) can't happen. Short text renders in full
- *  with no toggle. Never auto-expanded (#304): selecting or deep-linking to a
- *  card leaves it collapsed — the reader clicks "続きを表示" themselves. */
+ *  with no toggle.
+ *
+ *  #330: `measureOverflow` additionally collapses a body whose *rendered*
+ *  height exceeds the clamp even though its source is under
+ *  BODY_PREVIEW_LIMIT — in the rail's narrow cards ~130 Japanese characters
+ *  wrap to 6–7 lines, so the source-length rule alone never clamped them and
+ *  each card grew past the paragraph spacing it is aligned to. `clampDisabled`
+ *  shows the full body with no toggle (the rail's selected card). */
 function CollapsibleText({
   text,
   testid,
   sx,
   clampHeight = "6em",
+  measureOverflow = false,
+  clampDisabled = false,
 }: {
   text: string;
   testid: string;
   sx?: SxProps<Theme>;
   clampHeight?: string;
+  measureOverflow?: boolean;
+  clampDisabled?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const long = text.length > BODY_PREVIEW_LIMIT;
+  const [overflowing, setBodyEl] = useClampOverflow(
+    measureOverflow && !clampDisabled,
+    clampHeight
+  );
+  const long = !clampDisabled && (text.length > BODY_PREVIEW_LIMIT || overflowing);
   const collapsed = long && !expanded;
   return (
     <Box>
       <Typography
+        ref={setBodyEl}
         variant="body2"
         component="div"
         data-testid={testid}
@@ -132,6 +151,44 @@ function CollapsibleText({
       )}
     </Box>
   );
+}
+
+/** Whether an element's natural (unclamped) content height exceeds
+ *  `clampHeight`. scrollHeight reports the full content whether or not the
+ *  clamp is currently applied, so the result doesn't flip when the toggle
+ *  switches between the two states. The clamp is resolved to px through a
+ *  throwaway probe inside the element, so `em` uses the element's own font
+ *  size exactly as the clamp's `maxHeight` does. jsdom lays nothing out
+ *  (every height reads 0), so there it always reports false and the
+ *  source-length rule alone decides. */
+function useClampOverflow(
+  enabled: boolean,
+  clampHeight: string
+): readonly [boolean, (el: HTMLElement | null) => void] {
+  const [value, setValue] = useState(false);
+  const [el, setEl] = useState<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (!enabled || !el || typeof ResizeObserver === "undefined") return;
+    const measure = () => {
+      const probe = document.createElement("div");
+      probe.style.cssText = `position:absolute;visibility:hidden;height:${clampHeight}`;
+      el.appendChild(probe);
+      const limit = probe.getBoundingClientRect().height;
+      probe.remove();
+      // +1 absorbs rounding between scrollHeight (integer) and the probe's
+      // fractional px.
+      setValue(limit > 0 && el.scrollHeight > limit + 1);
+    };
+    // The observer's initial callback (fired on observe) does the first
+    // measurement; jsdom's no-op stand-in never calls back, see the doc above.
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [enabled, el, clampHeight]);
+
+  // A stale `true` from before the clamp was disabled must not leak through.
+  return [enabled && value, setEl] as const;
 }
 
 const SCOPE_BADGE: Record<string, { label: string; color: string }> = {
@@ -770,10 +827,14 @@ function CommentCard({
           text={c.body}
           testid="comment-body"
           sx={{ mt: 0.5, wordBreak: "break-word" }}
-          // #304: clamp to ~3 lines instead of the pinned section's 6 — with
+          // #304: clamp to ~2 lines instead of the pinned section's 6 — with
           // list mode gone, every anchored comment renders as this card, so a
-          // tall body pushes its neighbours further down the rail.
+          // tall body pushes its neighbours further down the rail. #330: judged
+          // by rendered height (a short source still wraps tall in this
+          // narrow column), and the selected card shows its body in full.
           clampHeight="3em"
+          measureOverflow
+          clampDisabled={selected}
         />
       )}
 
@@ -994,10 +1055,22 @@ function AlignedCommentRail({
     [comments, anchorTops, cardHeights]
   );
 
-  const layout = useMemo(
-    () => layoutCommentRail(items, { paneTop: paneBox.top, paneHeight: paneBox.height }),
-    [items, paneBox]
-  );
+  const layout = useMemo(() => {
+    const viewport = { paneTop: paneBox.top, paneHeight: paneBox.height };
+    const first = layoutCommentRail(items, viewport);
+    if (first.aboveCount === 0 && first.belowCount === 0) return first;
+    // #330: the "上に / 下に N 件" buttons are drawn over the rail's edges, so
+    // a card placed there lost its header under the button. Re-run with that
+    // edge kept free — only the edge whose button actually renders, so a rail
+    // with nothing scrolled past above keeps its first card aligned to its
+    // paragraph. Reserving space can only push more cards out, never fewer,
+    // so the buttons that justified the inset are still there afterwards.
+    return layoutCommentRail(items, {
+      ...viewport,
+      insetTop: first.aboveCount > 0 ? RAIL_EDGE_BUTTON_INSET : 0,
+      insetBottom: first.belowCount > 0 ? RAIL_EDGE_BUTTON_INSET : 0,
+    });
+  }, [items, paneBox]);
 
   const visibleIds = useMemo(() => new Set(layout.visible.map((v) => v.id)), [layout.visible]);
   const firstVisibleIdx = comments.findIndex((c) => visibleIds.has(c.id));

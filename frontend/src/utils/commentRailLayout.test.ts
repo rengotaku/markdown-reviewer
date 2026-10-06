@@ -174,4 +174,39 @@ describe("layoutCommentRail", () => {
     expect(result.belowCount).toBe(0);
     expect(result.aboveCount).toBe(0);
   });
+
+  it("14. insetTop keeps cards out of the top edge (the 上に N 件 button) — an anchor inside it is pushed below (#330)", () => {
+    // a: anchor 110 → relative 10, inside the 34px top inset → placed at 34.
+    // b: anchor 300 → relative 200, clear of the inset → stays aligned.
+    const items = [item("a", 110, 40, 0), item("b", 300, 40, 1)];
+    const result = layoutCommentRail(items, { ...VIEWPORT, insetTop: 34 });
+    expect(result.visible).toEqual([
+      { id: "a", top: 34, maxHeight: 40 },
+      { id: "b", top: 200, maxHeight: 40 },
+    ]);
+  });
+
+  it("15. insetBottom keeps cards out of the bottom edge (the 下に N 件 button) — a card that would end inside it is counted below (#330)", () => {
+    // a: relative 100, occupies 100..140 — fits.
+    // b: relative 540, would occupy 540..580: fits in 600 but crosses the
+    //    bottom inset's edge at 600-34 = 566 → counted below instead.
+    const items = [item("a", 200, 40, 0), item("b", 640, 40, 1)];
+    expect(layoutCommentRail(items, VIEWPORT).belowCount).toBe(0);
+    const result = layoutCommentRail(items, { ...VIEWPORT, insetBottom: 34 });
+    expect(result.visible.map((v) => v.id)).toEqual(["a"]);
+    expect(result.belowCount).toBe(1);
+  });
+
+  it("16. a lone card shrinks to the space between the insets, not to the pane's raw height (#330)", () => {
+    // 300px card (under RAIL_CARD_MAX_HEIGHT) in a 200px pane: 34..166 is
+    // what's left between the two insets.
+    const items = [item("a", 100, 300, 0)];
+    const result = layoutCommentRail(items, {
+      paneTop: 100,
+      paneHeight: 200,
+      insetTop: 34,
+      insetBottom: 34,
+    });
+    expect(result.visible).toEqual([{ id: "a", top: 34, maxHeight: 200 - 34 - 34 }]);
+  });
 });

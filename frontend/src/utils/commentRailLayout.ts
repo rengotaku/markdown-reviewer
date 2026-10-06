@@ -32,6 +32,11 @@ export interface RailViewport {
   paneHeight: number;
   /** Defaults to RAIL_GAP. */
   gap?: number;
+  /** Space kept free at the pane's top / bottom edge, where the
+   *  "上に N 件" / "下に N 件" button sits on top of the rail (#330: a card
+   *  placed there had its header covered). Both default to 0. */
+  insetTop?: number;
+  insetBottom?: number;
 }
 
 export interface RailPlacedItem {
@@ -83,6 +88,10 @@ export function layoutCommentRail(
 ): RailLayoutResult {
   const gap = viewport.gap ?? RAIL_GAP;
   const { paneTop, paneHeight } = viewport;
+  const insetTop = viewport.insetTop ?? 0;
+  // The edge every card must end above. `paneHeight === 0` stays 0 so the
+  // not-yet-measured placeholder path below is unchanged.
+  const usableBottom = paneHeight === 0 ? 0 : paneHeight - (viewport.insetBottom ?? 0);
 
   const excluded: string[] = [];
   const anchored = items.filter((item) => {
@@ -97,7 +106,8 @@ export function layoutCommentRail(
   const visible: RailPlacedItem[] = [];
   let aboveCount = 0;
   let belowCount = 0;
-  let cursor = 0;
+  let cursor = insetTop;
+  let placedAny = false;
 
   for (const item of ordered) {
     const cardHeight = Math.min(item.height, RAIL_CARD_MAX_HEIGHT);
@@ -113,10 +123,10 @@ export function layoutCommentRail(
       continue;
     }
 
-    const isFirstVisible = cursor === 0;
-    const top = Math.max(relativeAnchor, cursor, 0);
+    const isFirstVisible = !placedAny;
+    const top = Math.max(relativeAnchor, cursor, insetTop);
 
-    if (top + cardHeight > paneHeight) {
+    if (top + cardHeight > usableBottom) {
       // Nothing above it is claiming space, so there's no better place to put
       // it: shrink it to the pane instead of dropping it entirely (#298's
       // "単体でペイン高さを超えるカードは top 0 で置き").
@@ -130,10 +140,11 @@ export function layoutCommentRail(
         // `paneHeight` reflects a real (if too-small) measurement, though,
         // shrinking a card below the readable floor is the actual bug this
         // guards against.
-        const fitHeight = Math.max(0, paneHeight - top);
+        const fitHeight = Math.max(0, usableBottom - top);
         if (paneHeight === 0 || fitHeight >= RAIL_MIN_USABLE_HEIGHT) {
           visible.push({ id: item.id, top, maxHeight: fitHeight });
           cursor = top + fitHeight + gap;
+          placedAny = true;
           continue;
         }
         // Not enough room to shrink into on a pane that HAS been measured —
@@ -154,6 +165,7 @@ export function layoutCommentRail(
 
     visible.push({ id: item.id, top, maxHeight: cardHeight });
     cursor = top + cardHeight + gap;
+    placedAny = true;
   }
 
   return { visible, aboveCount, belowCount, excluded };
