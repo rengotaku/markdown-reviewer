@@ -322,6 +322,16 @@ interface CardDrafts {
 
 const CardDraftsContext = createContext<CardDrafts | null>(null);
 
+function omitKeys<T>(
+  record: Readonly<Record<string, T>>,
+  keys: readonly string[]
+): Readonly<Record<string, T>> {
+  if (!keys.some((k) => Object.hasOwn(record, k))) return record;
+  const rest = { ...record };
+  for (const k of keys) delete rest[k];
+  return rest;
+}
+
 function useCardDraft(id: string): [CardDraft, (patch: Partial<CardDraft>) => void] {
   const drafts = useContext(CardDraftsContext);
   if (!drafts) throw new Error("CommentCard must be rendered inside CommentSidePane");
@@ -427,25 +437,40 @@ export function CommentSidePane({
   const [globalDialogOpen, setGlobalDialogOpen] = useState(false);
   const [globalDialogTab, setGlobalDialogTab] = useState<GlobalBadgeKind>("global");
 
-  // #334: keyed by file as well as id — ids are only unique within one file's
-  // sidecar, and EditorPage keeps this pane mounted when the open file changes.
+  // #334: drafts belong to the open file's comments, by id. Ids are only
+  // unique within one file's sidecar, and EditorPage keeps this pane mounted
+  // when the open file changes, so a file change starts from none. Done during
+  // render (React's derived-state pattern) so no card sees the old file's.
   const [drafts, setDrafts] = useState<Readonly<Record<string, CardDraft>>>({});
-  const cardDrafts = useMemo<CardDrafts>(() => {
-    const keyOf = (id: string) => JSON.stringify([root ?? "", filePath ?? "", id]);
-    return {
-      get: (id) => drafts[keyOf(id)] ?? EMPTY_DRAFT,
+  const fileKey = JSON.stringify([root ?? "", filePath ?? ""]);
+  const [draftsFileKey, setDraftsFileKey] = useState(fileKey);
+  if (fileKey !== draftsFileKey) {
+    setDraftsFileKey(fileKey);
+    setDrafts({});
+  }
+  // reviewstore numbers a new comment max+1, so once a comment is deleted its
+  // id can come back on a different comment — which must not open with the old
+  // one's reply, or an edit that would overwrite the new body. A draft whose
+  // comment is no longer listed goes.
+  const staleDraftIds = Object.keys(drafts).filter((id) => !comments.some((c) => c.id === id));
+  if (staleDraftIds.length > 0) setDrafts((prev) => omitKeys(prev, staleDraftIds));
+  const cardDrafts = useMemo<CardDrafts>(
+    () => ({
+      get: (id) => drafts[id] ?? EMPTY_DRAFT,
       update: (id, patch) =>
         setDrafts((prev) => {
-          const key = keyOf(id);
-          const merged = { ...(prev[key] ?? EMPTY_DRAFT), ...patch };
-          if (!isEmptyDraft(merged)) return { ...prev, [key]: merged };
-          if (!Object.hasOwn(prev, key)) return prev;
-          const rest = { ...prev };
-          delete rest[key];
-          return rest;
+          const merged = { ...(prev[id] ?? EMPTY_DRAFT), ...patch };
+          return isEmptyDraft(merged) ? omitKeys(prev, [id]) : { ...prev, [id]: merged };
         }),
-    };
-  }, [drafts, root, filePath]);
+    }),
+    [drafts]
+  );
+  // Deleted here: drop the draft now rather than wait for the refetch, which
+  // may come back with the id already reused (delete + add in one fetch).
+  const handleDelete = (id: string) => {
+    setDrafts((prev) => omitKeys(prev, [id]));
+    onDelete(id);
+  };
 
   const pane = (
     <Box
@@ -687,7 +712,7 @@ export function CommentSidePane({
             onSelect={onSelect}
             onCopyLink={handleCopyLink}
             canCopyLink={canCopyLink}
-            onDelete={onDelete}
+            onDelete={handleDelete}
             onResolveToggle={onResolveToggle}
             onReply={onReply}
             onEdit={onEdit}
@@ -705,7 +730,7 @@ export function CommentSidePane({
             onJump={onJump}
             onCopyLink={handleCopyLink}
             canCopyLink={canCopyLink}
-            onDelete={onDelete}
+            onDelete={handleDelete}
             onResolveToggle={onResolveToggle}
             onReply={onReply}
             onEdit={onEdit}
@@ -720,7 +745,7 @@ export function CommentSidePane({
         comment={detailComment}
         onClose={() => setDetailId(null)}
         onDelete={(id) => {
-          onDelete(id);
+          handleDelete(id);
           setDetailId(null);
         }}
         onResolveToggle={onResolveToggle}
@@ -742,7 +767,7 @@ export function CommentSidePane({
         globalComments={globalComments}
         orphanComments={orphanComments}
         onClose={() => setGlobalDialogOpen(false)}
-        onDelete={onDelete}
+        onDelete={handleDelete}
         onResolveToggle={onResolveToggle}
         onReply={onReply}
         onEdit={onEdit}
@@ -801,6 +826,10 @@ function CommentCard({
   const aiOwned = isAiAuthored(c.author);
 
   const [{ replyOpen, replyBody, editOpen, editBody }, updateDraft] = useCardDraft(c.id);
+  // #334: focus a form only when the reader opens it. A draft's form also
+  // reappears when the card remounts (scroll, mode switch), and autoFocus there
+  // would pull focus out of the editor mid-sentence into this field.
+  const [focusForm, setFocusForm] = useState(false);
 
   const submitReply = () => {
     const body = replyBody.trim();
@@ -811,6 +840,7 @@ function CommentCard({
 
   const startEdit = () => {
     updateDraft({ editBody: c.body, editOpen: true });
+    setFocusForm(true);
   };
 
   const submitEdit = () => {
@@ -982,7 +1012,7 @@ function CommentCard({
             minRows={2}
             fullWidth
             size="small"
-            autoFocus
+            autoFocus={focusForm}
             inputProps={{ "data-testid": "comment-edit-input" }}
           />
           <Box sx={{ display: "flex", justifyContent: "flex-end", gap: 0.5, mt: 0.5 }}>
@@ -1045,7 +1075,7 @@ function CommentCard({
                 minRows={2}
                 fullWidth
                 size="small"
-                autoFocus
+                autoFocus={focusForm}
                 inputProps={{ "data-testid": "comment-reply-input" }}
               />
               <Box sx={{ display: "flex", justifyContent: "flex-end", gap: 0.5, mt: 0.5 }}>
@@ -1072,7 +1102,10 @@ function CommentCard({
                 <IconButton
                   size="small"
                   disabled={resolved}
-                  onClick={() => updateDraft({ replyOpen: !replyOpen })}
+                  onClick={() => {
+                    updateDraft({ replyOpen: !replyOpen });
+                    setFocusForm(true);
+                  }}
                   aria-label="reply to comment"
                   data-testid="comment-reply-toggle"
                 >

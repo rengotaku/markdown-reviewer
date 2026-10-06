@@ -1373,6 +1373,63 @@ describe("CommentSidePane drafts survive the card unmounting (#334)", () => {
     expect(screen.getByTestId("comment-reply-input")).toHaveValue("");
   });
 
+  it("drops a deleted comment's draft so a new comment reusing its id starts clean", async () => {
+    // reviewstore numbers a new comment max+1, so deleting the highest id and
+    // adding again hands the same id to a different comment.
+    const user = userEvent.setup();
+    const props = { ...baseProps(), selectedId: "c1", anchorTops: { c1: 10 } };
+    const { rerender } = render(<CommentSidePane {...props} comments={[comment("c1")]} />);
+    await user.click(screen.getByTestId("comment-edit"));
+    await user.type(screen.getByTestId("comment-edit-input"), " 旧");
+    await user.click(screen.getByTestId("comment-reply-toggle"));
+    await user.type(screen.getByTestId("comment-reply-input"), "旧い返信");
+
+    rerender(<CommentSidePane {...props} comments={[]} />);
+    rerender(
+      <CommentSidePane {...props} comments={[comment("c1", { body: "新しいコメント" })]} />
+    );
+    expect(screen.queryByTestId("comment-edit-input")).toBeNull();
+    expect(screen.queryByTestId("comment-reply-input")).toBeNull();
+  });
+
+  it("drops the draft as soon as the comment is deleted from this pane", async () => {
+    const user = userEvent.setup();
+    const props = { ...baseProps(), selectedId: "c1", anchorTops: { c1: 10 } };
+    const { rerender } = render(<CommentSidePane {...props} comments={[comment("c1")]} />);
+    await startReply(user, "旧い返信");
+    await user.click(screen.getByTestId("comment-delete"));
+    expect(props.onDelete).toHaveBeenCalledWith("c1");
+
+    // The refetch skipped the moment c1 was missing: delete + add landed in one.
+    rerender(
+      <CommentSidePane {...props} comments={[comment("c1", { body: "新しいコメント" })]} />
+    );
+    expect(screen.queryByTestId("comment-reply-input")).toBeNull();
+  });
+
+  it("a restored form does not take focus away from where the reader is typing", async () => {
+    const user = userEvent.setup();
+    const props = { ...baseProps(), comments: [comment("c1")], selectedId: "c1" };
+    const { rerender } = render(
+      <>
+        <input data-testid="outside" />
+        <CommentSidePane {...props} anchorTops={{ c1: 10 }} railMode="aligned" />
+      </>
+    );
+    await startReply(user, "書きかけ");
+    expect(screen.getByTestId("comment-reply-input")).toHaveFocus();
+    await user.click(screen.getByTestId("outside"));
+
+    rerender(
+      <>
+        <input data-testid="outside" />
+        <CommentSidePane {...props} anchorTops={{ c1: 10 }} railMode="list" />
+      </>
+    );
+    expect(screen.getByTestId("comment-reply-input")).toHaveValue("書きかけ");
+    expect(screen.getByTestId("outside")).toHaveFocus();
+  });
+
   it("does not carry a draft over to a same-id comment in another file", async () => {
     const user = userEvent.setup();
     const props = {
@@ -1387,8 +1444,5 @@ describe("CommentSidePane drafts survive the card unmounting (#334)", () => {
 
     rerender(<CommentSidePane {...props} filePath="other.md" />);
     expect(screen.queryByTestId("comment-reply-input")).toBeNull();
-
-    rerender(<CommentSidePane {...props} />);
-    expect(screen.getByTestId("comment-reply-input")).toHaveValue("doc.md 向け");
   });
 });
