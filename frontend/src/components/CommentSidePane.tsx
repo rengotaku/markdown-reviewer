@@ -348,8 +348,21 @@ export function CommentSidePane({
     (c: CommentJSON) => c.orphan || unresolvedIds.has(c.id),
     [unresolvedIds]
   );
+  // #333: in document order. The API returns comments in the order they were
+  // added (reviewstore appends), so a comment added later near the top would
+  // otherwise follow one added earlier near the bottom — wrong for the list,
+  // and for the aligned rail's stacking order too. `context.line_range` is
+  // the server's resolved position (covering every anchor of a multi-block
+  // comment); a comment without one sorts last. Array.sort is stable, so
+  // comments on the same line keep their creation order.
   const anchored = useMemo(
-    () => visible.filter((c) => !(c.scope === "global" || hasNoLiveAnchor(c))),
+    () =>
+      visible
+        .filter((c) => !(c.scope === "global" || hasNoLiveAnchor(c)))
+        .sort(
+          (a, b) =>
+            (a.context?.line_range[0] ?? Infinity) - (b.context?.line_range[0] ?? Infinity)
+        ),
     [visible, hasNoLiveAnchor]
   );
   const globalComments = useMemo(

@@ -990,6 +990,25 @@ describe("CommentSidePane list mode (#333)", () => {
     expect(screen.queryByTestId("comment-rail-above")).toBeNull();
   });
 
+  it("orders the list by position in the document, not by when each comment was added", () => {
+    // Added bottom-first: the API returns c-late (line 40) before c-early (line 2).
+    renderPane({
+      comments: [
+        comment("c-late", { context: { heading_path: ["## Sec"], line_range: [40, 40] } }),
+        comment("c-early", { context: { heading_path: ["## Sec"], line_range: [2, 5] } }),
+        comment("c-mid", { context: { heading_path: ["## Sec"], line_range: [20, 20] } }),
+      ],
+      railMode: "list",
+      onRailModeChange: vi.fn(),
+    });
+    const list = screen.getByTestId("comment-list");
+    expect(within(list).getAllByTestId("comment-id").map((el) => el.textContent)).toEqual([
+      "c-early",
+      "c-mid",
+      "c-late",
+    ]);
+  });
+
   it("clicking a listed card selects it", async () => {
     const user = userEvent.setup();
     const h = renderPane({
