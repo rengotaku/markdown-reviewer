@@ -55,6 +55,11 @@ export interface RailLayoutResult {
   aboveCount: number;
   /** Cards that don't fit before the pane's bottom edge — jump down. */
   belowCount: number;
+  /** The ids behind `aboveCount` / `belowCount`, so a caller whose items
+   *  stand for several comments each (#332's icon groups) can count the
+   *  comments rather than the items. */
+  aboveIds: string[];
+  belowIds: string[];
   /** Comments with no anchor (`anchorTop === null`): never placed, never
    *  counted above/below. They stay in the pinned section instead. */
   excluded: string[];
@@ -104,8 +109,8 @@ export function layoutCommentRail(
   const ordered = [...anchored].sort((a, b) => a.order - b.order);
 
   const visible: RailPlacedItem[] = [];
-  let aboveCount = 0;
-  let belowCount = 0;
+  const aboveIds: string[] = [];
+  const belowIds: string[] = [];
   let cursor = insetTop;
   let placedAny = false;
 
@@ -119,7 +124,7 @@ export function layoutCommentRail(
     // whose paragraphs are actually visible, pushing them down. Count it as
     // scrolled-past instead, without touching `cursor`.
     if (relativeAnchor <= -cardHeight) {
-      aboveCount += 1;
+      aboveIds.push(item.id);
       continue;
     }
 
@@ -156,9 +161,9 @@ export function layoutCommentRail(
       // caught by the fully-above-the-pane check above), so `< 0` only
       // covers the small-overshoot case, not "scrolled far out of view".
       if (relativeAnchor < 0) {
-        aboveCount += 1;
+        aboveIds.push(item.id);
       } else {
-        belowCount += 1;
+        belowIds.push(item.id);
       }
       continue;
     }
@@ -168,7 +173,14 @@ export function layoutCommentRail(
     placedAny = true;
   }
 
-  return { visible, aboveCount, belowCount, excluded };
+  return {
+    visible,
+    aboveCount: aboveIds.length,
+    belowCount: belowIds.length,
+    aboveIds,
+    belowIds,
+    excluded,
+  };
 }
 
 /**

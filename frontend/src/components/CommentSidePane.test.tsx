@@ -1038,3 +1038,68 @@ describe("CommentSidePane list mode (#333)", () => {
     expect(scrollIntoView.mock.contexts[0]).toHaveAttribute("data-comment-id", "c2");
   });
 });
+
+describe("CommentSidePane icon mode (#332)", () => {
+  it("shows one count icon per line instead of cards, with a mode switch button for it", async () => {
+    renderPane({
+      comments: [comment("c1"), comment("c2"), comment("c3")],
+      anchorTops: { c1: 100, c2: 100, c3: 400 },
+      railMode: "icons",
+      onRailModeChange: vi.fn(),
+    });
+    expect(screen.getByTestId("comment-rail-mode-icons")).toBeInTheDocument();
+    expect(screen.queryAllByTestId("comment-item")).toHaveLength(0);
+    // The rail measures its own box via rAF before it can place a second
+    // entry (see the file's first test).
+    const icons = await waitFor(() => {
+      const els = screen.getAllByTestId("comment-rail-icon");
+      expect(els.map((el) => el.dataset.commentIds)).toEqual(["c1 c2", "c3"]);
+      return els;
+    });
+    expect(icons[0]).toHaveTextContent("2");
+    expect(icons[0]).toHaveAccessibleName("コメント 2 件を開く");
+  });
+
+  it("clicking an icon selects its first comment", async () => {
+    const user = userEvent.setup();
+    const h = renderPane({
+      comments: [comment("c1"), comment("c2")],
+      anchorTops: { c1: 100, c2: 100 },
+      railMode: "icons",
+      onRailModeChange: vi.fn(),
+    });
+    await user.click(screen.getByTestId("comment-rail-icon"));
+    expect(h.onSelect).toHaveBeenCalledWith("c1");
+  });
+
+  it("opens only the selected comment as a full card; the rest of its line stays an icon", async () => {
+    renderPane({
+      comments: [comment("c1"), comment("c2"), comment("c3")],
+      anchorTops: { c1: 100, c2: 100, c3: 400 },
+      railMode: "icons",
+      onRailModeChange: vi.fn(),
+      selectedId: "c1",
+    });
+    const cards = screen.getAllByTestId("comment-item");
+    expect(cards.map((el) => el.dataset.commentId)).toEqual(["c1"]);
+    expect(cards[0]).toHaveAttribute("data-selected", "true");
+    await waitFor(() =>
+      expect(
+        screen.getAllByTestId("comment-rail-icon").map((el) => el.dataset.commentIds)
+      ).toEqual(["c2", "c3"])
+    );
+  });
+
+  it("counts comments, not icons, in 下に N 件", async () => {
+    // c2+c3 share a line far below the pane: one icon, two comments.
+    renderPane({
+      comments: [comment("c1"), comment("c2"), comment("c3")],
+      anchorTops: { c1: 0, c2: 100_000, c3: 100_000 },
+      railMode: "icons",
+      onRailModeChange: vi.fn(),
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("comment-rail-below")).toHaveTextContent("下に 2 件")
+    );
+  });
+});

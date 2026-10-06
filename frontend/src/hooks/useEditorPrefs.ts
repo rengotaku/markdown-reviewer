@@ -7,9 +7,11 @@ import { persist } from "zustand/middleware";
  * in document order in one scrollable column (#333 — brought back after #305
  * removed it, against #304's own "don't remove the mode switch"). A dense
  * document overflows the aligned rail, and the list is where all of it can
- * be read in one pass.
+ * be read in one pass. "icons" keeps the aligned placement but shows a small
+ * per-line count icon instead of each card, opening only the selected one
+ * (#332).
  */
-export type CommentRailMode = "aligned" | "list";
+export type CommentRailMode = "aligned" | "list" | "icons";
 
 interface EditorPrefsState {
   centered: boolean;
