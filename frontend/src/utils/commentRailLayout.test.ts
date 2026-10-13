@@ -1,27 +1,36 @@
 import { describe, it, expect } from "vitest";
 import {
+  isPlacedInPane,
   layoutCommentRail,
-  layoutCommentRailWithEdgeButtons,
+  RAIL_CARD_MAX_HEIGHT,
   type RailItem,
 } from "./commentRailLayout";
 
 // Pane sits with its own top at viewport y=100 and is 600px tall, so anchors
 // at 100..700 (viewport-absolute) are the ones actually inside the pane.
-const VIEWPORT = { paneTop: 100, paneHeight: 600 };
+const VIEWPORT = { paneTop: 100 };
+const PANE_HEIGHT = 600;
 
-function item(id: string, anchorTop: number | null, height: number, order: number): RailItem {
+function item(
+  id: string,
+  anchorTop: number | null,
+  height: number,
+  order: number
+): RailItem {
   return { id, anchorTop, height, order };
+}
+
+function topOf(result: ReturnType<typeof layoutCommentRail>, id: string): number {
+  const placed = result.placed.find((p) => p.id === id);
+  if (!placed) throw new Error(`${id} not placed`);
+  return placed.top;
 }
 
 describe("layoutCommentRail", () => {
   it("1. orders cards by document order (order), not input order", () => {
-    const items = [
-      item("c", 500, 40, 2),
-      item("a", 200, 40, 0),
-      item("b", 350, 40, 1),
-    ];
+    const items = [item("c", 500, 40, 2), item("a", 200, 40, 0), item("b", 350, 40, 1)];
     const result = layoutCommentRail(items, VIEWPORT);
-    expect(result.visible.map((v) => v.id)).toEqual(["a", "b", "c"]);
+    expect(result.placed.map((v) => v.id)).toEqual(["a", "b", "c"]);
   });
 
   it("2. overlapping cards are pushed down to previous top + height + gap", () => {
@@ -30,247 +39,111 @@ describe("layoutCommentRail", () => {
     //    90 + 8 = 98.
     const items = [item("a", 150, 40, 0), item("b", 160, 40, 1)];
     const result = layoutCommentRail(items, VIEWPORT);
-    const a = result.visible.find((v) => v.id === "a")!;
-    const b = result.visible.find((v) => v.id === "b")!;
-    expect(a.top).toBe(50);
-    expect(b.top).toBe(a.top + 40 + 8);
+    expect(topOf(result, "a")).toBe(50);
+    expect(topOf(result, "b")).toBe(50 + 40 + 8);
   });
 
-  it("3. anchors only slightly above the pane clamp to top 0, and consecutive ones stack from there", () => {
-    // Both anchors sit above paneTop=100 (relative anchor negative), but only
-    // by less than their own height (40) — a small overshoot, not a card
-    // scrolled fully out of view (that's case 5) — so both still clamp to 0
-    // and stack.
-    const items = [item("a", 80, 40, 0), item("b", 90, 40, 1)];
+  it("3. a card whose anchor is above the pane keeps its own (negative) top instead of clamping to 0 (#338)", () => {
+    // The old clamp parked a scrolled-past card at the pane's top edge, in
+    // front of whatever paragraph was actually on screen.
+    const items = [item("a", 80, 40, 0), item("b", 300, 40, 1)];
     const result = layoutCommentRail(items, VIEWPORT);
-    const a = result.visible.find((v) => v.id === "a")!;
-    const b = result.visible.find((v) => v.id === "b")!;
-    expect(a.top).toBe(0);
-    expect(b.top).toBe(40 + 8);
-    expect(result.aboveCount).toBe(0);
+    expect(topOf(result, "a")).toBe(-20);
+    expect(topOf(result, "b")).toBe(200);
   });
 
-  it("4. a card that doesn't fit before the pane's bottom is not rendered and counts as belowCount", () => {
-    // a fits at top 0..560. b's natural anchor (relative 580) would need
-    // 580..620, past paneHeight=600.
-    const items = [item("a", 100, 560, 0), item("b", 680, 40, 1)];
+  it("4. a card that runs past the pane's bottom is still placed, not counted away (#338)", () => {
+    // The case that used to become 下に 1 件: the anchor is on screen, the
+    // card just doesn't end before the pane does.
+    const items = [item("a", 650, 114, 0)];
     const result = layoutCommentRail(items, VIEWPORT);
-    expect(result.visible.map((v) => v.id)).toEqual(["a"]);
-    expect(result.belowCount).toBe(1);
-    expect(result.aboveCount).toBe(0);
+    expect(result.placed).toEqual([{ id: "a", top: 550, maxHeight: 114 }]);
+    expect(result.bottom).toBe(664);
   });
 
-  it("5. a card scrolled fully above the pane is dropped straight to aboveCount, without clamping/stacking in front of cards actually on screen", () => {
-    // a: relative -20 (paneTop=100 → anchorTop=80), height 40 — only
-    //    partially above (case 3's small-overshoot territory) → clamps to
-    //    top 0 and stacks normally.
-    // b: relative -500, height 280 — its whole box sits above the pane
-    //    (relativeAnchor <= -height) → must NOT clamp to 0 and steal the
-    //    rail from a paragraph that's actually visible; counts as
-    //    aboveCount and leaves `cursor` untouched.
-    // c: relative 200, height 40 — comfortably inside the pane; must land
-    //    at its own anchor (200), not get pushed down by b piling onto 0.
-    const items = [
-      item("a", 80, 40, 0),
-      item("b", -400, 280, 1),
-      item("c", 300, 40, 2),
-    ];
-    const result = layoutCommentRail(items, VIEWPORT);
-    expect(result.visible).toEqual([
-      { id: "a", top: 0, maxHeight: 40 },
-      { id: "c", top: 200, maxHeight: 40 },
-    ]);
-    expect(result.aboveCount).toBe(1);
-    expect(result.belowCount).toBe(0);
+  it("5. stacking is the same at every scroll position: shifting every anchor by d shifts every top by d (#338)", () => {
+    const anchors = [
+      ["a", 120, 90],
+      ["b", 150, 60],
+      ["c", 160, 200],
+      ["d", 900, 40],
+    ] as const;
+    const at = (d: number) =>
+      layoutCommentRail(
+        anchors.map(([id, top, h], i) => item(id, top + d, h, i)),
+        VIEWPORT
+      );
+    const base = at(0);
+    for (const d of [-700, -250, 0, 333]) {
+      const shifted = at(d);
+      expect(shifted.placed.map((p) => p.top - d)).toEqual(base.placed.map((p) => p.top));
+      expect((shifted.bottom as number) - d).toBe(base.bottom);
+    }
   });
 
-  it("6. cards with anchorTop null are excluded, not counted in visible/above/below", () => {
+  it("6. cards with anchorTop null are excluded and never placed", () => {
     const items = [item("a", 100, 40, 0), item("orphan", null, 40, 1)];
     const result = layoutCommentRail(items, VIEWPORT);
-    expect(result.visible.map((v) => v.id)).toEqual(["a"]);
+    expect(result.placed.map((v) => v.id)).toEqual(["a"]);
     expect(result.excluded).toEqual(["orphan"]);
-    expect(result.aboveCount).toBe(0);
-    expect(result.belowCount).toBe(0);
   });
 
-  it("7. empty input returns zeroed counts without throwing", () => {
-    expect(() => layoutCommentRail([], VIEWPORT)).not.toThrow();
-    const result = layoutCommentRail([], VIEWPORT);
-    expect(result).toEqual({
-      visible: [],
-      aboveCount: 0,
-      belowCount: 0,
-      aboveIds: [],
-      belowIds: [],
+  it("7. empty input returns an empty layout without throwing", () => {
+    expect(layoutCommentRail([], VIEWPORT)).toEqual({
+      placed: [],
+      bottom: null,
       excluded: [],
     });
   });
 
-  it("8. a lone card taller than the pane is placed at top 0 and shrunk to the pane's height", () => {
-    // 900px is already clamped to RAIL_CARD_MAX_HEIGHT (320) before it ever
-    // reaches the pane check, so the pane itself has to be shorter than that
-    // for a lone card to still overflow it.
-    const shortPane = { paneTop: 100, paneHeight: 200 };
-    const items = [item("a", 100, 900, 0)];
-    const result = layoutCommentRail(items, shortPane);
-    expect(result.visible).toEqual([{ id: "a", top: 0, maxHeight: 200 }]);
-    expect(result.aboveCount).toBe(0);
-    expect(result.belowCount).toBe(0);
-  });
-
-  it("9. a genuinely measured but too-small pane never emits a maxHeight: 0-or-sliver card (#301)", () => {
-    // paneHeight: 1 is a *measured* value (not the `0` used for "hasn't been
-    // measured yet" — see case 12's note), so the too-small-to-read guard
-    // applies: before #301's fix, the lone-card shrink-to-fit branch (case
-    // 8) would still fire here — fitHeight = max(0, 1 - 0) = 1 — and a card
-    // clamped to `maxHeight: 1` would be pushed into `visible`: invisible to
-    // the reviewer but reported as "shown". It must instead be treated as
-    // not fitting, same as any other card that can't fit before the pane's
-    // bottom edge.
-    const tinyPane = { paneTop: 100, paneHeight: 1 };
-    const items = [item("a", 100, 80, 0)];
-    const result = layoutCommentRail(items, tinyPane);
-    expect(result.visible).toEqual([]);
-    expect(result.belowCount).toBe(1);
-    expect(result.aboveCount).toBe(0);
-  });
-
-  it("10. a pane taller than 0 but still under the readable-card floor (RAIL_MIN_USABLE_HEIGHT) also drops the card instead of shrinking it to a sliver", () => {
-    // fitHeight would be 20px — technically > 0, but not enough to show
-    // anything a reviewer could read.
-    const sliverPane = { paneTop: 100, paneHeight: 20 };
-    const items = [item("a", 100, 80, 0)];
-    const result = layoutCommentRail(items, sliverPane);
-    expect(result.visible).toEqual([]);
-    expect(result.belowCount).toBe(1);
-  });
-
-  it("11. a pane exactly at the readable-card floor still shrinks the lone card into it", () => {
-    // fitHeight lands exactly at RAIL_MIN_USABLE_HEIGHT (40) — the floor is
-    // inclusive, so this still renders (case 8's behavior), just at the
-    // boundary.
-    const floorPane = { paneTop: 100, paneHeight: 40 };
-    const items = [item("a", 100, 80, 0)];
-    const result = layoutCommentRail(items, floorPane);
-    expect(result.visible).toEqual([{ id: "a", top: 0, maxHeight: 40 }]);
-    expect(result.belowCount).toBe(0);
-  });
-
-  it("12. a too-small measured pane classifies a card whose anchor sits above it as aboveCount, not belowCount", () => {
-    // relativeAnchor -20 (anchorTop 80, paneTop 100) is a small overshoot
-    // (case 3 territory), not "fully above" (case 5) — so it still reaches
-    // the fit-check, fails it under a too-small pane, and must fall back to
-    // the same anchor-position classification as any other non-fitting
-    // card: `relativeAnchor < 0` → aboveCount.
-    const tinyPane = { paneTop: 100, paneHeight: 1 };
-    const items = [item("a", 80, 40, 0)];
-    const result = layoutCommentRail(items, tinyPane);
-    expect(result.visible).toEqual([]);
-    expect(result.aboveCount).toBe(1);
-    expect(result.belowCount).toBe(0);
-  });
-
-  it("13. paneHeight 0 (not yet measured — see case 9's note) keeps the pre-#301 shrink-to-0 placeholder instead of dropping the card", () => {
-    // Distinct from case 9/12: `paneHeight === 0` is what callers pass
-    // before the pane's first real measurement lands (post-paint, via
-    // ResizeObserver/rAF), not a persistently collapsed pane — that
-    // persistent-collapse bug is fixed at the CSS layer (#301), so by the
-    // time this function ever sees a real measurement it won't be 0. This
-    // transient state keeps rendering a single zero-height placeholder card
-    // (as before #301) rather than being reclassified as above/below.
-    const unmeasuredPane = { paneTop: 100, paneHeight: 0 };
-    const items = [item("a", 100, 80, 0)];
-    const result = layoutCommentRail(items, unmeasuredPane);
-    expect(result.visible).toEqual([{ id: "a", top: 0, maxHeight: 0 }]);
-    expect(result.belowCount).toBe(0);
-    expect(result.aboveCount).toBe(0);
-  });
-
-  it("14. insetTop keeps cards out of the top edge (the 上に N 件 button) — an anchor inside it is pushed below (#330)", () => {
-    // a: anchor 110 → relative 10, inside the 34px top inset → placed at 34.
-    // b: anchor 300 → relative 200, clear of the inset → stays aligned.
-    const items = [item("a", 110, 40, 0), item("b", 300, 40, 1)];
-    const result = layoutCommentRail(items, { ...VIEWPORT, insetTop: 34 });
-    expect(result.visible).toEqual([
-      { id: "a", top: 34, maxHeight: 40 },
-      { id: "b", top: 200, maxHeight: 40 },
-    ]);
-  });
-
-  it("15. insetBottom keeps cards out of the bottom edge (the 下に N 件 button) — a card that would end inside it is counted below (#330)", () => {
-    // a: relative 100, occupies 100..140 — fits.
-    // b: relative 540, would occupy 540..580: fits in 600 but crosses the
-    //    bottom inset's edge at 600-34 = 566 → counted below instead.
-    const items = [item("a", 200, 40, 0), item("b", 640, 40, 1)];
-    expect(layoutCommentRail(items, VIEWPORT).belowCount).toBe(0);
-    const result = layoutCommentRail(items, { ...VIEWPORT, insetBottom: 34 });
-    expect(result.visible.map((v) => v.id)).toEqual(["a"]);
-    expect(result.belowCount).toBe(1);
-  });
-
-  it("16. a lone card shrinks to the space between the insets, not to the pane's raw height (#330)", () => {
-    // 300px card (under RAIL_CARD_MAX_HEIGHT) in a 200px pane: 34..166 is
-    // what's left between the two insets.
-    const items = [item("a", 100, 300, 0)];
-    const result = layoutCommentRail(items, {
-      paneTop: 100,
-      paneHeight: 200,
-      insetTop: 34,
-      insetBottom: 34,
+  it("8. a card taller than the cap is allotted RAIL_CARD_MAX_HEIGHT, and the next one stacks below the cap", () => {
+    const items = [item("a", 100, 900, 0), item("b", 110, 40, 1)];
+    const result = layoutCommentRail(items, VIEWPORT);
+    expect(result.placed[0]).toEqual({
+      id: "a",
+      top: 0,
+      maxHeight: RAIL_CARD_MAX_HEIGHT,
     });
-    expect(result.visible).toEqual([{ id: "a", top: 34, maxHeight: 200 - 34 - 34 }]);
+    expect(topOf(result, "b")).toBe(RAIL_CARD_MAX_HEIGHT + 8);
+  });
+
+  it("9. every card near the document's end is placed, however many share the last lines (#338)", () => {
+    // Was: one card shown, the rest 下に N 件 with no scroll left to reach them.
+    const items = [
+      item("x1", 1010, 114, 0),
+      item("x2", 1043, 114, 1),
+      item("y1", 1043, 114, 2),
+      item("y2", 1043, 114, 3),
+    ];
+    const result = layoutCommentRail(items, { paneTop: 70 });
+    expect(result.placed.map((p) => p.id)).toEqual(["x1", "x2", "y1", "y2"]);
+    expect(result.placed.map((p) => p.top)).toEqual([940, 1062, 1184, 1306]);
+    expect(result.bottom).toBe(1306 + 114);
   });
 });
 
-describe("layoutCommentRailWithEdgeButtons (#330)", () => {
-  const INSET = 34;
-
-  /** No visible card may reach into the strip under a rendered button. */
-  function expectNoCardUnderButtons(
-    result: ReturnType<typeof layoutCommentRail>,
-    paneHeight: number
-  ) {
-    for (const v of result.visible) {
-      if (result.aboveCount > 0) expect(v.top).toBeGreaterThanOrEqual(INSET);
-      if (result.belowCount > 0) expect(v.top + v.maxHeight).toBeLessThanOrEqual(paneHeight - INSET);
-    }
-  }
-
-  it("reports which items went above / below, not just how many (#332)", () => {
-    // a: fully above the pane; c: far below it.
-    const items = [item("a", -500, 40, 0), item("b", 300, 40, 1), item("c", 100_000, 40, 2)];
-    const result = layoutCommentRail(items, VIEWPORT);
-    expect(result.aboveIds).toEqual(["a"]);
-    expect(result.belowIds).toEqual(["c"]);
-    expect(result.aboveCount).toBe(1);
-    expect(result.belowCount).toBe(1);
+describe("layoutCommentRail minTop (#338)", () => {
+  it("starts the stack no higher than minTop, so the first card's header isn't clipped", () => {
+    // The pane starts 17px below the anchor (a badge row above the rail).
+    const result = layoutCommentRail([item("a", 120, 40, 0), item("b", 300, 40, 1)], {
+      paneTop: 137,
+      minTop: 0,
+    });
+    expect(topOf(result, "a")).toBe(0);
+    expect(topOf(result, "b")).toBe(163);
   });
 
-  it("returns the plain layout untouched when no button renders", () => {
-    const items = [item("a", 150, 40, 0), item("b", 300, 40, 1)];
-    expect(layoutCommentRailWithEdgeButtons(items, VIEWPORT, INSET)).toEqual(
-      layoutCommentRail(items, VIEWPORT)
-    );
+  it("leaves cards alone when their anchors already sit below minTop", () => {
+    const result = layoutCommentRail([item("a", 300, 40, 0)], { ...VIEWPORT, minTop: 50 });
+    expect(topOf(result, "a")).toBe(200);
   });
+});
 
-  it("reserves the top edge too when reserving the bottom makes the 上に button appear", () => {
-    // First pass: below=1 only. Reserving the bottom pushes b off the pane;
-    // its anchor is slightly above, so it's counted above — a top button
-    // appears that the first pass didn't know about.
-    const items = [item("a", -20, 80, 0), item("b", -10, 80, 1), item("c", 190, 80, 2)];
-    const viewport = { paneTop: 0, paneHeight: 200 };
-    const result = layoutCommentRailWithEdgeButtons(items, viewport, INSET);
-    expect(result.aboveCount).toBeGreaterThan(0);
-    expect(result.belowCount).toBeGreaterThan(0);
-    expectNoCardUnderButtons(result, 200);
-  });
-
-  it("reserves the bottom edge too when reserving the top makes the 下に button appear", () => {
-    const items = [item("a", -100, 80, 0), item("b", 0, 160, 1), item("c", 168, 30, 2)];
-    const viewport = { paneTop: 0, paneHeight: 200 };
-    const result = layoutCommentRailWithEdgeButtons(items, viewport, INSET);
-    expect(result.aboveCount).toBeGreaterThan(0);
-    expect(result.belowCount).toBeGreaterThan(0);
-    expectNoCardUnderButtons(result, 200);
+describe("isPlacedInPane", () => {
+  it("is true for a card overlapping the pane at all, false only when it sits fully outside", () => {
+    expect(isPlacedInPane({ id: "a", top: -39, maxHeight: 40 }, PANE_HEIGHT)).toBe(true);
+    expect(isPlacedInPane({ id: "a", top: -40, maxHeight: 40 }, PANE_HEIGHT)).toBe(false);
+    expect(isPlacedInPane({ id: "a", top: 599, maxHeight: 40 }, PANE_HEIGHT)).toBe(true);
+    expect(isPlacedInPane({ id: "a", top: 600, maxHeight: 40 }, PANE_HEIGHT)).toBe(false);
   });
 });

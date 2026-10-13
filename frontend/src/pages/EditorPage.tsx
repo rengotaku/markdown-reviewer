@@ -39,6 +39,7 @@ import {
   DiffView,
   NameTooltip,
 } from "@/components";
+import type { DocBox } from "@/components/CommentSidePane";
 import { useOpenFiles } from "@/hooks/useOpenFiles";
 import { useRecentOpened } from "@/hooks/useRecentOpened";
 import { useReadFile, useWriteFile } from "@/hooks/useFileContent";
@@ -1503,6 +1504,16 @@ export function EditorPage() {
   // against (#298). Comments with no live anchor (global/orphan) never get an
   // entry and stay in the pane's pinned section.
   const [anchorTops, setAnchorTops] = useState<Record<string, number>>({});
+  // The editor's document root (viewport top/bottom) and the body's scroll
+  // position, measured alongside anchorTops so the rail can keep its first
+  // card clear of the pane's top and tell how far it reaches past the end
+  // (#338).
+  const [docBox, setDocBox] = useState<DocBox | null>(null);
+  // How many px the aligned rail reaches past that end — the height of
+  // TiptapEditor's bottom spacer, so the body scrolls far enough for the last
+  // card to come into view (#338).
+  const [railOverhang, setRailOverhang] = useState(0);
+  const railOverhangs = railOverhang > 0;
   // Ids of anchored comments whose anchor does not resolve in the live
   // document, so the pane can show them as 位置不明 instead of dropping them
   // (#328). Empty while the document isn't ready to be judged against — see
@@ -1574,6 +1585,22 @@ export function EditorPage() {
     // trigger) when nothing actually moved — a `transaction` fires on every
     // keystroke/selection change, most of which don't shift any decoration.
     setAnchorTops((prev) => (shallowEqualRecord(prev, next) ? prev : next));
+    // The root, not the spacer below it: the spacer is what absorbs the
+    // overhang, so measuring it would feed back into its own height.
+    const rootRect = root.getBoundingClientRect();
+    const box: DocBox = {
+      top: rootRect.top,
+      bottom: rootRect.bottom,
+      scrollTop: findScrollableAncestor(root)?.scrollTop ?? 0,
+    };
+    setDocBox((prev) =>
+      prev &&
+      prev.top === box.top &&
+      prev.bottom === box.bottom &&
+      prev.scrollTop === box.scrollTop
+        ? prev
+        : box
+    );
     setUnresolvedIds((prev) => (sameIdSet(prev, unresolved) ? prev : unresolved));
   };
   // #306 root cause: `scheduleAnchorRecalc` coalesces bursts of triggers onto
@@ -1633,6 +1660,11 @@ export function EditorPage() {
     // `parentElement`. Listening there instead of capturing every `scroll`
     // in the document keeps this from re-running on unrelated scrolling
     // elsewhere in the app (menus, listboxes, ...).
+    //
+    // #338: re-run when the rail starts or stops reaching past the
+    // document's end. A document too short to scroll has no scroll container
+    // to find, and it is TiptapEditor's bottom spacer, sized from that
+    // overhang, that first makes it scroll — after this effect already ran.
     const scrollEl = findScrollableAncestor(editor.view.dom);
     scrollEl?.addEventListener("scroll", onScrollOrResize);
     window.addEventListener("resize", onScrollOrResize);
@@ -1640,7 +1672,7 @@ export function EditorPage() {
       scrollEl?.removeEventListener("scroll", onScrollOrResize);
       window.removeEventListener("resize", onScrollOrResize);
     };
-  }, [editor, centered]);
+  }, [editor, centered, railOverhangs]);
   useEffect(() => {
     return () => {
       if (anchorRafRef.current !== null) cancelAnimationFrame(anchorRafRef.current);
@@ -3244,7 +3276,14 @@ export function EditorPage() {
           </MenuItem>
         </Menu>
 
-        <Box sx={{ flex: 1, minHeight: 0 }}>
+        <Box
+          sx={{
+            flex: 1,
+            minHeight: 0,
+            // #338: read by TiptapEditor's bottom spacer.
+            "--rail-overhang": `${railOverhang}px`,
+          }}
+        >
           {activeFile && diffMode ? (
             <DiffView
               oldText={diffBaseText}
@@ -3306,6 +3345,8 @@ export function EditorPage() {
           onSelect={handleSelectComment}
           selectedId={railSelectedId}
           anchorTops={anchorTops}
+          docBox={docBox}
+          onRailOverhangChange={setRailOverhang}
           unresolvedIds={unresolvedIds}
           railMode={commentRailMode}
           onRailModeChange={setCommentRailMode}

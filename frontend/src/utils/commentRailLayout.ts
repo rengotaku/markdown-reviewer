@@ -2,22 +2,15 @@
 export const RAIL_GAP = 8;
 
 /** A single card's height is capped so one long thread can't push every
- *  other card off the rail; the card scrolls inside itself past this. */
+ *  other card far from its paragraph; the card scrolls inside itself past
+ *  this. */
 export const RAIL_CARD_MAX_HEIGHT = 320;
-
-/** Below this allotted height a shrunk card wouldn't show anything readable
- *  (a header row and maybe half a line) — not worth rendering as `visible`.
- *  Guards against a pane whose own box has collapsed to (near) 0 height
- *  (e.g. a large pinned section above it pushed it out): without this floor
- *  the lone-card shrink-to-fit branch below would still emit a card clamped
- *  to `maxHeight: 0`, which looks to the reviewer like the comment vanished
- *  rather than "not enough room, jump to see it". */
-export const RAIL_MIN_USABLE_HEIGHT = 40;
 
 export interface RailItem {
   id: string;
   /** Highlight's viewport top, or null for comments with no live anchor
-   *  (global scope, orphan) — those never reach the rail (#298). */
+   *  (global scope, orphan, or not measured yet) — those never reach the
+   *  rail (#298). */
   anchorTop: number | null;
   /** Measured card height (pre-clamp). */
   height: number;
@@ -29,39 +22,34 @@ export interface RailViewport {
   /** Pane's own viewport top, so `anchorTop` (viewport-absolute) can be
    *  turned into a top relative to the pane. */
   paneTop: number;
-  paneHeight: number;
+  /** Highest top (relative to the pane) any card may take; the first card
+   *  starts no higher than this. Lets the caller keep the top of the
+   *  document's first card clear of whatever sits above the rail (#338).
+   *  Unbounded when omitted. */
+  minTop?: number;
   /** Defaults to RAIL_GAP. */
   gap?: number;
-  /** Space kept free at the pane's top / bottom edge, where the
-   *  "上に N 件" / "下に N 件" button sits on top of the rail (#330: a card
-   *  placed there had its header covered). Both default to 0. */
-  insetTop?: number;
-  insetBottom?: number;
 }
 
 export interface RailPlacedItem {
   id: string;
-  /** Top, relative to the pane's own box (`position: relative`). */
+  /** Top, relative to the pane's own box (`position: relative`). Negative or
+   *  past the pane's height when the card sits outside the scrolled-to
+   *  range — the pane clips it, and scrolling the body brings it in. */
   top: number;
-  /** Height the card is allotted (min(measured, RAIL_CARD_MAX_HEIGHT), further
-   *  shrunk only when a lone leading card would otherwise overflow the pane). */
+  /** Height the card is allotted: min(measured, RAIL_CARD_MAX_HEIGHT). */
   maxHeight: number;
 }
 
 export interface RailLayoutResult {
-  visible: RailPlacedItem[];
-  /** Cards pushed out above the pane (their target sits above the current
-   *  scroll position) — jump up to see them. */
-  aboveCount: number;
-  /** Cards that don't fit before the pane's bottom edge — jump down. */
-  belowCount: number;
-  /** The ids behind `aboveCount` / `belowCount`, so a caller whose items
-   *  stand for several comments each (#332's icon groups) can count the
-   *  comments rather than the items. */
-  aboveIds: string[];
-  belowIds: string[];
-  /** Comments with no anchor (`anchorTop === null`): never placed, never
-   *  counted above/below. They stay in the pinned section instead. */
+  /** Every anchored item, in document order. */
+  placed: RailPlacedItem[];
+  /** Bottom edge of the last placed card, relative to the pane — how far
+   *  down the rail reaches, so the caller can make the body scroll at least
+   *  that far (#338). null when nothing is placed. */
+  bottom: number | null;
+  /** Comments with no anchor (`anchorTop === null`): never placed. They stay
+   *  in the pinned section instead. */
   excluded: string[];
 }
 
@@ -73,31 +61,21 @@ export interface RailLayoutResult {
  *
  * Cards are laid out in document order (`order`), each card's top pinned to
  * its anchor unless an earlier card's bottom edge would overlap it, in which
- * case it is pushed down to sit right below. A top clamped to 0 (anchor only
- * partially above the pane — its bottom edge would still land inside it) is
- * not itself a failure — several such cards stack from 0 same as any other
- * overlap. But a card whose whole height sits above the pane (its bottom
- * edge, unclamped, is still above the pane's top) never clamps or stacks at
- * all: it's dropped straight to `aboveCount` so it can't crowd out a card
- * for a paragraph that's actually on screen (#298 follow-up — the original
- * "clamp to 0" rule, meant for a small overshoot, was also swallowing
- * comments scrolled far out of view and pushing on-screen cards down by
- * however many of those had piled up at the top). A card only drops out of
- * `visible` when it truly can't fit before the pane's bottom edge; which
- * bucket (`aboveCount`/`belowCount`) it lands in is decided by where its own
- * (unclamped) anchor sits, not by where the stack pushed it.
+ * case it is pushed down to sit right below.
+ *
+ * Nothing is clamped to the pane or dropped for not fitting (#338). The rail
+ * used to be a viewport-sized box that hid whatever didn't fit behind
+ * "上に / 下に N 件"; a card for a paragraph near the end of the document
+ * could land there with no scroll position left to bring it in. Every card
+ * now gets a place in the body's coordinates, so the layout only shifts as a
+ * whole when the body scrolls (all anchors move by the same amount), and
+ * scrolling is what reveals a card that sits outside the pane.
  */
 export function layoutCommentRail(
   items: readonly RailItem[],
   viewport: RailViewport
 ): RailLayoutResult {
   const gap = viewport.gap ?? RAIL_GAP;
-  const { paneTop, paneHeight } = viewport;
-  const insetTop = viewport.insetTop ?? 0;
-  // The edge every card must end above. `paneHeight === 0` stays 0 so the
-  // not-yet-measured placeholder path below is unchanged.
-  const usableBottom = paneHeight === 0 ? 0 : paneHeight - (viewport.insetBottom ?? 0);
-
   const excluded: string[] = [];
   const anchored = items.filter((item) => {
     if (item.anchorTop === null) {
@@ -108,105 +86,27 @@ export function layoutCommentRail(
   });
   const ordered = [...anchored].sort((a, b) => a.order - b.order);
 
-  const visible: RailPlacedItem[] = [];
-  const aboveIds: string[] = [];
-  const belowIds: string[] = [];
-  let cursor = insetTop;
-  let placedAny = false;
-
+  const placed: RailPlacedItem[] = [];
+  let cursor = viewport.minTop ?? Number.NEGATIVE_INFINITY;
   for (const item of ordered) {
     const cardHeight = Math.min(item.height, RAIL_CARD_MAX_HEIGHT);
     // anchorTop is non-null here — this item survived the `excluded` filter.
-    const relativeAnchor = (item.anchorTop as number) - paneTop;
-
-    // The card's whole box sits above the pane's top edge (not just a small
-    // overshoot) — clamping this to top 0 would stack it in front of cards
-    // whose paragraphs are actually visible, pushing them down. Count it as
-    // scrolled-past instead, without touching `cursor`.
-    if (relativeAnchor <= -cardHeight) {
-      aboveIds.push(item.id);
-      continue;
-    }
-
-    const isFirstVisible = !placedAny;
-    const top = Math.max(relativeAnchor, cursor, insetTop);
-
-    if (top + cardHeight > usableBottom) {
-      // Nothing above it is claiming space, so there's no better place to put
-      // it: shrink it to the pane instead of dropping it entirely (#298's
-      // "単体でペイン高さを超えるカードは top 0 で置き").
-      if (isFirstVisible) {
-        // `paneHeight === 0` is the pane's own not-yet-measured state (its
-        // box is measured post-paint via ResizeObserver/rAF — callers pass
-        // `{ top: 0, height: 0 }` until the first measurement lands) rather
-        // than a genuinely collapsed pane, so it keeps the pre-#301
-        // shrink-to-0 behavior: a harmless single-frame placeholder that
-        // gets corrected as soon as the real measurement arrives. Once
-        // `paneHeight` reflects a real (if too-small) measurement, though,
-        // shrinking a card below the readable floor is the actual bug this
-        // guards against.
-        const fitHeight = Math.max(0, usableBottom - top);
-        if (paneHeight === 0 || fitHeight >= RAIL_MIN_USABLE_HEIGHT) {
-          visible.push({ id: item.id, top, maxHeight: fitHeight });
-          cursor = top + fitHeight + gap;
-          placedAny = true;
-          continue;
-        }
-        // Not enough room to shrink into on a pane that HAS been measured —
-        // fall through to the same above/below classification as the
-        // non-first-visible case below, instead of rendering a card the
-        // reviewer can't actually read.
-      }
-      // relativeAnchor here is > -cardHeight (else it would have been
-      // caught by the fully-above-the-pane check above), so `< 0` only
-      // covers the small-overshoot case, not "scrolled far out of view".
-      if (relativeAnchor < 0) {
-        aboveIds.push(item.id);
-      } else {
-        belowIds.push(item.id);
-      }
-      continue;
-    }
-
-    visible.push({ id: item.id, top, maxHeight: cardHeight });
+    const top = Math.max((item.anchorTop as number) - viewport.paneTop, cursor);
+    placed.push({ id: item.id, top, maxHeight: cardHeight });
     cursor = top + cardHeight + gap;
-    placedAny = true;
   }
 
+  const last = placed[placed.length - 1];
   return {
-    visible,
-    aboveCount: aboveIds.length,
-    belowCount: belowIds.length,
-    aboveIds,
-    belowIds,
+    placed,
+    bottom: last ? last.top + last.maxHeight : null,
     excluded,
   };
 }
 
-/**
- * layoutCommentRail, with the edge under each rendered "上に / 下に N 件"
- * button kept free of cards (#330: a card placed there lost its header under
- * the button). An edge is reserved only once its button actually renders, so
- * a rail with nothing scrolled past above keeps its first card aligned to its
- * paragraph. Reserving one edge can make the *other* edge's button appear (a
- * card pushed off the bottom, or a slightly-above card that no longer fits
- * now counted above), so this re-runs until the reserved edges stop changing.
- * Reserving space never lets a dropped card back in, so counts only grow,
- * edges are only ever added, and it settles within three passes.
- */
-export function layoutCommentRailWithEdgeButtons(
-  items: readonly RailItem[],
-  viewport: Omit<RailViewport, "insetTop" | "insetBottom">,
-  buttonInset: number
-): RailLayoutResult {
-  let insetTop = 0;
-  let insetBottom = 0;
-  for (;;) {
-    const result = layoutCommentRail(items, { ...viewport, insetTop, insetBottom });
-    const nextTop = result.aboveCount > 0 ? buttonInset : insetTop;
-    const nextBottom = result.belowCount > 0 ? buttonInset : insetBottom;
-    if (nextTop === insetTop && nextBottom === insetBottom) return result;
-    insetTop = nextTop;
-    insetBottom = nextBottom;
-  }
+/** Whether a placed card overlaps the pane's visible range at all. Cards
+ *  outside it stay mounted (so their measured heights keep feeding the
+ *  stacking above) but are hidden from view and from keyboard focus. */
+export function isPlacedInPane(placed: RailPlacedItem, paneHeight: number): boolean {
+  return placed.top < paneHeight && placed.top + placed.maxHeight > 0;
 }

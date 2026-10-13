@@ -615,45 +615,79 @@ describe("CommentSidePane rail (#298)", () => {
     expect(screen.getByTestId("comment-rail-aligned")).toBeInTheDocument();
   });
 
-  it("a card the rail can't fit is dropped and counted, and jumping from the count uses onJump", async () => {
-    // Root cause of a CI-only flake (rengotaku/markdown-reviewer#305 PR CI):
-    // this file's beforeEach stubs getBoundingClientRect to a *tall* pane
-    // (4000px, so the earlier multi-card tests in this file can measure more
-    // than one card at once — see the stub's own comment above). That stub
-    // also applies to *this* test's rail container. The rail measures its
-    // own box asynchronously (rAF, in AlignedCommentRail's
-    // scheduleMeasurePane) — the very first paint still reflects the
-    // pre-measurement state (paneHeight 0), so a `500`-anchored second card
-    // doesn't fit yet and "below" renders. But once that rAF fires and
-    // remeasures against the 4000px stub, `c2` *does* fit inside a 4000px
-    // pane and the whole "below" section unmounts. Locally the click landed
-    // before that remeasure; under CI's slower/differently-scheduled
-    // event loop the remeasure won, and `await user.click(below)` clicked a
-    // detached node — no handler fires, `onJump` is never called (reproduced
-    // deterministically here by running this test in isolation, which
-    // removes whatever incidental timing the full-suite run relies on: 5/5
-    // isolated runs failed at this exact assertion before the fix below).
-    //
-    // The fix makes the "doesn't fit" outcome true regardless of *which*
-    // pane height (the stale 0 or the remeasured 4000) is in effect: c2's
-    // anchor sits far below either one, so `belowCount` stays 1 whichever
-    // measurement wins the race — the flake is eliminated at the source
-    // instead of being timed around.
-    const user = userEvent.setup();
-    const h = renderPane({
+  it("a card past the pane's bottom stays mounted but hidden, with no 上に / 下に N 件 count (#338)", async () => {
+    // The pane stub is 4000px tall from top 0, so c2's anchor at 100_000 sits
+    // far below it. It used to be dropped behind 下に 1 件; now every card is
+    // placed and the body is scrolled to reach it.
+    renderPane({
       anchorTops: { c1: 0, c2: 100_000 },
       comments: [comment("c1"), comment("c2")],
     });
     const rail = screen.getByTestId("comment-rail-aligned");
-    expect(within(rail).getAllByTestId("comment-item")).toHaveLength(1);
-    // Re-queried from `screen` right before the click (rather than reusing
-    // the `below` reference from the assertion above) so a re-render between
-    // the two would still click the live node, not a detached one.
     await waitFor(() => {
-      expect(screen.getByTestId("comment-rail-below")).toHaveTextContent("下に 1 件");
+      const cards = within(rail).getAllByTestId("comment-rail-card");
+      expect(cards.map((c) => c.dataset.commentId)).toEqual(["c1", "c2"]);
+      expect(cards[0]).toBeVisible();
+      expect(cards[1]).not.toBeVisible();
     });
-    await user.click(screen.getByTestId("comment-rail-below"));
-    await waitFor(() => expect(h.onJump).toHaveBeenCalledWith("c2"));
+    expect(screen.queryByTestId("comment-rail-below")).toBeNull();
+    expect(screen.queryByTestId("comment-rail-above")).toBeNull();
+  });
+
+  it("reports how far the rail reaches past the document's end, and 0 once nothing overhangs (#338)", async () => {
+    const onRailOverhangChange = vi.fn();
+    const props = {
+      anchorTops: { c1: 400 },
+      comments: [comment("c1")],
+      onRailOverhangChange,
+    };
+    const { rerender } = render(
+      <CommentSidePane
+        root="works"
+        filePath="doc.md"
+        reviewActive
+        canAddComment
+        onRefresh={vi.fn()}
+        onAddComment={vi.fn()}
+        onAddGlobal={vi.fn()}
+        onDelete={vi.fn()}
+        onResolveToggle={vi.fn()}
+        onReply={vi.fn()}
+        onEdit={vi.fn()}
+        onEditReply={vi.fn()}
+        onDeleteReply={vi.fn()}
+        onJump={vi.fn()}
+        onSelect={vi.fn()}
+        docBox={{ top: 0, bottom: 420, scrollTop: 0 }}
+        {...props}
+      />
+    );
+    // The card starts at the document's last line (400) and runs past its end
+    // (420) by its own height (no ResizeObserver in jsdom, so the 96px
+    // placeholder) plus the gap: 400 + 96 + 8 - 420 = 84.
+    await waitFor(() => expect(onRailOverhangChange).toHaveBeenLastCalledWith(84));
+    rerender(
+      <CommentSidePane
+        root="works"
+        filePath="doc.md"
+        reviewActive
+        canAddComment
+        onRefresh={vi.fn()}
+        onAddComment={vi.fn()}
+        onAddGlobal={vi.fn()}
+        onDelete={vi.fn()}
+        onResolveToggle={vi.fn()}
+        onReply={vi.fn()}
+        onEdit={vi.fn()}
+        onEditReply={vi.fn()}
+        onDeleteReply={vi.fn()}
+        onJump={vi.fn()}
+        onSelect={vi.fn()}
+        docBox={{ top: 0, bottom: 2000, scrollTop: 0 }}
+        {...props}
+      />
+    );
+    await waitFor(() => expect(onRailOverhangChange).toHaveBeenLastCalledWith(0));
   });
 });
 
@@ -1091,7 +1125,7 @@ describe("CommentSidePane icon mode (#332)", () => {
     );
   });
 
-  it("counts comments, not icons, in 下に N 件", async () => {
+  it("an icon below the pane stays mounted but hidden, with no 下に N 件 count (#338)", async () => {
     // c2+c3 share a line far below the pane: one icon, two comments.
     renderPane({
       comments: [comment("c1"), comment("c2"), comment("c3")],
@@ -1099,9 +1133,12 @@ describe("CommentSidePane icon mode (#332)", () => {
       railMode: "icons",
       onRailModeChange: vi.fn(),
     });
-    await waitFor(() =>
-      expect(screen.getByTestId("comment-rail-below")).toHaveTextContent("下に 2 件")
-    );
+    await waitFor(() => {
+      const icons = screen.getAllByTestId("comment-rail-icon");
+      expect(icons.map((el) => el.dataset.commentIds)).toEqual(["c1", "c2 c3"]);
+      expect(icons[1]).not.toBeVisible();
+    });
+    expect(screen.queryByTestId("comment-rail-below")).toBeNull();
   });
 
   /** Every element reports this pane height (the rail measures its own box). */
@@ -1133,31 +1170,32 @@ describe("CommentSidePane icon mode (#332)", () => {
     onRailModeChange: vi.fn(),
   });
 
-  it("下に N 件 jumps to the pushed-out comment even when an icon after it is still shown", async () => {
+  it("a selected card pushed past the pane's bottom pushes the icon after it down too (#338)", async () => {
     // a icon 180..208, b's card (96px default) pushed to 216..312 — past the
-    // bottom (300 minus the button inset) — while c's icon at 228 still fits.
-    // The visible entries (a, c) aren't a contiguous run of comments, so
-    // "the comment after the last visible one" doesn't exist; b is the target.
+    // pane's bottom (300). It used to drop to 下に 1 件 while c's icon stayed
+    // at 228, out of document order. Now b stays placed and c stacks below it.
     stubPaneHeight(300);
-    const user = userEvent.setup();
-    const h = renderPane({
+    renderPane({
       comments: [comment("a"), comment("b"), comment("c")],
       anchorTops: { a: 180, b: 204, c: 228 },
       railMode: "icons",
       onRailModeChange: vi.fn(),
       selectedId: "b",
     });
-    await waitFor(() =>
-      expect(screen.getByTestId("comment-rail-below")).toHaveTextContent("下に 1 件")
-    );
-    await user.click(screen.getByTestId("comment-rail-below"));
-    expect(h.onJump).toHaveBeenCalledWith("b");
+    await waitFor(() => {
+      const card = screen.getByTestId("comment-rail-card");
+      expect(card).toHaveAttribute("data-comment-id", "b");
+      expect(card).toBeVisible();
+      const icons = screen.getAllByTestId("comment-rail-icon");
+      expect(icons.map((el) => el.dataset.commentIds)).toEqual(["a", "c"]);
+      expect(icons[1]).not.toBeVisible();
+    });
+    expect(screen.queryByTestId("comment-rail-below")).toBeNull();
   });
 
   it("re-selecting a comment opens its card even if it was taller the last time it was open", async () => {
-    // The card's first measurement (320px, e.g. reply form open) would not
-    // fit under c1's icon in a 500px pane; its real height now is 150px.
-    // Kept, the stale 320 drops the card and it never mounts to re-measure.
+    // The card's first measurement was 320px (e.g. reply form open); its real
+    // height now is 150px. Re-selecting must mount it and measure afresh.
     stubPaneHeight(500);
     const reported = [320];
     class ReportingResizeObserver {
@@ -1205,17 +1243,13 @@ describe("CommentSidePane icon mode (#332)", () => {
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
     });
     expect(reported).toEqual([]); // c2's card mounted and was measured at 320
-    // Mounted at the default height, measured 320, then dropped as too tall.
-    await waitFor(() =>
-      expect(screen.getByTestId("comment-rail-below")).toHaveTextContent("下に 1 件")
-    );
     rerender(<CommentSidePane {...props} selectedId="c1" />);
     rerender(<CommentSidePane {...props} selectedId="c2" />);
     await waitFor(() => {
       const cards = screen.getAllByTestId("comment-rail-card");
       expect(cards.map((el) => el.dataset.commentId)).toEqual(["c2"]);
+      expect(cards[0]).toBeVisible();
     });
-    expect(screen.queryByTestId("comment-rail-below")).toBeNull();
   });
 
   it("opening an icon from the keyboard moves focus to the opened card", async () => {
@@ -1308,7 +1342,7 @@ describe("CommentSidePane drafts survive the card unmounting (#334)", () => {
     expect(screen.getByTestId("comment-edit-input")).toHaveValue("body of c1 追記");
   });
 
-  it("keeps a half-written reply when scrolling pushes the card out to 下に N 件 and back", async () => {
+  it("keeps a half-written reply while scrolling moves the card out of the pane and back (#338)", async () => {
     const user = userEvent.setup();
     const props = {
       ...baseProps(),
@@ -1316,21 +1350,25 @@ describe("CommentSidePane drafts survive the card unmounting (#334)", () => {
       selectedId: "c1",
       railMode: "aligned" as const,
     };
-    const { rerender } = render(<CommentSidePane {...props} anchorTops={{ c0: 0, c1: 200 }} />);
-    await waitFor(() => expect(screen.getByTestId("comment-reply-toggle")).toBeInTheDocument());
+    const { rerender } = render(
+      <CommentSidePane {...props} anchorTops={{ c0: 0, c1: 200 }} />
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("comment-reply-toggle")).toBeInTheDocument()
+    );
     await startReply(user, "スクロール前");
 
-    // Scrolled: c1's paragraph is now far below the pane.
+    // Scrolled: c1's paragraph is now far below the pane. The card leaves the
+    // visible range but stays mounted, form and all.
     rerender(<CommentSidePane {...props} anchorTops={{ c0: 0, c1: 100_000 }} />);
     await waitFor(() =>
-      expect(screen.getByTestId("comment-rail-below")).toHaveTextContent("下に 1 件")
+      expect(screen.getByTestId("comment-reply-input")).not.toBeVisible()
     );
-    expect(screen.queryByTestId("comment-reply-input")).toBeNull();
+    expect(screen.queryByTestId("comment-rail-below")).toBeNull();
 
     rerender(<CommentSidePane {...props} anchorTops={{ c0: 0, c1: 200 }} />);
-    await waitFor(() =>
-      expect(screen.getByTestId("comment-reply-input")).toHaveValue("スクロール前")
-    );
+    await waitFor(() => expect(screen.getByTestId("comment-reply-input")).toBeVisible());
+    expect(screen.getByTestId("comment-reply-input")).toHaveValue("スクロール前");
   });
 
   it("keeps a half-written reply when icon mode folds the card back into an icon", async () => {
