@@ -122,6 +122,23 @@ describe("layoutCommentRail", () => {
   });
 });
 
+describe("layoutCommentRail minTop (#338)", () => {
+  it("starts the stack no higher than minTop, so the first card's header isn't clipped", () => {
+    // The pane starts 17px below the anchor (a badge row above the rail).
+    const result = layoutCommentRail([item("a", 120, 40, 0), item("b", 300, 40, 1)], {
+      paneTop: 137,
+      minTop: 0,
+    });
+    expect(topOf(result, "a")).toBe(0);
+    expect(topOf(result, "b")).toBe(163);
+  });
+
+  it("leaves cards alone when their anchors already sit below minTop", () => {
+    const result = layoutCommentRail([item("a", 300, 40, 0)], { ...VIEWPORT, minTop: 50 });
+    expect(topOf(result, "a")).toBe(200);
+  });
+});
+
 describe("isPlacedInPane", () => {
   it("is true for a card overlapping the pane at all, false only when it sits fully outside", () => {
     expect(isPlacedInPane({ id: "a", top: -39, maxHeight: 40 }, PANE_HEIGHT)).toBe(true);

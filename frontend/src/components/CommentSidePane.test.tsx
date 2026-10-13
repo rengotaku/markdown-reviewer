@@ -658,7 +658,7 @@ describe("CommentSidePane rail (#298)", () => {
         onDeleteReply={vi.fn()}
         onJump={vi.fn()}
         onSelect={vi.fn()}
-        docEndTop={420}
+        docBox={{ top: 0, bottom: 420, scrollTop: 0 }}
         {...props}
       />
     );
@@ -683,7 +683,7 @@ describe("CommentSidePane rail (#298)", () => {
         onDeleteReply={vi.fn()}
         onJump={vi.fn()}
         onSelect={vi.fn()}
-        docEndTop={2000}
+        docBox={{ top: 0, bottom: 2000, scrollTop: 0 }}
         {...props}
       />
     );

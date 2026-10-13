@@ -22,6 +22,11 @@ export interface RailViewport {
   /** Pane's own viewport top, so `anchorTop` (viewport-absolute) can be
    *  turned into a top relative to the pane. */
   paneTop: number;
+  /** Highest top (relative to the pane) any card may take; the first card
+   *  starts no higher than this. Lets the caller keep the top of the
+   *  document's first card clear of whatever sits above the rail (#338).
+   *  Unbounded when omitted. */
+  minTop?: number;
   /** Defaults to RAIL_GAP. */
   gap?: number;
 }
@@ -82,7 +87,7 @@ export function layoutCommentRail(
   const ordered = [...anchored].sort((a, b) => a.order - b.order);
 
   const placed: RailPlacedItem[] = [];
-  let cursor = Number.NEGATIVE_INFINITY;
+  let cursor = viewport.minTop ?? Number.NEGATIVE_INFINITY;
   for (const item of ordered) {
     const cardHeight = Math.min(item.height, RAIL_CARD_MAX_HEIGHT);
     // anchorTop is non-null here — this item survived the `excluded` filter.

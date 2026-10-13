@@ -275,11 +275,12 @@ interface Props {
    *  measured from. A comment missing an entry here is treated as having no
    *  live anchor for layout purposes. */
   anchorTops?: Readonly<Record<string, number>>;
-  /** Viewport bottom (px) of the editor's document root, measured in the same
-   *  pass as `anchorTops` (#338). The aligned rail compares its own bottom
-   *  edge against it to tell how much further the body must scroll for the
-   *  last card to come into view. */
-  docEndTop?: number | null;
+  /** The editor's document root, measured in the same pass as `anchorTops`
+   *  (#338): its viewport `top` / `bottom` and the body's `scrollTop`. The
+   *  aligned rail keeps its first card below where the document starts at
+   *  rest, and compares its own bottom edge against `bottom` to tell how much
+   *  further the body must scroll for the last card to come into view. */
+  docBox?: DocBox | null;
   /** Reports how many px the aligned rail reaches past the end of the
    *  document (0 when it doesn't, or when the rail isn't shown), so the
    *  caller can extend the body's scroll range by that much (#338). */
@@ -299,6 +300,13 @@ interface Props {
 }
 
 type StatusFilter = "all" | "open" | "resolved";
+
+/** See the `docBox` prop. */
+export interface DocBox {
+  top: number;
+  bottom: number;
+  scrollTop: number;
+}
 
 /** Stable default for the optional `unresolvedIds` prop: a fresh `new Set()`
  *  in the parameter list would be a new identity every render and defeat the
@@ -367,7 +375,7 @@ export function CommentSidePane({
   onSelect,
   selectedId,
   anchorTops = {},
-  docEndTop = null,
+  docBox = null,
   onRailOverhangChange,
   unresolvedIds = EMPTY_IDS,
   railMode = "aligned",
@@ -737,7 +745,7 @@ export function CommentSidePane({
             comments={anchored}
             iconMode={railMode === "icons"}
             anchorTops={anchorTops}
-            docEndTop={docEndTop}
+            docBox={docBox}
             onOverhangChange={onRailOverhangChange}
             selectedId={selectedId ?? null}
             onSelect={onSelect}
@@ -1205,7 +1213,7 @@ interface AlignedRailProps {
   /** Anchored comments (no global/orphan), in document order. */
   comments: ReadonlyArray<CommentJSON>;
   anchorTops: Readonly<Record<string, number>>;
-  docEndTop: number | null;
+  docBox: DocBox | null;
   onOverhangChange?: (px: number) => void;
   selectedId: string | null;
   onSelect: (id: string) => void;
@@ -1228,7 +1236,7 @@ interface AlignedRailProps {
 function AlignedCommentRail({
   comments,
   anchorTops,
-  docEndTop,
+  docBox,
   onOverhangChange,
   selectedId,
   onSelect,
@@ -1367,19 +1375,29 @@ function AlignedCommentRail({
     [entries, anchorTops, cardHeights]
   );
 
+  // #338: cards move with the body, so nothing pins the first one to the
+  // pane's top edge any more. Where the rail starts lower than the document
+  // does (the global-comment badge row above it), a card for the document's
+  // first lines would sit partly above the pane even at scrollTop 0, its
+  // header cut off for good. Start the stack no higher than the document's
+  // top plus that difference, measured at rest so it scrolls with the body.
+  const minTop =
+    docBox === null
+      ? undefined
+      : docBox.top + Math.max(0, paneBox.top - (docBox.top + docBox.scrollTop)) - paneBox.top;
   const layout = useMemo(
-    () => layoutCommentRail(items, { paneTop: paneBox.top }),
-    [items, paneBox.top]
+    () => layoutCommentRail(items, { paneTop: paneBox.top, minTop }),
+    [items, paneBox.top, minTop]
   );
 
   // #338: how far the rail reaches past the document's end. Both edges come
-  // from the same measurement pass (anchorTops and docEndTop move together on
+  // from the same measurement pass (anchorTops and docBox move together on
   // scroll), so the difference holds still while the body scrolls and only
   // changes when a card or the document changes height.
   const overhang =
-    layout.bottom === null || docEndTop === null
+    layout.bottom === null || docBox === null
       ? 0
-      : Math.max(0, Math.ceil(paneBox.top + layout.bottom + RAIL_GAP - docEndTop));
+      : Math.max(0, Math.ceil(paneBox.top + layout.bottom + RAIL_GAP - docBox.bottom));
   useEffect(() => {
     onOverhangChange?.(overhang);
   }, [overhang, onOverhangChange]);
