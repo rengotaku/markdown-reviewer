@@ -48,7 +48,12 @@ import { contextLabel } from "@/utils/commentContext";
 import { isAiAuthored } from "@/utils/commentPresentation";
 import { CommentAuthor } from "./CommentAuthor";
 import { CommentId } from "./CommentId";
-import { layoutCommentRailWithEdgeButtons, type RailItem } from "@/utils/commentRailLayout";
+import {
+  isPlacedInPane,
+  layoutCommentRail,
+  RAIL_GAP,
+  type RailItem,
+} from "@/utils/commentRailLayout";
 import { groupIconRailEntries, type IconRailEntry } from "@/utils/commentIconGroups";
 import { GlobalCommentBadges, type GlobalBadgeKind } from "./GlobalCommentBadges";
 import { GlobalCommentsDialog } from "./GlobalCommentsDialog";
@@ -57,10 +62,6 @@ import { GlobalCommentsDialog } from "./GlobalCommentsDialog";
  *  (first paint, before its ResizeObserver fires) — enough to avoid every
  *  card starting stacked at the same spot before layout settles. */
 const RAIL_DEFAULT_CARD_HEIGHT = 96;
-
-/** Height of the rail's "上に / 下に N 件" button (0.75rem text + padding +
- *  border ≈ 28px) plus a little air, kept free of cards at that edge (#330). */
-const RAIL_EDGE_BUTTON_INSET = 34;
 
 /** Height of one icon in the rail's icon mode (#332). Fixed, so icons need
  *  no measurement: 18px icon + padding + border. */
@@ -274,6 +275,15 @@ interface Props {
    *  measured from. A comment missing an entry here is treated as having no
    *  live anchor for layout purposes. */
   anchorTops?: Readonly<Record<string, number>>;
+  /** Viewport bottom (px) of the editor's document root, measured in the same
+   *  pass as `anchorTops` (#338). The aligned rail compares its own bottom
+   *  edge against it to tell how much further the body must scroll for the
+   *  last card to come into view. */
+  docEndTop?: number | null;
+  /** Reports how many px the aligned rail reaches past the end of the
+   *  document (0 when it doesn't, or when the rail isn't shown), so the
+   *  caller can extend the body's scroll range by that much (#338). */
+  onRailOverhangChange?: (px: number) => void;
   /** Ids of anchored comments whose anchor the caller could not resolve in
    *  the live document (#328). The server's own `orphan` flag is computed
    *  from the raw markdown lines, so it can say "anchored" for a comment the
@@ -297,9 +307,9 @@ const EMPTY_IDS: ReadonlySet<string> = new Set();
 
 /** A card's half-written reply/edit and whether each form is open (#334).
  *  Held by CommentSidePane per comment, not in CommentCard's own state: a card
- *  unmounts whenever the aligned rail pushes it out to 上に / 下に N 件 on
- *  scroll, icon mode folds it back into an icon, or the rail mode is switched
- *  — and its useState went with it, dropping what was typed without a word. */
+ *  unmounts whenever icon mode folds it back into an icon, the status filter
+ *  hides it, or the rail mode is switched — and its useState went with it,
+ *  dropping what was typed without a word. */
 interface CardDraft {
   replyOpen: boolean;
   replyBody: string;
@@ -357,6 +367,8 @@ export function CommentSidePane({
   onSelect,
   selectedId,
   anchorTops = {},
+  docEndTop = null,
+  onRailOverhangChange,
   unresolvedIds = EMPTY_IDS,
   railMode = "aligned",
   onRailModeChange,
@@ -725,9 +737,10 @@ export function CommentSidePane({
             comments={anchored}
             iconMode={railMode === "icons"}
             anchorTops={anchorTops}
+            docEndTop={docEndTop}
+            onOverhangChange={onRailOverhangChange}
             selectedId={selectedId ?? null}
             onSelect={onSelect}
-            onJump={onJump}
             onCopyLink={handleCopyLink}
             canCopyLink={canCopyLink}
             onDelete={handleDelete}
@@ -1192,9 +1205,10 @@ interface AlignedRailProps {
   /** Anchored comments (no global/orphan), in document order. */
   comments: ReadonlyArray<CommentJSON>;
   anchorTops: Readonly<Record<string, number>>;
+  docEndTop: number | null;
+  onOverhangChange?: (px: number) => void;
   selectedId: string | null;
   onSelect: (id: string) => void;
-  onJump: (id: string) => void;
   onCopyLink: (id: string) => void;
   canCopyLink?: boolean;
   onDelete: (id: string) => void;
@@ -1214,9 +1228,10 @@ interface AlignedRailProps {
 function AlignedCommentRail({
   comments,
   anchorTops,
+  docEndTop,
+  onOverhangChange,
   selectedId,
   onSelect,
-  onJump,
   onCopyLink,
   canCopyLink = true,
   onDelete,
@@ -1272,13 +1287,11 @@ function AlignedCommentRail({
 
   // #332: a newly selected comment's cached height may be stale — measured
   // when it was last a card (say, with its reply form open), before icon mode
-  // turned it back into an icon. Laid out by that height it can fail to fit,
-  // and a card that doesn't fit is never mounted, so it never re-measures:
-  // the click would open nothing. Forget it on selection so the card is
-  // placed at the default height and measured afresh. Done during render
-  // (React's derived-state pattern) so the stale value never reaches layout.
-  // Not done on every unmount: an overflowing card would then bounce between
-  // the default height (fits, mounts) and its real one (doesn't, unmounts).
+  // turned it back into an icon. Laid out by that height it would push the
+  // entries below it out of place until its first measurement lands. Forget
+  // it on selection so the card is placed at the default height and measured
+  // afresh. Done during render (React's derived-state pattern) so the stale
+  // value never reaches layout.
   const [prevSelectedId, setPrevSelectedId] = useState(selectedId);
   if (selectedId !== prevSelectedId) {
     setPrevSelectedId(selectedId);
@@ -1341,9 +1354,9 @@ function AlignedCommentRail({
         // front of whatever paragraph the reader is actually looking at —
         // and it stayed there because nothing else re-triggered a
         // measurement. `null` reads as "no live anchor" to
-        // layoutCommentRail, which drops the card from `visible` (and out of
-        // above/below) rather than misplacing it; it reappears once the
-        // caller's measurement produces a real entry.
+        // layoutCommentRail, which leaves the card unplaced rather than
+        // misplacing it; it reappears once the caller's measurement produces
+        // a real entry.
         anchorTop: Object.hasOwn(anchorTops, e.ids[0]) ? anchorTops[e.ids[0]] : null,
         height:
           e.kind === "icon"
@@ -1355,29 +1368,22 @@ function AlignedCommentRail({
   );
 
   const layout = useMemo(
-    () =>
-      layoutCommentRailWithEdgeButtons(
-        items,
-        { paneTop: paneBox.top, paneHeight: paneBox.height },
-        RAIL_EDGE_BUTTON_INSET
-      ),
-    [items, paneBox]
+    () => layoutCommentRail(items, { paneTop: paneBox.top }),
+    [items, paneBox.top]
   );
 
-  // Counted in comments, not entries: an icon can stand for several.
-  const countComments = (keys: readonly string[]) =>
-    keys.reduce((n, k) => n + (entryByKey.get(k)?.ids.length ?? 0), 0);
-  const aboveComments = countComments(layout.aboveIds);
-  const belowComments = countComments(layout.belowIds);
-  // Jump targets come straight from what the layout pushed out, not from
-  // "the comment next to the visible range": with icons and a card mixed
-  // (#332), the visible entries need not be one contiguous run of comments —
-  // a selected card can be pushed below while the icon after it still fits,
-  // which left 下に 1 件 pointing at nothing. aboveIds / belowIds are in
-  // document order, so the nearest is the last above / the first below.
-  const lastAbove = entryByKey.get(layout.aboveIds[layout.aboveIds.length - 1] ?? "");
-  const nearestAboveId = lastAbove ? lastAbove.ids[lastAbove.ids.length - 1] : null;
-  const nearestBelowId = entryByKey.get(layout.belowIds[0] ?? "")?.ids[0] ?? null;
+  // #338: how far the rail reaches past the document's end. Both edges come
+  // from the same measurement pass (anchorTops and docEndTop move together on
+  // scroll), so the difference holds still while the body scrolls and only
+  // changes when a card or the document changes height.
+  const overhang =
+    layout.bottom === null || docEndTop === null
+      ? 0
+      : Math.max(0, Math.ceil(paneBox.top + layout.bottom + RAIL_GAP - docEndTop));
+  useEffect(() => {
+    onOverhangChange?.(overhang);
+  }, [overhang, onOverhangChange]);
+  useEffect(() => () => onOverhangChange?.(0), [onOverhangChange]);
 
   const byId = useMemo(() => new Map(comments.map((c) => [c.id, c])), [comments]);
 
@@ -1387,8 +1393,11 @@ function AlignedCommentRail({
       sx={{ position: "relative", flex: 1, minHeight: 0, overflow: "hidden" }}
       data-testid="comment-rail-aligned"
     >
-      {layout.visible.map((placed) => {
+      {layout.placed.map((placed) => {
         const entry = entryByKey.get(placed.id);
+        // Until the pane has measured its own box (height 0) there is no
+        // visible range to test against; the pane clips anything outside it.
+        const hidden = paneBox.height > 0 && !isPlacedInPane(placed, paneBox.height);
         if (entry?.kind === "icon") {
           const members = entry.ids.flatMap((id) => byId.get(id) ?? []);
           if (members.length === 0) return null;
@@ -1397,6 +1406,7 @@ function AlignedCommentRail({
               key={entry.key}
               comments={members}
               top={placed.top}
+              hidden={hidden}
               onSelect={selectFromIcon}
             />
           );
@@ -1409,6 +1419,7 @@ function AlignedCommentRail({
             comment={c}
             top={placed.top}
             maxHeight={placed.maxHeight}
+            hidden={hidden}
             selected={c.id === selectedId}
             onSelect={onSelect}
             onCopyLink={onCopyLink}
@@ -1426,68 +1437,6 @@ function AlignedCommentRail({
           />
         );
       })}
-      {layout.aboveCount > 0 && (
-        <Box
-          role="button"
-          tabIndex={0}
-          data-testid="comment-rail-above"
-          onClick={() => nearestAboveId && onJump(nearestAboveId)}
-          onKeyDown={(e) => {
-            if ((e.key === "Enter" || e.key === " ") && nearestAboveId) {
-              e.preventDefault();
-              onJump(nearestAboveId);
-            }
-          }}
-          sx={{
-            position: "absolute",
-            top: 0,
-            insetInline: 8,
-            px: 1,
-            py: 0.5,
-            borderRadius: 1,
-            textAlign: "center",
-            fontSize: "0.75rem",
-            cursor: "pointer",
-            bgcolor: "background.paper",
-            border: "1px solid",
-            borderColor: "divider",
-            boxShadow: 1,
-          }}
-        >
-          上に {aboveComments} 件
-        </Box>
-      )}
-      {layout.belowCount > 0 && (
-        <Box
-          role="button"
-          tabIndex={0}
-          data-testid="comment-rail-below"
-          onClick={() => nearestBelowId && onJump(nearestBelowId)}
-          onKeyDown={(e) => {
-            if ((e.key === "Enter" || e.key === " ") && nearestBelowId) {
-              e.preventDefault();
-              onJump(nearestBelowId);
-            }
-          }}
-          sx={{
-            position: "absolute",
-            bottom: 0,
-            insetInline: 8,
-            px: 1,
-            py: 0.5,
-            borderRadius: 1,
-            textAlign: "center",
-            fontSize: "0.75rem",
-            cursor: "pointer",
-            bgcolor: "background.paper",
-            border: "1px solid",
-            borderColor: "divider",
-            boxShadow: 1,
-          }}
-        >
-          下に {belowComments} 件
-        </Box>
-      )}
     </Box>
   );
 }
@@ -1495,6 +1444,9 @@ function AlignedCommentRail({
 interface AlignedCardProps extends CardProps {
   top: number;
   maxHeight: number;
+  /** Outside the pane's visible range (#338): still mounted and measured,
+   *  but invisible and out of the tab order. */
+  hidden?: boolean;
   onHeightChange: (id: string, height: number) => void;
   /** Take focus once mounted (#332: opened from an icon). */
   focusOnMount?: boolean;
@@ -1509,6 +1461,7 @@ function AlignedCard({
   comment,
   top,
   maxHeight,
+  hidden = false,
   onHeightChange,
   focusOnMount = false,
   onFocused,
@@ -1543,6 +1496,7 @@ function AlignedCard({
         right: 8,
         top,
         maxHeight,
+        visibility: hidden ? "hidden" : undefined,
         overflow: maxHeight > 0 ? "auto" : "hidden",
         // A card floating in whitespace needs its own edge, and the list's
         // bottom rule (CommentCard's row separator) reads as a stray line
@@ -1579,10 +1533,13 @@ function previewLine(body: string): string {
 function AlignedIcon({
   comments,
   top,
+  hidden = false,
   onSelect,
 }: {
   comments: ReadonlyArray<CommentJSON>;
   top: number;
+  /** Outside the pane's visible range (#338). */
+  hidden?: boolean;
   onSelect: (id: string) => void;
 }) {
   const first = comments[0];
@@ -1610,6 +1567,7 @@ function AlignedIcon({
           position: "absolute",
           left: 8,
           top,
+          visibility: hidden ? "hidden" : undefined,
           height: RAIL_ICON_HEIGHT,
           boxSizing: "border-box",
           display: "inline-flex",

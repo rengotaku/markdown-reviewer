@@ -1503,6 +1503,13 @@ export function EditorPage() {
   // against (#298). Comments with no live anchor (global/orphan) never get an
   // entry and stay in the pane's pinned section.
   const [anchorTops, setAnchorTops] = useState<Record<string, number>>({});
+  // Viewport bottom of the editor's document root, measured alongside
+  // anchorTops so the rail can tell how far it reaches past the end (#338).
+  const [docEndTop, setDocEndTop] = useState<number | null>(null);
+  // How many px the aligned rail reaches past that end — the height of
+  // TiptapEditor's bottom spacer, so the body scrolls far enough for the last
+  // card to come into view (#338).
+  const [railOverhang, setRailOverhang] = useState(0);
   // Ids of anchored comments whose anchor does not resolve in the live
   // document, so the pane can show them as 位置不明 instead of dropping them
   // (#328). Empty while the document isn't ready to be judged against — see
@@ -1574,6 +1581,10 @@ export function EditorPage() {
     // trigger) when nothing actually moved — a `transaction` fires on every
     // keystroke/selection change, most of which don't shift any decoration.
     setAnchorTops((prev) => (shallowEqualRecord(prev, next) ? prev : next));
+    // The root, not the spacer below it: the spacer is what absorbs the
+    // overhang, so measuring it would feed back into its own height.
+    const end = root.getBoundingClientRect().bottom;
+    setDocEndTop((prev) => (prev === end ? prev : end));
     setUnresolvedIds((prev) => (sameIdSet(prev, unresolved) ? prev : unresolved));
   };
   // #306 root cause: `scheduleAnchorRecalc` coalesces bursts of triggers onto
@@ -3244,7 +3255,14 @@ export function EditorPage() {
           </MenuItem>
         </Menu>
 
-        <Box sx={{ flex: 1, minHeight: 0 }}>
+        <Box
+          sx={{
+            flex: 1,
+            minHeight: 0,
+            // #338: read by TiptapEditor's bottom spacer.
+            "--rail-overhang": `${railOverhang}px`,
+          }}
+        >
           {activeFile && diffMode ? (
             <DiffView
               oldText={diffBaseText}
@@ -3306,6 +3324,8 @@ export function EditorPage() {
           onSelect={handleSelectComment}
           selectedId={railSelectedId}
           anchorTops={anchorTops}
+          docEndTop={docEndTop}
+          onRailOverhangChange={setRailOverhang}
           unresolvedIds={unresolvedIds}
           railMode={commentRailMode}
           onRailModeChange={setCommentRailMode}
