@@ -577,7 +577,7 @@
 .ProseMirror > .diff-gutter-del-above::after {
   content: "";
   position: absolute;
-  left: calc(-20px - var(--block-border-left));
+  left: calc(-20px - var(--block-border-left, 0px));
   top: -1px;
   width: 9px;
   height: 17px;
@@ -664,7 +664,7 @@
      itself grows leftwards into the remaining padding. The border term puts
      it back in the column on blocks with their own border-left (#341). */
   right: 100%;
-  margin-right: calc(26px + var(--block-border-left));
+  margin-right: calc(26px + var(--block-border-left, 0px));
   height: var(--line-number-line-height);
   display: flex;
   align-items: center;
