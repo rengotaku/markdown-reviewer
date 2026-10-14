@@ -101,7 +101,7 @@
      (#198). */
   border: 1px solid #e3e3e6;
   margin: 12px 0;
-  /* Keep the pre itself unclipped so the diff-gutter ::before bar (placed at
+  /* Keep the pre itself unclipped so the diff-gutter ::after dot (placed at
      a negative left offset) stays visible; horizontal scrolling for long
      lines moves to the inner <code> instead (#127). */
   overflow: visible;
@@ -275,7 +275,7 @@
 /* Vertical spacing lives on the wrapper (the element the diff gutter
    decorates) so the gutter bar's top:0/bottom:0 matches the table's real
    height. The wrapper deliberately keeps overflow visible so the gutter dot
-   (::before at left:-20px) is not clipped — the scroll box lives on the table
+   (::after at left:-20px) is not clipped — the scroll box lives on the table
    instead, the same split used for pre/code (#127, #128). */
 .ProseMirror .tableWrapper {
   margin: 32px 0;
@@ -534,85 +534,85 @@
 
 /* --- Diff gutter (#121, dot restyle #131) --------------------------------
    A small colored dot at the top-left of every top-level block that differs
-   from the latest revision (green = added, blue = modified). Dots — not
+   from the latest revision (green = added, blue = modified), with a short red
+   dash above it when content was deleted just above the block. Dots — not
    vertical bars — so the marker can't be confused with the vertical border
    lines that headings and blockquotes draw themselves. Purely visual — the
    block itself is not indented, so nothing shifts when the mark toggles.
-   Uses ::before so highlights, comment marks, and blockquote borders can
-   still rely on their own pseudo-elements. */
+
+   Dot and dash share a single ::after (#341). ::before belongs to the line
+   number: when both lived on ::before, a block carrying both decorations got
+   one pseudo-element with both rule sets merged — the number's height
+   stretched the dot into a tall oval and the dot's left/width knocked the
+   number out of its column. Each class only sets the layer it owns, so any
+   combination (add / mod, with or without del-above) composes. */
 .ProseMirror > .diff-gutter-add,
-.ProseMirror > .diff-gutter-mod {
+.ProseMirror > .diff-gutter-mod,
+.ProseMirror > .diff-gutter-del-above {
   position: relative;
+  --diff-dot: none;
+  --diff-dash: none;
 }
 
-.ProseMirror > .diff-gutter-add::before,
-.ProseMirror > .diff-gutter-mod::before {
-  content: "";
-  position: absolute;
-  left: -20px;
-  top: 7px;
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  pointer-events: none;
+/* Match DiffView add color (rgba(46,160,67,...)) — solid alpha so the dot
+   reads clearly against paper backgrounds. */
+.ProseMirror > .diff-gutter-add {
+  --diff-dot: radial-gradient(circle closest-side, rgb(46, 160, 67) calc(100% - 1px), transparent);
 }
 
-.ProseMirror > .diff-gutter-add::before {
-  /* Match DiffView add color (rgba(46,160,67,...)) — solid alpha so the bar
-     reads clearly against paper backgrounds. */
-  background: rgb(46, 160, 67);
-}
-
-.ProseMirror > .diff-gutter-mod::before {
-  /* GitHub-style "modified" blue. Distinct from add-green and del-red. */
-  background: rgb(9, 105, 218);
-}
-
-/* Short red marker on top for "content was deleted just above this block".
-   Horizontally centered against the add/mod dot below (dot: left:-20, w:9 →
-   center at -15.5; dash: w:7 → left:-19 puts center at -15.5). */
-.ProseMirror > .diff-gutter-del-above::after {
-  content: "";
-  position: absolute;
-  left: -19px;
-  top: -1px;
-  width: 7px;
-  height: 3px;
-  background: rgb(248, 81, 73);
-  border-radius: 1px;
-  pointer-events: none;
+/* GitHub-style "modified" blue. Distinct from add-green and del-red. */
+.ProseMirror > .diff-gutter-mod {
+  --diff-dot: radial-gradient(circle closest-side, rgb(9, 105, 218) calc(100% - 1px), transparent);
 }
 
 .ProseMirror > .diff-gutter-del-above {
-  position: relative;
+  --diff-dash: linear-gradient(rgb(248, 81, 73), rgb(248, 81, 73));
 }
 
-/* Blocks that draw their own border-left (headings, blockquotes) shift the
-   ::before/::after containing block (the padding box) right by that border
-   width, knocking the bar out of the shared gutter column. Compensate per
-   type so every bar lines up regardless of the block's own border (#129). */
-.ProseMirror > h1.diff-gutter-add::before,
-.ProseMirror > h1.diff-gutter-mod::before,
-.ProseMirror > h2.diff-gutter-add::before,
-.ProseMirror > h2.diff-gutter-mod::before,
-.ProseMirror > blockquote.diff-gutter-add::before,
-.ProseMirror > blockquote.diff-gutter-mod::before {
-  left: -24px; /* -20px - 4px border-left */
+/* The box spans the dash (7×3, top) and the dot (9×9, 8px lower). Positions
+   keep the original geometry relative to the block: dot at left:-20 / top:7,
+   dash centered over it at left:-19 / top:-1. */
+.ProseMirror > .diff-gutter-add::after,
+.ProseMirror > .diff-gutter-mod::after,
+.ProseMirror > .diff-gutter-del-above::after {
+  content: "";
+  position: absolute;
+  left: calc(-20px - var(--block-border-left));
+  top: -1px;
+  width: 9px;
+  height: 17px;
+  background-image: var(--diff-dash), var(--diff-dot);
+  background-size: 7px 3px, 9px 9px;
+  background-position: 1px 0, 0 8px;
+  background-repeat: no-repeat;
+  pointer-events: none;
 }
 
-.ProseMirror > h3.diff-gutter-add::before,
-.ProseMirror > h3.diff-gutter-mod::before {
-  left: -23px; /* -20px - 3px border-left */
+/* Blocks that draw their own border-left (headings, blockquotes, the code
+   block's 1px frame) shift the ::before/::after containing block (the padding
+   box) right by that border width, knocking the dot and the line number out
+   of the shared gutter column. Both read this to compensate (#129, #341);
+   keep it in sync with the block's border-left above. */
+@property --block-border-left {
+  syntax: "<length>";
+  /* Must inherit: ::before/::after take custom properties from their
+     originating block, and a non-inheriting one would read 0 there. */
+  inherits: true;
+  initial-value: 0px;
 }
 
-.ProseMirror > h1.diff-gutter-del-above::after,
-.ProseMirror > h2.diff-gutter-del-above::after,
-.ProseMirror > blockquote.diff-gutter-del-above::after {
-  left: -23px; /* -19px - 4px border-left, matches h1/h2/blockquote dot */
+.ProseMirror > h1,
+.ProseMirror > h2,
+.ProseMirror > blockquote {
+  --block-border-left: 4px;
 }
 
-.ProseMirror > h3.diff-gutter-del-above::after {
-  left: -22px; /* -19px - 3px border-left, matches h3 dot */
+.ProseMirror > h3 {
+  --block-border-left: 3px;
+}
+
+.ProseMirror > pre {
+  --block-border-left: 1px;
 }
 
 /* Line numbers (#234). Rendered in the left margin from the decoration's
@@ -661,9 +661,10 @@
      is the top of the padding — not of the text. */
   top: var(--block-padding-top);
   /* 26px clears the diff-gutter dot (left: -20px, 9px wide); the number
-     itself grows leftwards into the remaining padding. */
+     itself grows leftwards into the remaining padding. The border term puts
+     it back in the column on blocks with their own border-left (#341). */
   right: 100%;
-  margin-right: 26px;
+  margin-right: calc(26px + var(--block-border-left));
   height: var(--line-number-line-height);
   display: flex;
   align-items: center;
