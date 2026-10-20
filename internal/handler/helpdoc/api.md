@@ -350,3 +350,51 @@ Response は `PUT /api/files` と同じ形: `{ "path": "...", "content": "...", 
 本文をエディタ/ツールで in-place 更新し、`mr reply <path> <id> '...'` / `mr resolve <path> <id>`
 で対応状況を返す。CLI が使えない環境では HTTP API（`GET /api/review` → 本文を `PUT /api/files`
 → `POST /api/replies` / `PATCH ...?status=resolved`）で同じことができる。`.vN.md` 等の派生ファイルは作らない。
+
+## AI セッションへの引き継ぎ
+
+### `POST /api/agents/register/*path?root=<name>`
+
+`mr open` が呼ぶ best-effort 登録。本文は `{"agent_id":"claude","pid":123,"session_id":"..."}`。
+公開セッション JSON と実プロセスを照合できた場合のみ `{"registered":true}`。
+ファイルとセッションの対応はサーバのメモリに保持し、再起動時に失われる。
+追加パスにも登録する。サーバ停止中や旧版でも `mr open` 自体は継続する。
+
+### `POST /api/agents/send/*path?root=<name>`
+
+本文なし。サーバで解決した絶対パスから `mr comments '<path>'` を生成する。
+任意コマンドは受け付けない。応答は `{"sent":true,"command":"...","session_name":"..."}`。
+送れなければ `sent:false` と `reason`（`no_session` / `busy` / `no_terminal` / `send_failed`）。
+クライアントは保存・revision 作成後に呼び、失敗時はコマンドをクリップボードへコピーする。
+保存失敗時は直接送信せずコピーのみ。自動再送はしない。
+
+送り先は `mr open` 元の生存セッションを優先し、無ければファイルを含む最深 cwd の
+生存セッション。同じ深さなら session ID 順。作業中の送り先を別セッションへ置き換えない。
+`CLAUDE_CONFIG_DIR`（未設定なら `~/.claude`）の `sessions/<pid>.json` のみ読み、
+`status=idle` または `shell`、PID・session ID・起動時刻を送信直前にも照合する。不明な状態は送信しない。
+`shell` は応答完了後にバックグラウンドのシェル処理が残る場合を含む。
+観測例: https://github.com/herdrdev/herdr/issues/3414
+認証キーと内部ソケットは読まない。
+ブラウザからの登録・送信は API と同じホストの Origin のみ許可する（開発用のポート違いは可）。
+
+macOS の iTerm2 AppleScript の `tty` / `write text` を使用する。
+本文は `newline NO` で入力し、0.2秒後に Enter に対応する CR（ASCII 13）を別に送る。
+本文と同じ入力に含む改行が Claude の入力欄内の改行として扱われることを避ける。
+初回は macOS の Automation 許可が必要で、拒否・タイムアウト時もコピーへ戻す。
+AppleScript 実行は最大5秒。許可後は次のクリックから再試行できる。
+状態確認と端末入力は原子的ではないため、確認直後に作業開始・手入力があった場合の競合は残る。
+仕様出典: https://github.com/rengotaku/markdown-reviewer/issues/343
+AppleScript: https://iterm2.com/documentation-scripting.html
+
+### AI 連携の構成
+
+`internal/agent` が共通の登録・送り先選択・コマンド生成・結果を担当する。
+`agent.Adapter` は `ID`・`Sessions`・`Send` を実装し、セッション ID・cwd・表示名・
+送信可能状態を共通型に変換する。ネイティブ状態の解釈・プロセス照合・送信直前の再確認は
+各アダプターが担当する。セッション ID は `agent_id` と組にして識別する。
+登録先が作業中でも別の AI に振り替えない。cwd が同じ場合は agent ID、session ID 順。
+
+現在の構成は Claude のみ。Claude 固有の JSON と環境変数は `internal/claudeterm`、
+iTerm2 の入力は `internal/terminal/iterm` に分離する。
+対応先を追加する際はアダプターを実装し、`internal/agentsetup` にアダプターの生成と
+CLI の起動元検出を一組登録する。HTTP ハンドラーと画面に AI 固有の条件分岐は追加しない。

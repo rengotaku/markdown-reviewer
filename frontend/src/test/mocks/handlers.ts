@@ -24,6 +24,9 @@ export const MOCK_VALID_PASSWORD = "password123";
 export const MOCK_TOKEN = "mock-jwt-token";
 
 export const handlers = [
+  http.post(`${API_BASE}/api/agents/send/*`, () =>
+    HttpResponse.json({ sent: false, reason: "no_session" })
+  ),
   http.post(`${API_BASE}/api/v1/auth/login`, async ({ request }) => {
     const body = (await request.json()) as { email: string; password: string };
     if (body.email === MOCK_VALID_EMAIL && body.password === MOCK_VALID_PASSWORD) {
