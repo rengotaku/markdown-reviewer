@@ -187,6 +187,38 @@ describe("EditorPage autosave (#280)", () => {
 });
 
 describe("EditorPage revision boundary (#280)", () => {
+  it("copies without sending or snapshotting when saving fails", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    const send = vi.fn();
+    const revision = vi.fn();
+    server.use(
+      http.put(`${API_BASE}/api/files/*`, () =>
+        HttpResponse.json({ error: "conflict" }, { status: 412 })
+      ),
+      http.post(`${API_BASE}/api/agents/send/*`, () => {
+        send();
+        return HttpResponse.json({ sent: true });
+      }),
+      http.post(`${API_BASE}/api/revisions/*`, () => {
+        revision();
+        return HttpResponse.json({ created: false });
+      })
+    );
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+    renderPage();
+    await openDirtyReadme(user);
+    await user.click(screen.getByTestId("editor-copy-review-command"));
+    await waitFor(() =>
+      expect(writeText).toHaveBeenCalledWith("mr comments '/tmp/mock-root/README.md'")
+    );
+    expect(send).not.toHaveBeenCalled();
+    expect(revision).not.toHaveBeenCalled();
+  });
+
   it("snapshots a version when the review command is copied", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     const revisionPosts: string[] = [];

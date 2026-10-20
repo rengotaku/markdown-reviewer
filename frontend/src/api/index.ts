@@ -12,6 +12,7 @@ export {
   listRevisions,
   getRevision,
   createRevision,
+  sendReviewCommand,
   restoreRevision,
   type ConfigResponse,
   type DirEntry as DirEntryApi,
@@ -30,6 +31,7 @@ export {
   type RevisionListResponse,
   type RevisionResponse,
   type CreateRevisionResponse,
+  type SendReviewResponse,
 } from "./files";
 export {
   listComments,

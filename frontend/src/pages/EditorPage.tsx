@@ -64,6 +64,7 @@ import {
   ingestFile,
   listRevisions,
   createRevision,
+  sendReviewCommand,
   getRevision,
   restoreRevision,
   listComments,
@@ -2377,56 +2378,77 @@ export function EditorPage() {
     }
   };
 
-  // Build `mr comments <abs-path>` for the active file and copy it, so the user
-  // can paste one command to have the AI check this file's review comments —
-  // no need to retype the file name + "コメント確認して" each time. An absolute
-  // path (root abs path + root-relative file path) is used so it resolves
-  // regardless of the AI's working directory.
+  // Save and snapshot before handing this file's comments to Claude Code.
+  // The clipboard remains the fallback when direct terminal delivery fails.
+  const reviewHandoffPending = useRef(false);
   const handleCopyReviewCommand = async () => {
-    if (!activeFile) return;
-    const rootPath = roots.find((r) => r.name === activeFile.root)?.path ?? "";
-    const base = rootPath.replace(/\/+$/, "");
-    const abs = base ? `${base}/${activeFile.path}` : activeFile.path;
-    const cmd = `mr comments ${abs}`;
-    // Copying this command is the handoff to the AI, so it is also the version
-    // boundary (#280). Get the buffer on disk first, then snapshot it: the
-    // newest revision is then exactly what the AI is about to read, which
-    // makes the diff empty right now and fills it with whatever the human
-    // edits next. Saves themselves no longer snapshot — autosave would burn
-    // through the 20-revision cap and evict this very baseline.
-    useEditorInstance.getState().flushPendingMarkdown();
-    const saved = await autosave(activeFile.id);
-    if (saved) {
-      try {
-        const res = await createRevision(activeFile.path, activeFile.root);
-        // Only worth re-reading the list when a version actually landed.
-        if (res.created) setReviewRefresh((n) => n + 1);
-      } catch (err) {
-        // The command itself is still valid and still worth copying — the AI
-        // reads the file, not the history. Report the missing baseline and
-        // carry on.
+    if (reviewHandoffPending.current) return;
+    reviewHandoffPending.current = true;
+    try {
+      if (!activeFile) return;
+      const rootPath = roots.find((r) => r.name === activeFile.root)?.path ?? "";
+      const base = rootPath.replace(/\/+$/, "");
+      const abs = base ? `${base}/${activeFile.path}` : activeFile.path;
+      const cmd = `mr comments '${abs.replaceAll("'", "'\"'\"'")}'`;
+      // Copying this command is the handoff to the AI, so it is also the version
+      // boundary (#280). Get the buffer on disk first, then snapshot it: the
+      // newest revision is then exactly what the AI is about to read, which
+      // makes the diff empty right now and fills it with whatever the human
+      // edits next. Saves themselves no longer snapshot — autosave would burn
+      // through the 20-revision cap and evict this very baseline.
+      useEditorInstance.getState().flushPendingMarkdown();
+      const saved = await autosave(activeFile.id);
+      if (saved) {
+        try {
+          const res = await createRevision(activeFile.path, activeFile.root);
+          // Only worth re-reading the list when a version actually landed.
+          if (res.created) setReviewRefresh((n) => n + 1);
+        } catch (err) {
+          // The command itself is still valid and still worth copying — the AI
+          // reads the file, not the history. Report the missing baseline and
+          // carry on.
+          showToast(
+            `バージョンの記録に失敗しました: ${(err as Error).message ?? "unknown error"}`,
+            "warning"
+          );
+        }
+      } else {
+        // Autosave refused (external change) or failed: the AI would read
+        // something other than what is on screen, and a snapshot here would
+        // record the wrong baseline. It has already said why in its own toast.
         showToast(
-          `バージョンの記録に失敗しました（コマンドはコピーします）: ${(err as Error).message ?? "unknown error"}`,
+          "未保存の変更があるため、バージョンは記録していません（保存してから再度コピーしてください）",
           "warning"
         );
       }
-    } else {
-      // Autosave refused (external change) or failed: the AI would read
-      // something other than what is on screen, and a snapshot here would
-      // record the wrong baseline. It has already said why in its own toast.
-      showToast(
-        "未保存の変更があるため、バージョンは記録していません（保存してから再度コピーしてください）",
-        "warning"
-      );
-    }
-    try {
-      await navigator.clipboard.writeText(cmd);
-      showToast("コメント確認コマンドをコピーしました", "success");
-    } catch (err) {
-      showToast(
-        `コピーに失敗しました: ${(err as Error).message ?? "unknown error"}`,
-        "error"
-      );
+      if (saved) {
+        try {
+          const result = await sendReviewCommand(activeFile.path, activeFile.root);
+          if (result.sent) {
+            showToast(
+              `コメント確認コマンドを送信しました${result.session_name ? `: ${result.session_name}` : ""}`,
+              "success"
+            );
+            return;
+          }
+        } catch {
+          // Older/offline servers and Automation failures retain clipboard handoff.
+        }
+      }
+      try {
+        await navigator.clipboard.writeText(cmd);
+        showToast(
+          "直接送信できなかったため、コメント確認コマンドをコピーしました",
+          "success"
+        );
+      } catch (err) {
+        showToast(
+          `コピーに失敗しました: ${(err as Error).message ?? "unknown error"}`,
+          "error"
+        );
+      }
+    } finally {
+      reviewHandoffPending.current = false;
     }
   };
 
@@ -3006,7 +3028,7 @@ export function EditorPage() {
               <FormatListNumberedIcon fontSize="small" />
             </IconButton>
           </Tooltip>
-          <Tooltip title="AI にコメント確認させる mr コマンドをコピー（mr comments <path>）">
+          <Tooltip title="AI にコメント確認コマンドを送信（送信できない場合はコピー）">
             <span>
               <IconButton
                 size="small"

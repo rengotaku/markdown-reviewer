@@ -69,6 +69,10 @@ func cmdOpen(args []string) error {
 		}
 	}
 	extras := finalizeExtras(plan.extras, root)
+	registerAgent(base, root, rel)
+	for _, extra := range extras {
+		registerAgent(base, root, extra)
+	}
 	link := deeplink(base, root, rel, commentID, extras)
 	// Printed before the launch so a launcher failure still leaves the caller
 	// with a usable URL.

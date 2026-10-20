@@ -419,12 +419,70 @@ describe("EditorPage", () => {
     await user.click(screen.getByTestId("editor-copy-review-command"));
 
     await waitFor(() =>
-      expect(writeText).toHaveBeenCalledWith("mr comments /tmp/mock-root/README.md")
+      expect(writeText).toHaveBeenCalledWith("mr comments '/tmp/mock-root/README.md'")
     );
     expect(useToast.getState().toasts.some((t) => t.severity === "success")).toBe(
       true
     );
   });
+
+  it("sends the review command after creating the revision, without copying", async () => {
+    const { http, HttpResponse } = await import("msw");
+    const { server } = await import("@/test/mocks/server");
+    const events: string[] = [];
+    server.use(
+      http.post("http://localhost:8080/api/revisions/*", () => {
+        events.push("revision");
+        return HttpResponse.json({ created: false });
+      }),
+      http.post("http://localhost:8080/api/agents/send/*", () => {
+        events.push("send");
+        return HttpResponse.json({ sent: true, session_name: "unit" });
+      })
+    );
+    const user = userEvent.setup();
+    const writeText = vi.spyOn(navigator.clipboard, "writeText");
+    renderPage();
+    await user.click(await screen.findByTestId("sidebar-file-README.md"));
+    await waitFor(() =>
+      expect(screen.getByTestId("editor-active-path")).toHaveTextContent("README.md")
+    );
+    await user.click(screen.getByTestId("editor-copy-review-command"));
+    await waitFor(() => expect(events).toEqual(["revision", "send"]));
+    await waitFor(() =>
+      expect(
+        useToast.getState().toasts.some((t) => t.message.includes("送信しました"))
+      ).toBe(true)
+    );
+    expect(writeText).not.toHaveBeenCalled();
+  });
+
+  it.each([403, 404, 500])(
+    "copies without retrying when direct send returns HTTP %s",
+    async (status) => {
+      const { http, HttpResponse } = await import("msw");
+      const { server } = await import("@/test/mocks/server");
+      let requests = 0;
+      server.use(
+        http.post("http://localhost:8080/api/agents/send/*", () => {
+          requests++;
+          return HttpResponse.json({ error: "unavailable" }, { status });
+        })
+      );
+      const user = userEvent.setup();
+      const writeText = vi.spyOn(navigator.clipboard, "writeText");
+      renderPage();
+      await user.click(await screen.findByTestId("sidebar-file-README.md"));
+      await waitFor(() =>
+        expect(screen.getByTestId("editor-active-path")).toHaveTextContent("README.md")
+      );
+      await user.click(screen.getByTestId("editor-copy-review-command"));
+      await waitFor(() =>
+        expect(writeText).toHaveBeenCalledWith("mr comments '/tmp/mock-root/README.md'")
+      );
+      expect(requests).toBe(1);
+    }
+  );
 
   it("displays REVIEW_ROOT basename in the sidebar header (from /api/config)", async () => {
     renderPage();
