@@ -29,6 +29,7 @@ mr inbox    [--root NAME] [--all]    # open コメントを持つファイルを
 mr comments <path> [--json] [--since ID] [--unanswered]   # コメント一覧（解決位置 / orphan）
 mr review   <path> [--all] [--since ID] [--unanswered]    # open コメントを整形 Markdown で（/api/review 相当）
 mr reply    <path> <id> <text> [--author NAME]   # スレッド返信（既定 author=ai）
+mr apply    <path> [<json-file>|-] [--author NAME] [--force]  # 本文の修正と返信を 1 回で反映
 mr resolve  <path> <id>              # resolved にする
 mr reopen   <path> <id>              # resolved を open に戻す
 ```
@@ -36,6 +37,25 @@ mr reopen   <path> <id>              # resolved を open に戻す
 ルートは `REVIEW_ROOTS` 環境変数、無ければ launchd plist から自動解決する。
 
 「人がコメントした」と言われたら **`mr inbox` でどのファイルか特定** → `mr review <path>` で読む。前回見た以降の新規だけ見たいときは `--since <最後に見た ID>`、AI 未対応分だけは `--unanswered`。コメント ID は `c-NNN` の単調増加なので、`mr comments` 末尾の最大 ID を控えておけば次回の `--since` に使える。
+
+### `mr apply`（本文の修正と返信をまとめる）
+
+AI のツール呼び出しは 1 回ごとにセッションの文脈全体を送り直すので、Edit と `mr reply` を件数分
+繰り返すより、1 回にまとめた方が安い。入力は JSON（ファイル、または `-` / 省略で標準入力）:
+
+```json
+{
+  "edits":   [{"old": "置換前の文字列", "new": "置換後の文字列"}],
+  "replies": [{"id": "c-001", "body": "返信本文"}]
+}
+```
+
+- `edits` は先頭から順に適用する。`old` が本文にちょうど 1 回現れなければエラー（0 回・2 回以上とも）
+- 書き込む前に全件を検証する。照合の失敗、存在しない ID、resolved の ID、空の返信が 1 件でもあれば何も書かない
+- `mr reply` と同じ書き込みガード（前回読んだ後に本文が変わっていれば止まる。`--force` で解除）
+- 本文を書く前にコメントのアンカーを張り直し、書いた本文を revision（author は `--author`、既定 `ai`）として残す
+- 最後に新しい本文で `last_read` を記録するので、続けて `mr reply` / `mr comments` を実行しても drift 扱いにならない
+- resolve はしない。`edits` / `replies` はどちらかが空でもよい（両方空はエラー）
 
 ## ベース URL
 
@@ -348,7 +368,7 @@ Response は `PUT /api/files` と同じ形: `{ "path": "...", "content": "...", 
 
 正典本文にレビューマーカーは無い。**推奨は CLI `mr`**: `mr review <path>` で open コメントを読み、
 本文をエディタ/ツールで in-place 更新し、`mr reply <path> <id> '...'` / `mr resolve <path> <id>`
-で対応状況を返す。CLI が使えない環境では HTTP API（`GET /api/review` → 本文を `PUT /api/files`
+で対応状況を返す。本文の修正と返信は `mr apply` で 1 回にまとめられる。CLI が使えない環境では HTTP API（`GET /api/review` → 本文を `PUT /api/files`
 → `POST /api/replies` / `PATCH ...?status=resolved`）で同じことができる。`.vN.md` 等の派生ファイルは作らない。
 
 ## AI セッションへの引き継ぎ

@@ -9,6 +9,8 @@
 //	mr comments <path> [--json] [--since ID] [--unanswered]   list comments
 //	mr review   <path> [--all] [--since ID] [--unanswered]    AI-facing Markdown
 //	mr reply    <path> <id> <text> [--author NAME] [--force]  add a threaded reply
+//	mr apply    <path> [<json-file>|-] [--author NAME] [--force]  body edits +
+//	                                                             replies in one call
 //	mr resolve  <path> <id> [--force]  mark a comment resolved
 //	mr reopen   <path> <id> [--force]  reopen a resolved comment
 //	mr open     <path> [<extra-path>...] [--comment ID] [--print]  open the file in the web UI
@@ -66,6 +68,8 @@ func main() {
 		err = cmdInbox(args)
 	case "reply":
 		err = cmdReply(args)
+	case "apply":
+		err = cmdApply(args)
 	case "resolve":
 		err = cmdSetStatus(args, reviewstore.StatusResolved)
 	case "reopen":
@@ -100,6 +104,7 @@ Usage:
   mr comments <path> [--json] [--since ID] [--unanswered]
   mr review   <path> [--all] [--since ID] [--unanswered]
   mr reply    <path> <id> <text> [--author NAME] [--force]
+  mr apply    <path> [<json-file>|-] [--author NAME] [--force]  body edits + replies in one call
   mr resolve  <path> <id> [--force]    mark a comment resolved
   mr reopen   <path> <id> [--force]    reopen a resolved comment
   mr open     <path> [<extra-path>...] [--comment ID] [--print]  open the file in the web UI (--print: URL only)
@@ -117,10 +122,13 @@ positional argument total may sit outside every configured root (the one-off
 slot only holds one file).
 --since ID: only comments after ID (e.g. --since c-008).
 --unanswered: only comments whose latest activity is not from the AI.
+mr apply reads {"edits":[{"old":"..","new":".."}],"replies":[{"id":"c-001","body":".."}]}
+from the file or stdin. Each old must match exactly once; nothing is written
+unless every edit matches and every reply targets an open comment.
 
 mr comments/mr review record last_read.json on every successful read and
 print a "本文が変わっています" banner when the body drifted since the last
-one. mr reply/resolve/reopen refuse to write when that drift is detected
+one. mr reply/resolve/reopen/apply refuse to write when that drift is detected
 (pass --force to override); mr diff shows what changed.
 `)
 }
