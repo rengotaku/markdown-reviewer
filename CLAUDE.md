@@ -30,6 +30,7 @@ CLI(推奨):  mr review <このファイルのパス>   # 返信: mr reply <path
 2. **コメントは修正・確認依頼の指示として扱う。** `mr review` の出力には解決位置（行番号）・対象 snippet・指摘・返信が含まれる。
 3. **本文はそのファイルを in-place 修正する。** `.v2.md` などの派生ファイルを作らない。
 4. **対応したら `mr reply <path> <id> '<対応内容>'` で返信し、完了したものは `mr resolve <path> <id>` する。**
+   本文の修正と返信は `mr apply <path>` で 1 回にまとめる（入力 JSON の形式は `GET /api/help` の「`mr apply`」）。ツールの呼び出しは 1 回ごとに文脈全体を送り直すため、件数分の Edit と `mr reply` を繰り返すより安い。
 5. **hint コメントは削除しない。** サーバが保存のたびに管理・再注入する。
 6. `mr` が使えない環境では HTTP API で同じことができる（`GET /api/review` → 本文を `PUT /api/files` → `POST /api/replies` / `PATCH /api/comments?status=resolved`）。全仕様は `GET /api/help`。
 
@@ -40,6 +41,7 @@ mr inbox    [--root NAME] [--all]                        # open コメントを�
 mr comments <path> [--json] [--since ID] [--unanswered]  # コメント一覧
 mr review   <path> [--all] [--since ID] [--unanswered]   # open コメントを整形 Markdown で
 mr reply    <path> <id> <text> [--author NAME] [--force] # スレッド返信（既定 author=ai）
+mr apply    <path> [<json-file>|-] [--author NAME] [--force]  # 本文の修正と返信を 1 回で（JSON: edits / replies）
 mr resolve  <path> <id> [--force]                        # resolved にする
 mr reopen   <path> <id> [--force]                        # resolved を open に戻す
 mr open     <path> [<extra-path>...] [--comment ID] [--print]  # Web UI で開く（--print: URL のみ出力）
