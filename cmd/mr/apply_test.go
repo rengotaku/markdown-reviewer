@@ -121,13 +121,17 @@ func TestApply_RejectsWithoutWriting(t *testing.T) {
 		name, json, wantErr string
 	}{
 		{"edit not found", `{"edits":[{"old":"Charlie","new":"x"}],"replies":[{"id":"c-001","body":"r"}]}`, "見つかりません"},
-		{"edit ambiguous", `{"edits":[{"old":" line","new":"x"}],"replies":[{"id":"c-001","body":"r"}]}`, "2 回現れます"},
+		{"edit ambiguous", `{"edits":[{"old":" line","new":"x"}],"replies":[{"id":"c-001","body":"r"}]}`, "2 回以上"},
 		{"empty old", `{"edits":[{"old":"","new":"x"}]}`, "old が空"},
 		{"unknown reply id", `{"edits":[{"old":"Alpha","new":"A"}],"replies":[{"id":"c-999","body":"r"}]}`, "c-999"},
 		{"resolved reply", `{"edits":[{"old":"Alpha","new":"A"}],"replies":[{"id":"c-002","body":"r"}]}`, "resolved"},
 		{"empty reply body", `{"edits":[{"old":"Alpha","new":"A"}],"replies":[{"id":"c-001","body":" "}]}`, "body が空"},
 		{"unknown field", `{"reply":[{"id":"c-001","body":"r"}]}`, "JSON"},
 		{"nothing to do", `{"edits":[],"replies":[]}`, "ありません"},
+		{"missing new", `{"edits":[{"old":"Alpha"}]}`, "new がありません"},
+		{"null new", `{"edits":[{"old":"Alpha","new":null}]}`, "new がありません"},
+		{"trailing JSON value", `{"edits":[{"old":"Alpha","new":"A"}]} {"replies":[{"id":"c-001","body":"r"}]}`, "余分なデータ"},
+		{"trailing garbage", `{"edits":[{"old":"Alpha","new":"A"}]} garbage`, "余分なデータ"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -211,5 +215,57 @@ func TestApply_ReanchorsEditedLine(t *testing.T) {
 	}
 	if _, ok := reviewstore.ResolveAnchor(readBody(t, abs), *c.Anchor); !ok {
 		t.Errorf("anchor %+v does not resolve against the edited body", *c.Anchor)
+	}
+}
+
+func TestApply_ExplicitEmptyNewDeletes(t *testing.T) {
+	abs, _ := setupApplyDoc(t)
+	if err := cmdApply([]string{abs, writeApplyJSON(t, `{"edits":[{"old":"Alpha line\n\n","new":""}]}`)}); err != nil {
+		t.Fatalf("cmdApply: %v", err)
+	}
+	if got := readBody(t, abs); strings.Contains(got, "Alpha") {
+		t.Errorf("body = %q, want the matched text deleted", got)
+	}
+}
+
+// A Web UI save leaves the app-write marker, which makes SyncExternalEdit
+// skip the body; apply must still snapshot it before overwriting so the
+// human edit stays restorable.
+func TestApply_SnapshotsWebUISaveBeforeOverwriting(t *testing.T) {
+	abs, rel := setupApplyDoc(t)
+	saved := applyBody + "\nSaved from the Web UI\n"
+	if err := os.WriteFile(abs, []byte(saved), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := reviewstore.RecordAppWrite("works", rel, saved); err != nil {
+		t.Fatal(err)
+	}
+
+	in := writeApplyJSON(t, `{"edits":[{"old":"Alpha","new":"A"}]}`)
+	if err := cmdApply([]string{abs, in, "--force"}); err != nil {
+		t.Fatalf("cmdApply --force: %v", err)
+	}
+	revs, err := reviewstore.ListRevisions("works", rel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, m := range revs {
+		r, ok, gerr := reviewstore.GetRevision("works", rel, m.ID)
+		if gerr == nil && ok && r.Content == saved {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the Web UI save is not in history; revisions = %+v", revs)
+	}
+}
+
+// strings.Count would see one non-overlapping "aaa" in "aaaaa"; the start
+// positions 0, 1 and 2 all match, so the edit is ambiguous.
+func TestApplyEdits_OverlappingMatchIsAmbiguous(t *testing.T) {
+	x := "X"
+	if _, err := applyEdits("aaaaa", []applyEdit{{Old: "aaa", New: &x}}); err == nil || !strings.Contains(err.Error(), "2 回以上") {
+		t.Fatalf("err = %v, want an ambiguity error", err)
 	}
 }

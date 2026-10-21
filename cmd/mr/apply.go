@@ -24,9 +24,12 @@ type applyInput struct {
 	Replies []applyReply `json:"replies"`
 }
 
+// New is a pointer so a missing or null "new" is rejected instead of being
+// read as "" and silently deleting the matched text; an explicit "" still
+// deletes.
 type applyEdit struct {
-	Old string `json:"old"`
-	New string `json:"new"`
+	New *string `json:"new"`
+	Old string  `json:"old"`
 }
 
 type applyReply struct {
@@ -60,6 +63,13 @@ func cmdApply(args []string) error {
 	if err != nil {
 		return err
 	}
+	// Read the body before the guard checks it: any save landing after this
+	// read changes the file's sha, so the compare-and-swap write below
+	// refuses it instead of editing a body nobody reviewed.
+	raw, err := os.ReadFile(abs)
+	if err != nil {
+		return err
+	}
 	if gerr := checkWriteGuard(root, rel, abs, flags["force"] != ""); gerr != nil {
 		return gerr
 	}
@@ -68,10 +78,6 @@ func cmdApply(args []string) error {
 		author = "ai"
 	}
 
-	raw, err := os.ReadFile(abs)
-	if err != nil {
-		return err
-	}
 	updated, err := applyEdits(string(raw), in.Edits)
 	if err != nil {
 		return err
@@ -121,6 +127,11 @@ func readApplyInput(src string) (applyInput, error) {
 	if err := dec.Decode(&in); err != nil {
 		return applyInput{}, fmt.Errorf("apply の入力 JSON を読めません: %w", err)
 	}
+	// A second value or trailing garbage would otherwise be dropped, losing
+	// whatever edits or replies it carried.
+	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return applyInput{}, errors.New("apply の入力 JSON の後ろに余分なデータがあります。JSON は 1 つにまとめてください")
+	}
 	if len(in.Edits) == 0 && len(in.Replies) == 0 {
 		return applyInput{}, errors.New("apply の入力に edits も replies もありません")
 	}
@@ -135,14 +146,19 @@ func applyEdits(content string, edits []applyEdit) (string, error) {
 		if e.Old == "" {
 			return "", fmt.Errorf("edits[%d]: old が空です", i)
 		}
-		switch n := strings.Count(content, e.Old); n {
-		case 1:
-			content = strings.Replace(content, e.Old, e.New, 1)
-		case 0:
-			return "", fmt.Errorf("edits[%d]: old が本文に見つかりません（何も書き込んでいません）", i)
-		default:
-			return "", fmt.Errorf("edits[%d]: old が本文に %d 回現れます。前後を含めて一意にしてください（何も書き込んでいません）", i, n)
+		if e.New == nil {
+			return "", fmt.Errorf("edits[%d]: new がありません。削除するなら \"\" を指定してください（何も書き込んでいません）", i)
 		}
+		at := strings.Index(content, e.Old)
+		if at < 0 {
+			return "", fmt.Errorf("edits[%d]: old が本文に見つかりません（何も書き込んでいません）", i)
+		}
+		// Search again from the next byte, not past the match, so overlapping
+		// occurrences ("aaa" in "aaaaa") count as ambiguous too.
+		if strings.Contains(content[at+1:], e.Old) {
+			return "", fmt.Errorf("edits[%d]: old が本文に 2 回以上現れます。前後を含めて一意にしてください（何も書き込んでいません）", i)
+		}
+		content = content[:at] + *e.New + content[at+len(e.Old):]
 	}
 	return content, nil
 }
@@ -181,10 +197,15 @@ func validateReplyTargets(root, rel string, replies []applyReply) error {
 // before the write mirrors handler.WriteFile; if the compare-and-swap write
 // loses a race, review.json is rolled back the same way `mr restore` does.
 func writeAppliedBody(root, rel, abs string, raw []byte, updated, author string) error {
-	// Make sure the pre-edit body is in history so `mr diff` / `mr restore`
-	// can reach it. Best-effort, like the read path.
 	if _, serr := reviewstore.SyncExternalEdit(root, rel, string(raw)); serr != nil {
 		fmt.Fprintln(os.Stderr, "mr: warning: external-edit sync failed: "+serr.Error())
+	}
+	// SyncExternalEdit skips a body matching the app-write marker (a Web UI
+	// save), so snapshot the pre-edit body explicitly: without it `mr
+	// restore` could not reach a human edit that apply overwrites. No
+	// recovery point, no write.
+	if _, _, err := reviewstore.AppendRevision(root, rel, "external", reviewstore.StripAIHint(string(raw))); err != nil {
+		return fmt.Errorf("修正前の本文を履歴に残せないため、何も書き込んでいません: %w", err)
 	}
 	reviewPath, before, beforeExisted, err := snapshotReviewJSON(root, rel)
 	if err != nil {
