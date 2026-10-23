@@ -3,6 +3,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -124,7 +125,16 @@ function clampSx(theme: Theme, maxHeight: string, fade = true): SystemStyleObjec
  *  rail's card observer would otherwise record the full height first, place
  *  (or drop) the card by it, and an unmounted card never re-measures. The
  *  measurement only decides whether the fade and toggle show. `clampDisabled`
- *  shows the full body with no toggle (the rail's selected card). */
+ *  shows the full body with no toggle (the rail's selected card).
+ *
+ *  #148: every body is measured, and once a measurement lands it alone
+ *  decides — the source length is only the fallback until then (and in
+ *  jsdom, which lays nothing out). A long source that renders short (a link
+ *  with a long URL behind a short label) no longer gets a toggle that
+ *  reveals nothing. While collapsed, links and buttons wholly below the
+ *  clamp are taken out of the tab order, so focus can't land on something
+ *  the reader can't see; the visible preview stays readable to assistive
+ *  tech, which an `inert` on the whole body would have hidden too. */
 function CollapsibleText({
   text,
   testid,
@@ -141,14 +151,11 @@ function CollapsibleText({
   clampDisabled?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const [overflowing, setBodyEl] = useClampOverflow(
-    measureOverflow && !clampDisabled,
-    clampHeight,
-    text
-  );
+  const [overflowing, setBodyEl, bodyEl] = useClampOverflow(!clampDisabled, clampHeight, text);
   const measured = measureOverflow && !clampDisabled;
-  const long = !clampDisabled && (text.length > BODY_PREVIEW_LIMIT || overflowing);
+  const long = !clampDisabled && (overflowing ?? text.length > BODY_PREVIEW_LIMIT);
   const collapsed = long && !expanded;
+  useHideClippedFocusables(bodyEl, collapsed);
   // A measured body stays clamped until expanded even while it isn't known
   // to overflow yet — for text that fits, the clamp is a no-op.
   const clamped = collapsed || (measured && !expanded);
@@ -198,17 +205,17 @@ function CollapsibleText({
  *  clamp is currently applied, so the result doesn't flip when the toggle
  *  switches between the two states. The clamp is resolved to px through a
  *  throwaway probe inside the element, so `em` uses the element's own font
- *  size exactly as the clamp's `maxHeight` does. jsdom lays nothing out
- *  (every height reads 0), so there it always reports false and the
- *  source-length rule alone decides. */
+ *  size exactly as the clamp's `maxHeight` does. null until a measurement
+ *  lands; jsdom lays nothing out (every height reads 0), so there it stays
+ *  null and the caller's source-length fallback decides. */
 function useClampOverflow(
   enabled: boolean,
   clampHeight: string,
   // Re-measure when the body changes: a clamped element keeps the same box
   // when its content grows, so the observer alone wouldn't fire.
   text: string
-): readonly [boolean, (el: HTMLElement | null) => void] {
-  const [value, setValue] = useState(false);
+): readonly [boolean | null, (el: HTMLElement | null) => void, HTMLElement | null] {
+  const [value, setValue] = useState<boolean | null>(null);
   const [el, setEl] = useState<HTMLElement | null>(null);
 
   useEffect(() => {
@@ -221,7 +228,7 @@ function useClampOverflow(
       probe.remove();
       // +1 absorbs rounding between scrollHeight (integer) and the probe's
       // fractional px.
-      setValue(limit > 0 && el.scrollHeight > limit + 1);
+      setValue(limit > 0 ? el.scrollHeight > limit + 1 : null);
     };
     // The observer's initial callback (fired on observe) does the first
     // measurement; jsdom's no-op stand-in never calls back, see the doc above.
@@ -231,7 +238,68 @@ function useClampOverflow(
   }, [enabled, el, clampHeight, text]);
 
   // A stale `true` from before the clamp was disabled must not leak through.
-  return [enabled && value, setEl] as const;
+  return [enabled ? value : false, setEl, el] as const;
+}
+
+const FOCUSABLE = "a[href], button, input, select, textarea, [tabindex]";
+/** Marks a node useHideClippedFocusables took out of the tab order; holds the
+ *  tabindex it had before ("" for none). */
+const CLAMP_HIDDEN = "data-clamp-hidden";
+/** The aria-hidden that node had before ("" for none). */
+const CLAMP_HIDDEN_ARIA = "data-clamp-hidden-aria";
+
+/** Puts back an attribute saved as "" (absent) or its previous value. */
+function restoreAttr(node: HTMLElement, name: string, saved: string | null) {
+  if (saved) node.setAttribute(name, saved);
+  else node.removeAttribute(name);
+}
+
+/** #148: while `collapsed`, gives every focusable inside `el` that starts at
+ *  or below the clamp's bottom edge `tabindex="-1"` and `aria-hidden` (so a
+ *  screen reader's link list skips it too), and puts back whatever it had
+ *  once the body expands. The body is `dangerouslySetInnerHTML`, which
+ *  React rewrites on its own re-renders (dropping whatever was set on the old
+ *  nodes), so this re-applies after every commit and keeps no state of its
+ *  own: a marked node carries its previous tabindex in CLAMP_HIDDEN. It also
+ *  re-judges whenever the body's box changes — a card can mount before it is
+ *  laid out (zero height), when nothing is below anything yet. jsdom lays
+ *  nothing out, so there this only acts on stubbed geometry. */
+function useHideClippedFocusables(el: HTMLElement | null, collapsed: boolean) {
+  const apply = useCallback(() => {
+    if (!el) return;
+    // Read every position first and write only what changed, so a commit
+    // that leaves the body as it was costs no style invalidation.
+    const box = collapsed ? el.getBoundingClientRect() : null;
+    const clipped = new Set<HTMLElement>();
+    if (box && box.height > 0) {
+      for (const node of el.querySelectorAll<HTMLElement>(FOCUSABLE)) {
+        if (node.getBoundingClientRect().top >= box.bottom) clipped.add(node);
+      }
+    }
+    for (const node of el.querySelectorAll<HTMLElement>(`[${CLAMP_HIDDEN}]`)) {
+      if (clipped.delete(node)) continue; // already marked
+      restoreAttr(node, "tabindex", node.getAttribute(CLAMP_HIDDEN));
+      restoreAttr(node, "aria-hidden", node.getAttribute(CLAMP_HIDDEN_ARIA));
+      node.removeAttribute(CLAMP_HIDDEN);
+      node.removeAttribute(CLAMP_HIDDEN_ARIA);
+    }
+    for (const node of clipped) {
+      node.setAttribute(CLAMP_HIDDEN, node.getAttribute("tabindex") ?? "");
+      node.setAttribute(CLAMP_HIDDEN_ARIA, node.getAttribute("aria-hidden") ?? "");
+      node.setAttribute("tabindex", "-1");
+      node.setAttribute("aria-hidden", "true");
+    }
+  }, [el, collapsed]);
+
+  // Every commit: a re-render may have replaced the body's nodes.
+  useLayoutEffect(apply);
+
+  useEffect(() => {
+    if (!el || !collapsed || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(apply);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [el, collapsed, apply]);
 }
 
 const SCOPE_BADGE: Record<string, { label: string; color: string }> = {
@@ -468,6 +536,30 @@ export function CommentSidePane({
   );
   const [globalDialogOpen, setGlobalDialogOpen] = useState(false);
   const [globalDialogTab, setGlobalDialogTab] = useState<GlobalBadgeKind>("global");
+
+  // #226: a comment with no live anchor has no highlight to jump to, so when
+  // one is selected (a `?comment_id=` link) open the dialog it lives in, on
+  // its tab, with the row marked. A resolved one is hidden by the default
+  // "open" filter; widen it so the row is there to mark. Whether an anchored
+  // comment is live is only known once the caller has measured it or found
+  // it unresolvable (`unresolvedIds` lands a frame after the selection), so a
+  // selection stays pending until then. Derived during render so it opens on
+  // the same commit that settles it.
+  const [selectionSettled, setSelectionSettled] = useState(selectedId);
+  if (selectedId !== selectionSettled) {
+    const target = selectedId ? comments.find((c) => c.id === selectedId) : undefined;
+    const noLiveAnchor = !!target && (target.scope === "global" || hasNoLiveAnchor(target));
+    if (!selectedId || noLiveAnchor || (target && Object.hasOwn(anchorTops, target.id))) {
+      setSelectionSettled(selectedId);
+    }
+    if (target && noLiveAnchor) {
+      if (filter !== "all" && target.status !== filter) setFilter("all");
+      setGlobalDialogTab(
+        target.scope === "global" && !hasNoLiveAnchor(target) ? "global" : "orphan"
+      );
+      setGlobalDialogOpen(true);
+    }
+  }
 
   // #334: drafts belong to the open file's comments, by id. Ids are only
   // unique within one file's sidecar, and EditorPage keeps this pane mounted
@@ -798,6 +890,7 @@ export function CommentSidePane({
       <GlobalCommentsDialog
         open={globalDialogOpen}
         initialTab={globalDialogTab}
+        selectedId={selectedId ?? null}
         globalComments={globalComments}
         orphanComments={orphanComments}
         onClose={() => setGlobalDialogOpen(false)}
@@ -1661,6 +1754,8 @@ export interface CommentRowProps {
   /** #316: the global/orphan dialog already IS a centered view, so it hides
    *  this button instead of offering one that opens a dialog over a dialog. */
   showDetail?: boolean;
+  /** #226: the row a `?comment_id=` link pointed at. */
+  selected?: boolean;
 }
 
 export function CommentRow({
@@ -1676,6 +1771,7 @@ export function CommentRow({
   onCopyLink,
   canCopyLink = true,
   showDetail = true,
+  selected = false,
 }: CommentRowProps) {
   const [replyOpen, setReplyOpen] = useState(false);
   const [replyBody, setReplyBody] = useState("");
@@ -1715,11 +1811,13 @@ export function CommentRow({
       data-testid="comment-item"
       data-comment-id={c.id}
       data-comment-status={c.status}
+      data-selected={selected ? "true" : undefined}
       sx={{
         p: 1.5,
         borderBottom: "1px solid",
         borderColor: "divider",
         opacity: resolved ? 0.6 : 1,
+        bgcolor: selected ? "action.selected" : undefined,
       }}
     >
       <Box
@@ -1747,6 +1845,15 @@ export function CommentRow({
           }}
         />
         <CommentId id={c.id} />
+        {selected && (
+          <Chip
+            label="リンク先"
+            size="small"
+            color="primary"
+            sx={{ height: 18, fontSize: "0.65rem", "& .MuiChip-label": { px: 0.75 } }}
+            data-testid="comment-linked-badge"
+          />
+        )}
         {badge && (
           <Chip
             label={badge.label}
