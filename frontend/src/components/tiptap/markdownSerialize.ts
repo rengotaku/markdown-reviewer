@@ -1,5 +1,7 @@
 import type { Editor } from "@tiptap/core";
 import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
+import { topLevelBlockRanges } from "@/utils/diffGutterMarks";
+import { trueEndLine } from "@/utils/blankLines";
 
 // getEditorMarkdown restores blank lines around top-level blocks so saving
 // doesn't collapse a 5-blank-line gap back down to tiptap-markdown's default
@@ -88,6 +90,105 @@ function contentBlocksAndBlanks(doc: ProseMirrorNode): ContentBlocks {
   return { nodes, blanksBefore };
 }
 
+// Unedited blocks keep their source (#268). Re-serializing a whole document
+// normalizes Markdown it never touched — trailing double-space line breaks
+// dropped, wrapped lines joined, `|------|` rewritten as `| --- |` — so
+// opening a file and changing one character produced thousands of lines of
+// diff, and some files came up "unsaved" just by being opened. Each
+// top-level block's source text is remembered at load, keyed by the
+// ProseMirror node object: a node nobody edited is the very same object in
+// every later document (ProseMirror shares unchanged subtrees), so one still
+// found in the map is written out as its source, and only the blocks that
+// changed are serialized. A block that was edited and then put back exactly
+// as it was (undo rebuilds the block around its restored content) is a new
+// object, so a miss falls back to a block loaded with the same structure
+// (`node.eq`). Adding,
+// deleting and reordering blocks needs no bookkeeping. The original gap
+// between two blocks is kept too, while both are untouched, still next to
+// each other, and the blank lines between them haven't been edited.
+
+interface BlockSource {
+  /** The block's lines as loaded, without trailing blank lines. */
+  text: string;
+  /** Position among the loaded file's top-level blocks. */
+  index: number;
+  /** Newlines between the previous block's last line and this one's first,
+   *  as loaded (1 = adjacent lines, 2 = one blank line, ...). */
+  separator: number;
+  /** Blank-line paragraphs the load put in front of this block. */
+  blanksBefore: number;
+}
+
+/** markdown-it's top-level token type → the node types it loads as. */
+const NODE_TYPES_FOR_TOKEN: Record<string, readonly string[]> = {
+  heading_open: ["heading"],
+  paragraph_open: ["paragraph"],
+  blockquote_open: ["blockquote"],
+  bullet_list_open: ["bulletList", "taskList"],
+  ordered_list_open: ["orderedList"],
+  table_open: ["table"],
+  fence: ["codeBlock", "mermaidBlock"],
+  code_block: ["codeBlock"],
+  hr: ["horizontalRule"],
+  html_block: ["rawHtmlBlock"],
+};
+
+interface BlockSources {
+  byNode: WeakMap<ProseMirrorNode, BlockSource>;
+  /** The loaded blocks by type and text, for the structural fallback. */
+  byText: Map<string, Array<[ProseMirrorNode, BlockSource]>>;
+}
+
+const sourcesByEditor = new WeakMap<Editor, BlockSources>();
+
+const textKey = (node: ProseMirrorNode) => `${node.type.name}\u0000${node.textContent}`;
+
+function lookupSource(sources: BlockSources, node: ProseMirrorNode): BlockSource | undefined {
+  const hit = sources.byNode.get(node);
+  if (hit) return hit;
+  return sources.byText.get(textKey(node))?.find(([loaded]) => loaded.eq(node))?.[1];
+}
+
+/**
+ * Remembers the source of each top-level block of the document `editor` just
+ * loaded from `body` (call after the blank lines are in place). The blocks
+ * are paired with markdown-it's top-level ranges by position, so this records
+ * nothing — and every block is serialized as before — unless the pairing is
+ * certain: the same number of blocks, of matching kinds, and no non-blank
+ * line outside every block (a link reference definition, say, has no node of
+ * its own, and keeping `[text][ref]` while the definition is dropped would
+ * break the link).
+ */
+export function recordBlockSources(editor: Editor, body: string): void {
+  const sources: BlockSources = { byNode: new WeakMap(), byText: new Map() };
+  sourcesByEditor.set(editor, sources);
+
+  const { nodes, blanksBefore } = contentBlocksAndBlanks(editor.state.doc);
+  const ranges = topLevelBlockRanges(body);
+  if (nodes.length === 0 || nodes.length !== ranges.length) return;
+  const lines = body.split("\n");
+  const ends = ranges.map((range) => trueEndLine(lines, range));
+
+  const covered = new Array<boolean>(lines.length).fill(false);
+  ranges.forEach((range, i) => covered.fill(true, range.start, ends[i]));
+  if (lines.some((line, i) => !covered[i] && line.trim() !== "")) return;
+  if (!nodes.every((node, i) => NODE_TYPES_FOR_TOKEN[ranges[i].type]?.includes(node.type.name))) {
+    return;
+  }
+
+  nodes.forEach((node, i) => {
+    const source: BlockSource = {
+      text: lines.slice(ranges[i].start, ends[i]).join("\n"),
+      index: i,
+      separator: i === 0 ? 0 : ranges[i].start - ends[i - 1] + 1,
+      blanksBefore: blanksBefore[i] ?? 0,
+    };
+    sources.byNode.set(node, source);
+    const key = textKey(node);
+    sources.byText.set(key, [...(sources.byText.get(key) ?? []), [node, source]]);
+  });
+}
+
 /**
  * getEditorMarkdown serializes `editor`'s document to Markdown, restoring
  * any blank lines represented by empty paragraphs before top-level blocks
@@ -97,7 +198,9 @@ export function getEditorMarkdown(editor: Editor): string {
   const { nodes, blanksBefore } = contentBlocksAndBlanks(editor.state.doc);
   if (nodes.length === 0) return "";
 
-  const raws = nodes.map((node) => serializeBlock(editor, node));
+  const sources = sourcesByEditor.get(editor);
+  const kept = nodes.map((node) => (sources ? lookupSource(sources, node) : undefined));
+  const raws = nodes.map((node, i) => kept[i]?.text ?? serializeBlock(editor, node));
 
   // Strip each block's own trailing newline(s) before rejoining — the
   // number of newlines between blocks is decided entirely by us below, not
@@ -107,9 +210,20 @@ export function getEditorMarkdown(editor: Editor): string {
   let out = "\n".repeat(blanksBefore[0] ?? 0);
   trimmed.forEach((block, index) => {
     if (index > 0) {
-      // Normal separator is a single blank line ("\n\n"); each blank-line
-      // paragraph before this block adds one more "\n".
-      out += "\n".repeat(2 + (blanksBefore[index] ?? 0));
+      const prev = kept[index - 1];
+      const self = kept[index];
+      if (
+        prev &&
+        self &&
+        self.index === prev.index + 1 &&
+        self.blanksBefore === (blanksBefore[index] ?? 0)
+      ) {
+        out += "\n".repeat(self.separator);
+      } else {
+        // Normal separator is a single blank line ("\n\n"); each blank-line
+        // paragraph before this block adds one more "\n".
+        out += "\n".repeat(2 + (blanksBefore[index] ?? 0));
+      }
     }
     out += block;
   });

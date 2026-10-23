@@ -25,8 +25,14 @@ describe("topLevelBlockRanges", () => {
     // heading, paragraph, list, fence — four top-level blocks, not one per
     // list item / paragraph line.
     expect(ranges).toHaveLength(4);
-    expect(ranges[0]).toEqual({ start: 0, end: 1 });
-    expect(ranges[1]).toEqual({ start: 2, end: 4 });
+    expect(ranges[0]).toEqual({ type: "heading_open", start: 0, end: 1 });
+    expect(ranges[1]).toEqual({ type: "paragraph_open", start: 2, end: 4 });
+    expect(ranges.map((r) => r.type)).toEqual([
+      "heading_open",
+      "paragraph_open",
+      "bullet_list_open",
+      "fence",
+    ]);
   });
 
   it("returns an empty array for an empty body", () => {
