@@ -457,6 +457,24 @@ export function CommentSidePane({
   const [globalDialogOpen, setGlobalDialogOpen] = useState(false);
   const [globalDialogTab, setGlobalDialogTab] = useState<GlobalBadgeKind>("global");
 
+  // #226: a comment with no live anchor has no highlight to jump to, so when
+  // one is selected (a `?comment_id=` link) open the dialog it lives in, on
+  // its tab, with the row marked. A resolved one is hidden by the default
+  // "open" filter; widen it so the row is there to mark. Derived during
+  // render so it opens on the same commit as the selection.
+  const [prevSelectedId, setPrevSelectedId] = useState(selectedId);
+  if (selectedId !== prevSelectedId) {
+    setPrevSelectedId(selectedId);
+    const target = selectedId ? comments.find((c) => c.id === selectedId) : undefined;
+    if (target && (target.scope === "global" || hasNoLiveAnchor(target))) {
+      if (filter !== "all" && target.status !== filter) setFilter("all");
+      setGlobalDialogTab(
+        target.scope === "global" && !hasNoLiveAnchor(target) ? "global" : "orphan"
+      );
+      setGlobalDialogOpen(true);
+    }
+  }
+
   // #334: drafts belong to the open file's comments, by id. Ids are only
   // unique within one file's sidecar, and EditorPage keeps this pane mounted
   // when the open file changes, so a file change starts from none. Done during
@@ -785,6 +803,7 @@ export function CommentSidePane({
       <GlobalCommentsDialog
         open={globalDialogOpen}
         initialTab={globalDialogTab}
+        selectedId={selectedId ?? null}
         globalComments={globalComments}
         orphanComments={orphanComments}
         onClose={() => setGlobalDialogOpen(false)}
@@ -1626,6 +1645,8 @@ export interface CommentRowProps {
   /** #316: the global/orphan dialog already IS a centered view, so it hides
    *  this button instead of offering one that opens a dialog over a dialog. */
   showDetail?: boolean;
+  /** #226: the row a `?comment_id=` link pointed at. */
+  selected?: boolean;
 }
 
 export function CommentRow({
@@ -1641,6 +1662,7 @@ export function CommentRow({
   onCopyLink,
   canCopyLink = true,
   showDetail = true,
+  selected = false,
 }: CommentRowProps) {
   const [replyOpen, setReplyOpen] = useState(false);
   const [replyBody, setReplyBody] = useState("");
@@ -1680,11 +1702,13 @@ export function CommentRow({
       data-testid="comment-item"
       data-comment-id={c.id}
       data-comment-status={c.status}
+      data-selected={selected ? "true" : undefined}
       sx={{
         p: 1.5,
         borderBottom: "1px solid",
         borderColor: "divider",
         opacity: resolved ? 0.6 : 1,
+        bgcolor: selected ? "action.selected" : undefined,
       }}
     >
       <Box
