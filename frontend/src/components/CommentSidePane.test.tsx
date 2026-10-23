@@ -321,7 +321,11 @@ describe("CommentSidePane", () => {
 
     describe("a comment_id link to a comment with no live anchor (#226)", () => {
       const noop = () => {};
-      const paneWith = (comments: CommentJSON[], selectedId: string | null) => (
+      const paneWith = (
+        comments: CommentJSON[],
+        selectedId: string | null,
+        unresolvedIds: ReadonlySet<string> = new Set()
+      ) => (
         <CommentSidePane
           root="works"
           filePath="doc.md"
@@ -340,6 +344,7 @@ describe("CommentSidePane", () => {
           onJump={noop}
           onSelect={noop}
           selectedId={selectedId}
+          unresolvedIds={unresolvedIds}
         />
       );
       const selectedRow = () =>
@@ -354,6 +359,20 @@ describe("CommentSidePane", () => {
         rerender(paneWith(comments, "g2"));
         expect(screen.getByTestId("global-comments-tab-global")).toHaveAttribute("aria-selected", "true");
         expect(selectedRow()?.dataset.commentId).toBe("g2");
+        // Marked in words too, not by the background colour alone.
+        expect(within(selectedRow()!).getByTestId("comment-linked-badge")).toHaveTextContent("リンク先");
+        expect(screen.getAllByTestId("comment-linked-badge")).toHaveLength(1);
+      });
+
+      it("opens once the caller finds an anchored comment unresolvable after the selection", () => {
+        // The server says anchored (orphan: false); the editor can't place it,
+        // and says so a frame after the link selected it.
+        const comments = [comment("u1")];
+        const { rerender } = render(paneWith(comments, null));
+        rerender(paneWith(comments, "u1"));
+        expect(screen.queryByTestId("global-comments-dialog")).toBeNull();
+        rerender(paneWith(comments, "u1", new Set(["u1"])));
+        expect(selectedRow()?.dataset.commentId).toBe("u1");
       });
 
       it("opens the orphan tab for an orphan comment", () => {

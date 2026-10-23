@@ -460,13 +460,19 @@ export function CommentSidePane({
   // #226: a comment with no live anchor has no highlight to jump to, so when
   // one is selected (a `?comment_id=` link) open the dialog it lives in, on
   // its tab, with the row marked. A resolved one is hidden by the default
-  // "open" filter; widen it so the row is there to mark. Derived during
-  // render so it opens on the same commit as the selection.
-  const [prevSelectedId, setPrevSelectedId] = useState(selectedId);
-  if (selectedId !== prevSelectedId) {
-    setPrevSelectedId(selectedId);
+  // "open" filter; widen it so the row is there to mark. Whether an anchored
+  // comment is live is only known once the caller has measured it or found
+  // it unresolvable (`unresolvedIds` lands a frame after the selection), so a
+  // selection stays pending until then. Derived during render so it opens on
+  // the same commit that settles it.
+  const [selectionSettled, setSelectionSettled] = useState(selectedId);
+  if (selectedId !== selectionSettled) {
     const target = selectedId ? comments.find((c) => c.id === selectedId) : undefined;
-    if (target && (target.scope === "global" || hasNoLiveAnchor(target))) {
+    const noLiveAnchor = !!target && (target.scope === "global" || hasNoLiveAnchor(target));
+    if (!selectedId || noLiveAnchor || (target && Object.hasOwn(anchorTops, target.id))) {
+      setSelectionSettled(selectedId);
+    }
+    if (target && noLiveAnchor) {
       if (filter !== "all" && target.status !== filter) setFilter("all");
       setGlobalDialogTab(
         target.scope === "global" && !hasNoLiveAnchor(target) ? "global" : "orphan"
@@ -1736,6 +1742,15 @@ export function CommentRow({
           }}
         />
         <CommentId id={c.id} />
+        {selected && (
+          <Chip
+            label="リンク先"
+            size="small"
+            color="primary"
+            sx={{ height: 18, fontSize: "0.65rem", "& .MuiChip-label": { px: 0.75 } }}
+            data-testid="comment-linked-badge"
+          />
+        )}
         {badge && (
           <Chip
             label={badge.label}

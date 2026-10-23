@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Dialog from "@mui/material/Dialog";
 import DialogTitle from "@mui/material/DialogTitle";
 import DialogContent from "@mui/material/DialogContent";
@@ -84,13 +84,19 @@ export function GlobalCommentsDialog({
   const list = activeTab === "global" ? globalComments : orphanComments;
 
   // #226: bring the linked row into view once the dialog has it on screen.
+  // On the commit that opens the dialog its content is not mounted yet (the
+  // portal renders it after), so the first scroll waits for the enter
+  // transition; later selection or tab changes scroll from the effect.
   const contentRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    if (!open || !selectedId) return;
+  const scrollToSelected = useCallback(() => {
+    if (!selectedId) return;
     contentRef.current
       ?.querySelector<HTMLElement>(`[data-comment-id="${CSS.escape(selectedId)}"]`)
       ?.scrollIntoView?.({ block: "nearest" });
-  }, [open, selectedId, activeTab]);
+  }, [selectedId]);
+  useEffect(() => {
+    if (open) scrollToSelected();
+  }, [open, scrollToSelected, activeTab]);
 
   return (
     <Dialog
@@ -99,6 +105,7 @@ export function GlobalCommentsDialog({
       maxWidth="sm"
       fullWidth
       data-testid="global-comments-dialog"
+      TransitionProps={{ onEntered: scrollToSelected }}
     >
       <DialogTitle sx={{ display: "flex", alignItems: "center", gap: 1, pr: 1 }}>
         <Box sx={{ flexGrow: 1 }}>
