@@ -2259,6 +2259,11 @@ describe("EditorPage jump to comment (#167)", () => {
   });
 
   describe("comment_id deeplink (STEP 3)", () => {
+    // #339: a selection's jump waits for the rail to lay out what the
+    // selection produced, a few frames after the comments land — on a slow
+    // CI runner that alone can use up waitFor's 1s default.
+    const DEEPLINK_JUMP_WAIT = { timeout: 3000 };
+
     it("ケース 3: comment_id 付きで開く → ジャンプする", async () => {
       const comment: CommentJSON = {
         id: "c-001",
@@ -2277,7 +2282,7 @@ describe("EditorPage jump to comment (#167)", () => {
 
       await waitFor(() => {
         expect(scrollSpy).toHaveBeenCalled();
-      });
+      }, DEEPLINK_JUMP_WAIT);
       const scrolledEl = scrollSpy.mock.instances[0] as HTMLElement;
       expect(scrolledEl.textContent).toContain("hello world");
     });
@@ -2366,7 +2371,7 @@ describe("EditorPage jump to comment (#167)", () => {
 
       await waitFor(() => {
         expect(scrollSpy).toHaveBeenCalled();
-      });
+      }, DEEPLINK_JUMP_WAIT);
       const scrolledEl = scrollSpy.mock.instances[0] as HTMLElement;
       expect(scrolledEl.textContent).toContain("hello world");
     });
