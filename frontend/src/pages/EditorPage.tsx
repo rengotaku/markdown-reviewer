@@ -35,13 +35,11 @@ import {
   ToastViewport,
   ConfirmDialog,
   CommentSidePane,
-  CommentRail,
-  CommentThreadPopover,
   CommentComposerPopover,
-  CommentHoverPreview,
   DiffView,
   NameTooltip,
 } from "@/components";
+import type { DocBox } from "@/components/CommentSidePane";
 import { useOpenFiles } from "@/hooks/useOpenFiles";
 import { useRecentOpened } from "@/hooks/useRecentOpened";
 import { useReadFile, useWriteFile } from "@/hooks/useFileContent";
@@ -66,6 +64,7 @@ import {
   ingestFile,
   listRevisions,
   createRevision,
+  sendReviewCommand,
   getRevision,
   restoreRevision,
   listComments,
@@ -83,7 +82,13 @@ import {
 import { stripHint } from "@/utils/stripHint";
 import { firstH1 } from "@/utils/firstH1";
 import { formatLocalTimestamp } from "@/utils/formatTimestamp";
-import { computeAnchorsFromSelection, resolveAnchorInDoc } from "@/utils/pmAnchor";
+import {
+  computeAnchorsFromSelection,
+  resolveAnchorInDoc,
+  firstAnchorPosInBlocks,
+  extractAnchorBlocks,
+  type AnchorBlock,
+} from "@/utils/pmAnchor";
 import { lineDiff, hasChanges } from "@/utils/lineDiff";
 import { dirOf } from "@/utils/dirOf";
 import { splitPreamble } from "@/utils/frontmatter";
@@ -93,8 +98,8 @@ import {
   commentIdsInRange,
   type HighlightComment,
 } from "@/components/tiptap/extensions/CommentHighlight";
-import { contextLabel } from "@/utils/commentContext";
 import { popoverFrame } from "@/utils/popoverFrame";
+import { scrollTableIntoView } from "@/utils/scrollTableIntoView";
 import type {
   ComposerMode,
   ComposerSubmit,
@@ -107,14 +112,12 @@ function basename(path: string): string {
 }
 
 const TARGET_SNIPPET_LENGTH = 60;
-/** Pointer dwell before a comment highlight opens its 編集 / 削除 menu. */
+/** Pointer dwell before the selection's "コメント追加" menu opens. */
 const COMMENT_HOVER_OPEN_MS = 150;
-/** Grace period after the pointer leaves the text or the menu. */
+/** Grace period after the pointer leaves the selection or the menu. */
 const COMMENT_HOVER_CLOSE_MS = 250;
 /** Minimum gap between pointer samples — posAtCoords per mousemove is wasteful. */
 const HOVER_SAMPLE_MS = 60;
-/** How much of a comment body to quote when naming the delete target. */
-const COMMENT_SUMMARY_LENGTH = 40;
 const COMMENT_ID_PARAM = "comment_id";
 
 /** Suffix on the browser tab title; matches the <title> in index.html. */
@@ -127,14 +130,6 @@ const COMMENTS_POLL_MS = 30_000;
 // AI hint and wakes the file watcher), short enough that a crash or a closed
 // laptop loses at most a few seconds of typing.
 const AUTOSAVE_IDLE_MS = 10_000;
-
-/** One-line preview of a comment body, for naming what is about to be deleted. */
-function commentSummary(body: string): string {
-  const oneLine = body.replace(/\s+/g, " ").trim();
-  return oneLine.length > COMMENT_SUMMARY_LENGTH
-    ? `${oneLine.slice(0, COMMENT_SUMMARY_LENGTH)}…`
-    : oneLine;
-}
 
 function todayISO(): string {
   const d = new Date();
@@ -150,10 +145,47 @@ function buildTargetSnippet(raw: string): string {
   return `${cleaned.slice(0, TARGET_SNIPPET_LENGTH)}…`;
 }
 
-/** The text a comment is anchored to, for the edit dialog's target preview.
- *  Global comments have no anchor and show nothing. */
-function commentTargetText(c: CommentJSON): string {
-  return c.anchor?.snippet ?? c.anchors?.[0]?.snippet ?? "";
+/** Shallow key/value equality for the anchorTops map (#298): avoids a state
+ *  update — and the render + effect cascade it triggers — when a recompute
+ *  produced the same positions as last time. */
+function shallowEqualRecord(a: Record<string, number>, b: Record<string, number>): boolean {
+  const aKeys = Object.keys(a);
+  const bKeys = Object.keys(b);
+  if (aKeys.length !== bKeys.length) return false;
+  return aKeys.every((k) => a[k] === b[k]);
+}
+
+/** How many candidate blocks docHoldsActiveFile will test before giving up
+ *  (#328). One match is enough to identify the document, and the first few
+ *  blocks of any real file include at least one plain-text one. */
+const DOC_IDENTITY_SAMPLE = 20;
+
+/** Same purpose as shallowEqualRecord, for the unresolved-anchor id set
+ *  (#328): a recompute that reached the same verdict must not re-render. */
+function sameIdSet(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
+  if (a.size !== b.size) return false;
+  for (const id of a) if (!b.has(id)) return false;
+  return true;
+}
+
+// Walks up from `el` to find the nearest ancestor that actually scrolls
+// (`overflow-y: auto|scroll` and content taller than its box). The DOM
+// structure between the ProseMirror root and its real scroll container
+// isn't fixed — TiptapEditor wraps it in one or more plain divs before the
+// `overflow: auto` Box that does the scrolling (and centered-layout toggles
+// swap which wrapper that is) — so the caller can't assume a fixed ancestor
+// depth like "parentElement".
+function findScrollableAncestor(el: HTMLElement | null): HTMLElement | null {
+  let node = el?.parentElement ?? null;
+  while (node) {
+    const style = window.getComputedStyle(node);
+    const overflowY = style.overflowY;
+    if ((overflowY === "auto" || overflowY === "scroll") && node.scrollHeight > node.clientHeight) {
+      return node;
+    }
+    node = node.parentElement;
+  }
+  return null;
 }
 
 export function EditorPage() {
@@ -183,8 +215,6 @@ export function EditorPage() {
   const setSidebarOpen = useUIStore((s) => s.setSidebarOpen);
   const sidebarPinned = useUIStore((s) => s.sidebarPinned);
   const setSidebarPinned = useUIStore((s) => s.setSidebarPinned);
-  const isCommentPaneOpen = useUIStore((s) => s.isCommentPaneOpen);
-  const toggleCommentPane = useUIStore((s) => s.toggleCommentPane);
   const sidebarWidth = useUIStore((s) => s.sidebarWidth);
   const setSidebarWidth = useUIStore((s) => s.setSidebarWidth);
 
@@ -315,6 +345,8 @@ export function EditorPage() {
   const registerSelfWrite = useChangedPaths((s) => s.registerSelfWrite);
   const editor = useEditorInstance((s) => s.editor);
   const centered = useEditorPrefs((s) => s.centered);
+  const commentRailMode = useEditorPrefs((s) => s.commentRailMode);
+  const setCommentRailMode = useEditorPrefs((s) => s.setCommentRailMode);
   const toggleCentered = useEditorPrefs((s) => s.toggleCentered);
   const { author } = useCommentAuthor();
   const queryClient = useQueryClient();
@@ -431,6 +463,13 @@ export function EditorPage() {
     const file = useOpenFiles.getState().files.find((f) => f.id === fileId);
     if (!file) return false;
     if (!file.isDirty) return true;
+    // Fail-closed backstop (#293), independent of the onUpdate gate that
+    // sets `isDirty` in the first place: never write a buffer to disk that
+    // the user never actually typed/pasted/toolbar-edited into, even if
+    // some other bug left it dirty. Nothing was lost — the buffer just
+    // never diverged from the user's intent — so this is reported as
+    // "already clean" rather than a failure.
+    if (!file.userEdited) return true;
     if (autosaveInFlight.current.has(fileId)) return false;
     // An un-reconciled external change means there is no baseline we can
     // honestly claim to be building on. Overwriting it is a decision, so leave
@@ -1400,8 +1439,6 @@ export function EditorPage() {
   // Whether a pointer gesture in the editor is still in progress — the
   // selection bubble stays hidden until the drag ends.
   const pointerIsDown = useRef(false);
-  // Comment whose DELETE is in flight, if any (see handleBubbleDeleteComment).
-  const [deletingCommentId, setDeletingCommentId] = useState<string | null>(null);
 
   // Set while the pointer rests on the menu itself, so the grace timer armed
   // when it left the text does not close it out from under them.
@@ -1413,12 +1450,11 @@ export function EditorPage() {
   // the menu never reopens.
   const hoverKey = useRef<string | null>(null);
   // What the pointer is resting on in the editor, with the rect to anchor the
-  // menu to. Hover is the *only* trigger: resting on a comment highlight
-  // offers 編集 / 削除, resting inside the current selection offers コメント追加,
-  // and a selection inside a comment offers all three from the one menu.
+  // "コメント追加" menu to. Hover is the *only* trigger, and the only entry
+  // this menu still has is a live (non-empty) selection — a highlight click
+  // always selects that comment's rail card directly (#304 removed the
+  // hover-preview / click-to-open-popover path this used to also serve).
   const [hoverTarget, setHoverTarget] = useState<{
-    commentId?: string;
-    /** Pointer is inside the live (non-empty) selection. */
     canAdd: boolean;
     top: number;
     left: number;
@@ -1426,50 +1462,223 @@ export function EditorPage() {
     right: number;
   } | null>(null);
 
-  // The comment whose thread is open, with the rect its popover hangs off.
-  // Click opens, hover only previews (#251), so at most one thread is open at
-  // a time and the hover preview stays suppressed while it is.
-  const [openThread, setOpenThread] = useState<{
-    commentId: string;
-    rect: DOMRect;
-  } | null>(null);
-  // The reply being typed in that thread. Lifted out of the popover so the
-  // dismissal paths can refuse to throw away unsent text (#251).
-  const [threadDraft, setThreadDraft] = useState("");
-  // Read from DOM listeners registered once per editor, which would otherwise
-  // close over the first render's value.
-  const openThreadRef = useRef<typeof openThread>(null);
-  const threadDraftRef = useRef("");
-  useEffect(() => {
-    openThreadRef.current = openThread;
-    threadDraftRef.current = threadDraft;
-  }, [openThread, threadDraft]);
   useEffect(() => {
     composerRef.current = composer;
     composerDraftRef.current = composerDraft;
   }, [composer, composerDraft]);
 
-  // Opening is triggered from two places — the highlight's own click handler
-  // and the hover preview sitting on top of it — so the state transition lives
-  // in one function rather than being written out at each call site. Held in a
-  // ref as well, because the editor's DOM listeners are registered once and
-  // would otherwise close over the first render's copy.
-  const openThreadFor = (commentId: string, rect: DOMRect) => {
-    hoverKey.current = null;
-    setHoverTarget(null);
-    setThreadDraft("");
-    setOpenThread({ commentId, rect });
+  // The comment card the pane highlights as selected: a highlight click, a
+  // pane row click, a deep link, or the jump-to-comment path all land here
+  // (#304 — the pane is always open, so there is no popover to open instead).
+  const [railSelectedId, setRailSelectedId] = useState<string | null>(null);
+
+  // Where a comment's first live anchor sits, measured from the document
+  // rather than from a rendered decoration.
+  //
+  // The two failure cases are deliberately distinct (#328): "this anchor does
+  // not resolve in the live document" is a property of the data and makes the
+  // comment unplaceable for good, while "resolved but not measurable" is
+  // transient (no layout yet, jsdom) and must not be reported as the former.
+  // `blocks` is the doc flattened once by the caller, for the same reason
+  // buildDeco flattens once: this runs per rAF-coalesced recompute, and
+  // re-extracting per anchor would make it O(anchors × doc size).
+  type AnchorMeasurement =
+    | { kind: "measured"; top: number }
+    | { kind: "unmeasurable" }
+    | { kind: "unresolvable" };
+  const measureAnchor = (
+    c: CommentJSON,
+    blocks: AnchorBlock[]
+  ): AnchorMeasurement => {
+    if (!editor || editor.isDestroyed) return { kind: "unmeasurable" };
+    const first = firstAnchorPosInBlocks(blocks, c);
+    if (first === null) return { kind: "unresolvable" };
+    try {
+      return { kind: "measured", top: editor.view.coordsAtPos(first).top };
+    } catch {
+      return { kind: "unmeasurable" };
+    }
   };
 
-  const openThreadForRef = useRef(openThreadFor);
+  // Viewport top (px) of each anchored comment's live position, keyed by
+  // comment id — what the rail's paragraph-aligned layout positions cards
+  // against (#298). Comments with no live anchor (global/orphan) never get an
+  // entry and stay in the pane's pinned section.
+  const [anchorTops, setAnchorTops] = useState<Record<string, number>>({});
+  // The editor's document root (viewport top/bottom) and the body's scroll
+  // position, measured alongside anchorTops so the rail can keep its first
+  // card clear of the pane's top and tell how far it reaches past the end
+  // (#338).
+  const [docBox, setDocBox] = useState<DocBox | null>(null);
+  // How many px the aligned rail reaches past that end — the height of
+  // TiptapEditor's bottom spacer, so the body scrolls far enough for the last
+  // card to come into view (#338).
+  const [railOverhang, setRailOverhang] = useState(0);
+  const railOverhangs = railOverhang > 0;
+  // Ids of anchored comments whose anchor does not resolve in the live
+  // document, so the pane can show them as 位置不明 instead of dropping them
+  // (#328). Empty while the document isn't ready to be judged against — see
+  // the guard in recomputeAnchorTops.
+  const [unresolvedIds, setUnresolvedIds] = useState<ReadonlySet<string>>(
+    () => new Set()
+  );
+  // Whether the document the editor currently holds is the active file's
+  // (#328). "This anchor resolves nowhere" is only worth reporting to the
+  // reader once that is true: on a tab switch the editor still holds the
+  // previous file's doc for a frame or two (TiptapEditor replaces it in its
+  // own effect), and judging against that would fail every anchor and flash
+  // 位置不明 on a file that is merely still loading.
+  //
+  // The test is containment rather than equality, and it only needs *one*
+  // block to land: `blocks` carries rendered text (inline markup stripped),
+  // so a block that happens to hold a link or emphasis is not a substring of
+  // the markdown it came from (`[t](u)` renders as `t`) — but a block of
+  // plain text is, and no block of this file matches another file's markdown.
+  // Requiring only the first block to match rejected a real document whose
+  // opening line carried a link. Erring towards "not this file" costs only
+  // that the reader keeps the old silent behaviour for that frame; erring the
+  // other way shows a warning they would act on.
+  const docHoldsActiveFile = (blocks: ReadonlyArray<AnchorBlock>): boolean => {
+    if (commentsLoadedForPath !== activePath) return false;
+    const markdown = activeFile?.markdown;
+    if (!markdown) return false;
+    let checked = 0;
+    for (const b of blocks) {
+      const text = b.text.trim();
+      // Very short blocks (a lone table cell, a one-word heading) match by
+      // coincidence across files, so they don't count as evidence.
+      if (text.length < 8) continue;
+      if (markdown.includes(text)) return true;
+      // Bounded so a mismatching document (the tab-switch window) can't turn
+      // this into a full scan of every block on every recompute.
+      if (++checked >= DOC_IDENTITY_SAMPLE) break;
+    }
+    return false;
+  };
+
+  const anchorRafRef = useRef<number | null>(null);
+  const recomputeAnchorTops = () => {
+    if (!editor || editor.isDestroyed) return;
+    const root = editor.view.dom;
+    const next: Record<string, number> = {};
+    const unresolved = new Set<string>();
+    let blocks: AnchorBlock[] | null = null;
+    for (const c of comments) {
+      if (c.scope === "global" || c.orphan) continue;
+      const el = root.querySelector<HTMLElement>(`[data-comment-id="${CSS.escape(c.id)}"]`);
+      if (el) {
+        next[c.id] = el.getBoundingClientRect().top;
+        continue;
+      }
+      // No decoration to measure. Either the comment is resolved — those
+      // paint none by design (#96/#97) — or its anchor found nothing to
+      // decorate. Both are answered by resolving the anchor against the
+      // document, the same decoration-independent route handleJumpToComment
+      // takes (#167 / #326). Flattened on first use only, so a review whose
+      // comments all carry decorations never pays for it.
+      blocks ??= extractAnchorBlocks(editor.state.doc);
+      const m = measureAnchor(c, blocks);
+      if (m.kind === "measured") next[c.id] = m.top;
+      else if (m.kind === "unresolvable" && docHoldsActiveFile(blocks))
+        unresolved.add(c.id);
+    }
+    // Skip the state update (and the render + downstream effects it would
+    // trigger) when nothing actually moved — a `transaction` fires on every
+    // keystroke/selection change, most of which don't shift any decoration.
+    setAnchorTops((prev) => (shallowEqualRecord(prev, next) ? prev : next));
+    // The root, not the spacer below it: the spacer is what absorbs the
+    // overhang, so measuring it would feed back into its own height.
+    const rootRect = root.getBoundingClientRect();
+    const box: DocBox = {
+      top: rootRect.top,
+      bottom: rootRect.bottom,
+      scrollTop: findScrollableAncestor(root)?.scrollTop ?? 0,
+    };
+    setDocBox((prev) =>
+      prev &&
+      prev.top === box.top &&
+      prev.bottom === box.bottom &&
+      prev.scrollTop === box.scrollTop
+        ? prev
+        : box
+    );
+    setUnresolvedIds((prev) => (sameIdSet(prev, unresolved) ? prev : unresolved));
+  };
+  // #306 root cause: `scheduleAnchorRecalc` coalesces bursts of triggers onto
+  // a single rAF via `anchorRafRef` — but the callback closed over
+  // `recomputeAnchorTops` at *schedule* time. When `comments` arrives and
+  // `editor` mounts within the same rAF window (the common case opening a
+  // file with existing comments), the first call schedules the frame while
+  // `editor` is still null; every later call in that window (once `editor`
+  // is set, `comments` included) sees `anchorRafRef.current` already
+  // occupied and no-ops. The one frame that does run reads the *stale*
+  // closure — `editor` still null, or `comments` still `[]` — finds nothing,
+  // and nothing else ever re-triggers a recompute on an untouched file (no
+  // edit/scroll/resize). Routing the callback through a ref that is kept
+  // current every render (like `scheduleAnchorRecalcRef` below) means
+  // whichever render's request wins the coalescing race, the frame that
+  // actually fires always reads the latest `editor`/`comments`.
+  const recomputeAnchorTopsRef = useRef(recomputeAnchorTops);
   useEffect(() => {
-    openThreadForRef.current = openThreadFor;
+    recomputeAnchorTopsRef.current = recomputeAnchorTops;
   });
-
-  const closeThread = () => {
-    setOpenThread(null);
-    setThreadDraft("");
+  const scheduleAnchorRecalc = () => {
+    if (anchorRafRef.current !== null) return;
+    anchorRafRef.current = requestAnimationFrame(() => {
+      anchorRafRef.current = null;
+      recomputeAnchorTopsRef.current();
+    });
   };
+  const scheduleAnchorRecalcRef = useRef(scheduleAnchorRecalc);
+  useEffect(() => {
+    scheduleAnchorRecalcRef.current = scheduleAnchorRecalc;
+  });
+  // Recompute whenever the decorations could have moved: the comment list
+  // changed, the document was edited, the reader scrolled the body, the
+  // viewport resized, or the centered-layout width changed. Coalesced onto a
+  // single rAF (#298 forbids re-reading every comment's rect per scroll
+  // event) rather than firing the DOM read synchronously from each listener.
+  useEffect(() => {
+    scheduleAnchorRecalcRef.current();
+  }, [comments, editor, centered]);
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) return;
+    const onUpdate = () => scheduleAnchorRecalcRef.current();
+    editor.on("transaction", onUpdate);
+    return () => {
+      if (editor.isDestroyed) return;
+      editor.off("transaction", onUpdate);
+    };
+  }, [editor]);
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) return;
+    const onScrollOrResize = () => scheduleAnchorRecalcRef.current();
+    // The nearest scrollable ancestor of the ProseMirror DOM node is
+    // TiptapEditor's actual scroll container (`overflow-y: auto`) — but it
+    // isn't a fixed number of hops up (plain non-scrolling wrapper divs sit
+    // in between, and centered-layout toggles swap which wrapper ends up
+    // scrolling), so it's found by walking up rather than assumed to be
+    // `parentElement`. Listening there instead of capturing every `scroll`
+    // in the document keeps this from re-running on unrelated scrolling
+    // elsewhere in the app (menus, listboxes, ...).
+    //
+    // #338: re-run when the rail starts or stops reaching past the
+    // document's end. A document too short to scroll has no scroll container
+    // to find, and it is TiptapEditor's bottom spacer, sized from that
+    // overhang, that first makes it scroll — after this effect already ran.
+    const scrollEl = findScrollableAncestor(editor.view.dom);
+    scrollEl?.addEventListener("scroll", onScrollOrResize);
+    window.addEventListener("resize", onScrollOrResize);
+    return () => {
+      scrollEl?.removeEventListener("scroll", onScrollOrResize);
+      window.removeEventListener("resize", onScrollOrResize);
+    };
+  }, [editor, centered, railOverhangs]);
+  useEffect(() => {
+    return () => {
+      if (anchorRafRef.current !== null) cancelAnimationFrame(anchorRafRef.current);
+    };
+  }, []);
 
   // Re-render the toolbar Add-Comment button when selection / doc changes.
   const [, setSelectionTick] = useState(0);
@@ -1505,45 +1714,28 @@ export function EditorPage() {
 
     type Target = NonNullable<typeof hoverTarget>;
     const targetAt = (ev: MouseEvent): Target | null => {
-      const markEl = (ev.target as HTMLElement | null)?.closest?.(
-        "[data-comment-id]"
-      ) as HTMLElement | null;
       let pos: { pos: number } | null = null;
       try {
         pos = editor.view.posAtCoords({ left: ev.clientX, top: ev.clientY });
       } catch {
         pos = null; // no layout (jsdom) — fall back to the DOM below
       }
-      // Overlapping highlights render as split spans whose merged attributes
-      // keep only one id, so ask the decoration set which comment sits under
-      // the pointer (innermost first) and fall back to the attribute.
-      const commentId =
-        (pos ? commentIdsInRange(editor.state, pos.pos, pos.pos + 1)[0] : undefined) ??
-        markEl?.getAttribute("data-comment-id") ??
-        undefined;
       const { from, to, empty } = editor.state.selection;
       const canAdd =
         !empty && from !== to && !!pos && pos.pos >= from && pos.pos <= to;
-      if (!commentId && !canAdd) return null;
-      const r = markEl
-        ? markEl.getBoundingClientRect()
-        : new DOMRect(ev.clientX, ev.clientY, 0, 0);
+      if (!canAdd) return null;
       return {
-        commentId,
         canAdd,
-        top: r.top,
-        left: r.left,
-        bottom: r.bottom,
-        right: r.right,
+        top: ev.clientY,
+        left: ev.clientX,
+        bottom: ev.clientY,
+        right: ev.clientX,
       };
     };
 
     const update = (ev: MouseEvent) => {
-      // A thread is the foreground surface: previewing the highlight behind it
-      // (or a neighbour) would stack two cards over the same paragraph.
-      if (openThreadRef.current) return;
       const next = targetAt(ev);
-      const key = next ? `${next.commentId ?? ""}|${next.canAdd}` : null;
+      const key = next ? `${next.canAdd}` : null;
       if (key === hoverKey.current) return;
       hoverKey.current = key;
       clearTimers();
@@ -1597,17 +1789,19 @@ export function EditorPage() {
       if (lastEvent) update(lastEvent);
     };
 
-    // Clicking a highlight opens its thread (#251). The id comes from the
-    // decoration set first for the same reason the hover path does it: nested
-    // highlights merge into one span whose attribute keeps a single id.
-    const openThreadAt = (el: HTMLElement, pos: number | null) => {
+    // Clicking a highlight selects its card in the rail (#304: the pane is
+    // always open, so there is no popover to fall back to). The id comes
+    // from the decoration set first for the same reason the hover path does
+    // it: nested highlights merge into one span whose attribute keeps a
+    // single id.
+    const selectAt = (el: HTMLElement, pos: number | null) => {
       const commentId =
         (pos !== null ? commentIdsInRange(editor.state, pos, pos + 1)[0] : undefined) ??
         el.getAttribute("data-comment-id") ??
         undefined;
       if (!commentId) return;
       clearTimers();
-      openThreadForRef.current(commentId, el.getBoundingClientRect());
+      setRailSelectedId(commentId);
     };
 
     const onClick = (e: Event) => {
@@ -1622,7 +1816,7 @@ export function EditorPage() {
       } catch {
         pos = null; // no layout (jsdom) — the attribute below is enough
       }
-      openThreadAt(el, pos);
+      selectAt(el, pos);
     };
 
     const onKeyDown = (e: Event) => {
@@ -1633,7 +1827,7 @@ export function EditorPage() {
       ) as HTMLElement | null;
       if (!el) return;
       ev.preventDefault();
-      openThreadAt(el, null);
+      selectAt(el, null);
     };
 
     let dom: HTMLElement | undefined;
@@ -1671,66 +1865,14 @@ export function EditorPage() {
     };
   }, [editor]);
 
-  // Mark the open thread's highlight so the popover's anchor is obvious when a
-  // paragraph carries several.
+  // Mark the selected card's highlight so it's obvious which one a paragraph
+  // carrying several comments is being read against (#304: this used to
+  // track the open thread popover; there is no popover anymore, so it
+  // tracks the rail's own selection instead).
   useEffect(() => {
     if (!editor || editor.isDestroyed) return;
-    editor.commands.setActiveComment(openThread?.commentId ?? null);
-  }, [editor, openThread]);
-
-  // Esc and a click outside dismiss the thread — but never silently drop an
-  // unsent reply (#251): the click is ignored outright, and Esc asks first.
-  useEffect(() => {
-    if (!openThread) return;
-
-    const onDocMouseDown = (e: MouseEvent) => {
-      const el = e.target as HTMLElement | null;
-      if (el?.closest?.('[data-testid="comment-thread-popover"]')) return;
-      // Another highlight: its own click handler switches threads, and doing
-      // that with a draft in flight would lose it, so guard here too.
-      if (el?.closest?.("[data-comment-id]")) {
-        if (threadDraftRef.current.trim()) {
-          showToast("未送信の返信があります。Esc で破棄できます", "info");
-          e.preventDefault();
-          e.stopPropagation();
-        }
-        return;
-      }
-      // MUI renders confirm dialogs and tooltips in portals outside the
-      // popover, so a click on "削除" 's confirmation must not count as outside.
-      if (el?.closest?.('[role="dialog"], [role="tooltip"]')) return;
-      if (threadDraftRef.current.trim()) {
-        showToast("未送信の返信があります。Esc で破棄できます", "info");
-        return;
-      }
-      closeThread();
-    };
-
-    const onDocKeyDown = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      if (!threadDraftRef.current.trim()) {
-        closeThread();
-        return;
-      }
-      e.preventDefault();
-      void (async () => {
-        const ok = await confirm({
-          title: "未送信の返信があります",
-          message: "書きかけの返信を破棄して閉じますか？",
-          confirmLabel: "破棄して閉じる",
-        });
-        if (ok) closeThread();
-      })();
-    };
-
-    document.addEventListener("mousedown", onDocMouseDown, true);
-    document.addEventListener("keydown", onDocKeyDown);
-    return () => {
-      document.removeEventListener("mousedown", onDocMouseDown, true);
-      document.removeEventListener("keydown", onDocKeyDown);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [openThread]);
+    editor.commands.setActiveComment(railSelectedId);
+  }, [editor, railSelectedId]);
 
   // Cancelling asks before throwing away a body, and never asks when there is
   // nothing to lose. In "edit" the baseline is the stored body, so closing an
@@ -1789,15 +1931,17 @@ export function EditorPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [composer]);
 
-  // Both popovers belong to one file: switching tabs leaves them anchored to a
-  // rect in a layout that is gone. Keyed on the path rather than on review
-  // state — adding the first comment to a draft *ingests* it, and closing on
-  // that transition would shut the composer the ingest just opened.
+  // The composer belongs to one file: switching tabs leaves it anchored to a
+  // rect in a layout that is gone, and a rail selection from the previous
+  // file has nothing to mean here either. Keyed on the path rather than on
+  // review state — adding the first comment to a draft *ingests* it, and
+  // closing on that transition would shut the composer the ingest just
+  // opened.
   useEffect(() => {
     // Synchronous on purpose: it has to go in the same commit as the switch.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     closeComposer();
-    closeThread();
+    setRailSelectedId(null);
   }, [activePath]);
 
   // Review state is deliberately *not* a trigger. Adding the first comment to
@@ -2035,6 +2179,10 @@ export function EditorPage() {
     );
     if (decorated.length > 0) {
       decorated[0].scrollIntoView({ behavior: "smooth", block: "center" });
+      // #310: `scrollIntoView`'s vertical centering doesn't reliably pull a
+      // highlight out from a wide table's own horizontal scroll region
+      // (#152) — bring it inside that container's visible width too.
+      scrollTableIntoView(decorated[0]);
       decorated.forEach((el) => {
         el.classList.remove("is-flash");
         void el.offsetWidth; // force reflow so the animation restarts
@@ -2050,6 +2198,7 @@ export function EditorPage() {
     const target =
       node.nodeType === Node.TEXT_NODE ? node.parentElement : (node as HTMLElement);
     target?.scrollIntoView({ behavior: "smooth", block: "center" });
+    if (target) scrollTableIntoView(target);
     editor.commands.flashCommentRanges(ranges);
     flashTimerRef.current = window.setTimeout(() => {
       flashTimerRef.current = null;
@@ -2059,23 +2208,16 @@ export function EditorPage() {
   };
 
   /**
-   * Open a comment from the list (#253): scroll to it, then open its thread
-   * beside the text. The rect has to be read *after* the jump, because that is
-   * what put the highlight on screen — and after a frame, so the smooth scroll
-   * has moved it. Comments the jump cannot resolve (global, orphan) never
-   * reach here; the pane keeps those operable in its own section.
+   * Open a comment from the list (#253): scroll to it, flash its highlight,
+   * and select its card in the rail (#304: the pane is always open, so there
+   * is nothing left to "open" beyond that — no popover; #330: the selected
+   * card shows its body in full). Comments the jump cannot
+   * resolve (global, orphan) never reach here; the pane keeps those operable
+   * in its own section.
    */
   const handleSelectComment = (id: string) => {
     handleJumpToComment(id);
-    if (!editor || editor.isDestroyed) return;
-    requestAnimationFrame(() => {
-      if (!editor || editor.isDestroyed) return;
-      const el = editor.view.dom.querySelector<HTMLElement>(
-        `[data-comment-id="${CSS.escape(id)}"]`
-      );
-      if (!el) return;
-      openThreadForRef.current(id, el.getBoundingClientRect());
-    });
+    setRailSelectedId(id);
   };
 
   // Deeplink: `?comment_id=<id>` jumps to that comment once the file and comments land.
@@ -2236,56 +2378,77 @@ export function EditorPage() {
     }
   };
 
-  // Build `mr comments <abs-path>` for the active file and copy it, so the user
-  // can paste one command to have the AI check this file's review comments —
-  // no need to retype the file name + "コメント確認して" each time. An absolute
-  // path (root abs path + root-relative file path) is used so it resolves
-  // regardless of the AI's working directory.
+  // Save and snapshot before handing this file's comments to Claude Code.
+  // The clipboard remains the fallback when direct terminal delivery fails.
+  const reviewHandoffPending = useRef(false);
   const handleCopyReviewCommand = async () => {
-    if (!activeFile) return;
-    const rootPath = roots.find((r) => r.name === activeFile.root)?.path ?? "";
-    const base = rootPath.replace(/\/+$/, "");
-    const abs = base ? `${base}/${activeFile.path}` : activeFile.path;
-    const cmd = `mr comments ${abs}`;
-    // Copying this command is the handoff to the AI, so it is also the version
-    // boundary (#280). Get the buffer on disk first, then snapshot it: the
-    // newest revision is then exactly what the AI is about to read, which
-    // makes the diff empty right now and fills it with whatever the human
-    // edits next. Saves themselves no longer snapshot — autosave would burn
-    // through the 20-revision cap and evict this very baseline.
-    useEditorInstance.getState().flushPendingMarkdown();
-    const saved = await autosave(activeFile.id);
-    if (saved) {
-      try {
-        const res = await createRevision(activeFile.path, activeFile.root);
-        // Only worth re-reading the list when a version actually landed.
-        if (res.created) setReviewRefresh((n) => n + 1);
-      } catch (err) {
-        // The command itself is still valid and still worth copying — the AI
-        // reads the file, not the history. Report the missing baseline and
-        // carry on.
+    if (reviewHandoffPending.current) return;
+    reviewHandoffPending.current = true;
+    try {
+      if (!activeFile) return;
+      const rootPath = roots.find((r) => r.name === activeFile.root)?.path ?? "";
+      const base = rootPath.replace(/\/+$/, "");
+      const abs = base ? `${base}/${activeFile.path}` : activeFile.path;
+      const cmd = `mr comments '${abs.replaceAll("'", "'\"'\"'")}'`;
+      // Copying this command is the handoff to the AI, so it is also the version
+      // boundary (#280). Get the buffer on disk first, then snapshot it: the
+      // newest revision is then exactly what the AI is about to read, which
+      // makes the diff empty right now and fills it with whatever the human
+      // edits next. Saves themselves no longer snapshot — autosave would burn
+      // through the 20-revision cap and evict this very baseline.
+      useEditorInstance.getState().flushPendingMarkdown();
+      const saved = await autosave(activeFile.id);
+      if (saved) {
+        try {
+          const res = await createRevision(activeFile.path, activeFile.root);
+          // Only worth re-reading the list when a version actually landed.
+          if (res.created) setReviewRefresh((n) => n + 1);
+        } catch (err) {
+          // The command itself is still valid and still worth copying — the AI
+          // reads the file, not the history. Report the missing baseline and
+          // carry on.
+          showToast(
+            `バージョンの記録に失敗しました: ${(err as Error).message ?? "unknown error"}`,
+            "warning"
+          );
+        }
+      } else {
+        // Autosave refused (external change) or failed: the AI would read
+        // something other than what is on screen, and a snapshot here would
+        // record the wrong baseline. It has already said why in its own toast.
         showToast(
-          `バージョンの記録に失敗しました（コマンドはコピーします）: ${(err as Error).message ?? "unknown error"}`,
+          "未保存の変更があるため、バージョンは記録していません（保存してから再度コピーしてください）",
           "warning"
         );
       }
-    } else {
-      // Autosave refused (external change) or failed: the AI would read
-      // something other than what is on screen, and a snapshot here would
-      // record the wrong baseline. It has already said why in its own toast.
-      showToast(
-        "未保存の変更があるため、バージョンは記録していません（保存してから再度コピーしてください）",
-        "warning"
-      );
-    }
-    try {
-      await navigator.clipboard.writeText(cmd);
-      showToast("コメント確認コマンドをコピーしました", "success");
-    } catch (err) {
-      showToast(
-        `コピーに失敗しました: ${(err as Error).message ?? "unknown error"}`,
-        "error"
-      );
+      if (saved) {
+        try {
+          const result = await sendReviewCommand(activeFile.path, activeFile.root);
+          if (result.sent) {
+            showToast(
+              `コメント確認コマンドを送信しました${result.session_name ? `: ${result.session_name}` : ""}`,
+              "success"
+            );
+            return;
+          }
+        } catch {
+          // Older/offline servers and Automation failures retain clipboard handoff.
+        }
+      }
+      try {
+        await navigator.clipboard.writeText(cmd);
+        showToast(
+          "直接送信できなかったため、コメント確認コマンドをコピーしました",
+          "success"
+        );
+      } catch (err) {
+        showToast(
+          `コピーに失敗しました: ${(err as Error).message ?? "unknown error"}`,
+          "error"
+        );
+      }
+    } finally {
+      reviewHandoffPending.current = false;
     }
   };
 
@@ -2303,14 +2466,10 @@ export function EditorPage() {
       "error"
     );
 
-  // Opening either floating surface closes the other: two cards over the same
-  // paragraph would fight for the same space and the same Esc.
   const openComposer = (
     next: NonNullable<typeof composer>,
     initialDraft = ""
   ) => {
-    setOpenThread(null);
-    setThreadDraft("");
     hoverKey.current = null;
     setHoverTarget(null);
     setComposerDraft(initialDraft);
@@ -2361,9 +2520,9 @@ export function EditorPage() {
     openGlobalComposer(rect);
   };
 
-  // One menu, one trigger: whatever the pointer is resting on decides which
-  // entries it carries. Anchored under the hovered highlight when there is
-  // one, otherwise at the pointer inside the selection.
+  // The only entry left on this menu is "コメント追加" (#304 removed the
+  // hover-preview entry it used to also carry for an existing highlight).
+  // Anchored at the pointer, inside the live selection.
   const menuAnchor = hoverTarget
     ? {
         rect: new DOMRect(
@@ -2375,85 +2534,10 @@ export function EditorPage() {
         placement: "bottom-start" as const,
       }
     : null;
-  // Looked up from the live list rather than cached with the trigger, so a
-  // delete elsewhere makes the entries disappear.
-  const bubbleComment = comments.find((c) => c.id === hoverTarget?.commentId);
   const menuCanAdd = !!hoverTarget?.canAdd && canAddComment;
-  const menuOpen = !!menuAnchor && (menuCanAdd || !!bubbleComment);
-  const threadComment = comments.find((c) => c.id === openThread?.commentId);
-  // A thread whose comment was deleted (or whose file reloaded without it)
-  // has nothing left to show.
-  useEffect(() => {
-    // Same reason as above: a popover with no comment behind it must not
-    // survive the commit that dropped the comment.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (openThread && !threadComment) closeThread();
-  }, [openThread, threadComment]);
+  const menuOpen = !!menuAnchor && menuCanAdd;
 
-  const threadFrame = popoverFrame(openThread?.rect ?? null);
   const composerFrame = popoverFrame(composer?.rect ?? null);
-
-  const threadEditDisabledReason =
-    threadComment?.author === "ai"
-      ? "AI のコメントは編集できません"
-      : threadComment?.status === "resolved"
-        ? "解決済みのため編集できません"
-        : null;
-  const threadDeleteDisabledReason =
-    threadComment?.author === "ai" ? "AI のコメントは削除できません" : null;
-
-  const handleThreadReply = async (body: string) => {
-    if (!threadComment) return;
-    await handleReplyComment(threadComment.id, body);
-    // Cleared only once the POST resolved, so a failed reply keeps the text.
-    setThreadDraft("");
-  };
-
-  const handleThreadResolveToggle = (next: "open" | "resolved") => {
-    if (!threadComment) return;
-    void handleResolveToggle(threadComment.id, next);
-    // Resolving removes the highlight the popover hangs off, so close with it.
-    if (next === "resolved") closeThread();
-  };
-
-  const handleThreadEdit = () => {
-    if (!threadComment || !openThread || threadEditDisabledReason) return;
-    const target = threadComment;
-    // Same anchor the thread used, so editing happens where reading did.
-    openComposer(
-      {
-        mode: "edit",
-        snippet: buildTargetSnippet(commentTargetText(target)),
-        rect: openThread.rect,
-        editingId: target.id,
-      },
-      target.body
-    );
-  };
-
-  const handleThreadDelete = () => {
-    const target = threadComment;
-    if (!target || threadDeleteDisabledReason || deletingCommentId === target.id) {
-      return;
-    }
-    setDeletingCommentId(target.id);
-    void (async () => {
-      try {
-        const ok = await confirm({
-          title: "コメントを削除しますか？",
-          message: `「${commentSummary(target.body)}」を削除します。元に戻せません。`,
-          confirmLabel: "削除",
-        });
-        if (ok) {
-          await handleDeleteComment(target.id);
-          closeThread();
-        }
-      } finally {
-        setDeletingCommentId(null);
-      }
-    })();
-  };
-
 
   // Submit a new comment to the sidecar. The anchor(s) are derived from the
   // live ProseMirror doc so they resolve identically server-side against the
@@ -2493,10 +2577,14 @@ export function EditorPage() {
           closeComposer();
           return;
         }
+        // allowOrphan: the selection may cover text typed since the last
+        // autosave, which the server cannot resolve against the file on disk
+        // yet. The anchor comes from the live doc, so it resolves once saved.
         await createComment(
           path,
           { scope: "inline", body, author, date, anchor: anchors[0], anchors: anchors.slice(1) },
-          root
+          root,
+          true
         );
         // The selection has done its job. Left standing it covers the very
         // highlight it just produced, and hovering there reads as "pointer is
@@ -2944,7 +3032,7 @@ export function EditorPage() {
               <FormatListNumberedIcon fontSize="small" />
             </IconButton>
           </Tooltip>
-          <Tooltip title="AI にコメント確認させる mr コマンドをコピー（mr comments <path>）">
+          <Tooltip title="AI にコメント確認コマンドを送信（送信できない場合はコピー）">
             <span>
               <IconButton
                 size="small"
@@ -3214,7 +3302,14 @@ export function EditorPage() {
           </MenuItem>
         </Menu>
 
-        <Box sx={{ flex: 1, minHeight: 0 }}>
+        <Box
+          sx={{
+            flex: 1,
+            minHeight: 0,
+            // #338: read by TiptapEditor's bottom spacer.
+            "--rail-overhang": `${railOverhang}px`,
+          }}
+        >
           {activeFile && diffMode ? (
             <DiffView
               oldText={diffBaseText}
@@ -3245,48 +3340,44 @@ export function EditorPage() {
         </Box>
       </Box>
 
-      {isCommentPaneOpen ? (
-        <Box
-          component="aside"
-          sx={{
-            width: 320,
-            flexShrink: 0,
-            borderLeft: "1px solid",
-            borderColor: "divider",
-            bgcolor: "background.paper",
-            display: "flex",
-            flexDirection: "column",
-          }}
-        >
-          <CommentSidePane
-            root={activeFileRoot}
-            filePath={activePath}
-            comments={comments}
-            reviewActive={reviewActive}
-            onClose={toggleCommentPane}
-            onRefresh={refreshComments}
-            canAddComment={canAddComment}
-            onAddComment={handleAddCommentClick}
-            onAddGlobal={handleAddGlobalClick}
-            onDelete={handleDeleteComment}
-            onResolveToggle={handleResolveToggle}
-            onReply={handleReplyComment}
-            onEdit={handleEditComment}
-            onEditReply={handleEditReply}
-            onDeleteReply={handleDeleteReply}
-            onJump={handleJumpToComment}
-            onSelect={handleSelectComment}
-            selectedId={openThread?.commentId ?? null}
-          />
-        </Box>
-      ) : (
-        <CommentRail
+      <Box
+        component="aside"
+        sx={{
+          width: 320,
+          flexShrink: 0,
+          borderLeft: "1px solid",
+          borderColor: "divider",
+          bgcolor: "background.paper",
+          display: "flex",
+          flexDirection: "column",
+        }}
+      >
+        <CommentSidePane
+          root={activeFileRoot}
+          filePath={activePath}
           comments={comments}
           reviewActive={reviewActive}
-          onOpen={toggleCommentPane}
+          onRefresh={refreshComments}
+          canAddComment={canAddComment}
+          onAddComment={handleAddCommentClick}
           onAddGlobal={handleAddGlobalClick}
+          onDelete={handleDeleteComment}
+          onResolveToggle={handleResolveToggle}
+          onReply={handleReplyComment}
+          onEdit={handleEditComment}
+          onEditReply={handleEditReply}
+          onDeleteReply={handleDeleteReply}
+          onJump={handleJumpToComment}
+          onSelect={handleSelectComment}
+          selectedId={railSelectedId}
+          anchorTops={anchorTops}
+          docBox={docBox}
+          onRailOverhangChange={setRailOverhang}
+          unresolvedIds={unresolvedIds}
+          railMode={commentRailMode}
+          onRailModeChange={setCommentRailMode}
         />
-      )}
+      </Box>
 
       {menuOpen && menuAnchor && (
         <Popper
@@ -3310,72 +3401,29 @@ export function EditorPage() {
             hoverKey.current = null;
           }}
         >
-          {menuCanAdd ? (
-            // Resting inside a selection is an offer to act, so the button
-            // wins even when the selection sits inside an existing highlight —
-            // that comment is one click away on the highlight itself.
-            <Paper elevation={4} sx={{ p: 0.5, minWidth: 180 }}>
-              <Button
-                size="small"
-                fullWidth
-                startIcon={<CommentIcon fontSize="small" />}
-                sx={{ justifyContent: "flex-start" }}
-                // Keep the selection alive: focusing the button would collapse
-                // it in some browsers before the handler reads from/to.
-                onMouseDown={(e) => e.preventDefault()}
-                // Anchored to the selection's own bubble, so the composer
-                // opens where the user was already looking.
-                onClick={(e) =>
-                  handleAddCommentClick(e.currentTarget.getBoundingClientRect())
-                }
-                data-testid="editor-menu-add-comment"
-              >
-                コメント追加
-              </Button>
-            </Paper>
-          ) : (
-            // Hover reads (#251): edit / delete moved into the thread the
-            // highlight opens on click, leaving this card free to show what
-            // the comment actually says instead of a one-line summary. The
-            // card opens the same thread the highlight does — it sits over
-            // the text, so a click meant for the highlight often lands here.
-            <Box
-              onClick={() => openThreadFor(bubbleComment!.id, menuAnchor.rect)}
-              data-testid="comment-hover-preview-click"
+          {/* Resting inside a selection is the only thing left on this menu
+              (#304 removed the hover-preview entry it used to carry for an
+              existing highlight — that highlight's click now selects its
+              rail card directly instead). */}
+          <Paper elevation={4} sx={{ p: 0.5, minWidth: 180 }}>
+            <Button
+              size="small"
+              fullWidth
+              startIcon={<CommentIcon fontSize="small" />}
+              sx={{ justifyContent: "flex-start" }}
+              // Keep the selection alive: focusing the button would collapse
+              // it in some browsers before the handler reads from/to.
+              onMouseDown={(e) => e.preventDefault()}
+              // Anchored to the selection's own bubble, so the composer
+              // opens where the user was already looking.
+              onClick={(e) =>
+                handleAddCommentClick(e.currentTarget.getBoundingClientRect())
+              }
+              data-testid="editor-menu-add-comment"
             >
-              <CommentHoverPreview comment={bubbleComment!} />
-            </Box>
-          )}
-        </Popper>
-      )}
-
-      {openThread && threadComment && (
-        <Popper
-          open
-          placement={threadFrame.placement}
-          anchorEl={{ getBoundingClientRect: () => openThread.rect }}
-          modifiers={[
-            { name: "offset", options: { offset: [0, 8] } },
-            { name: "preventOverflow", options: { padding: 8 } },
-          ]}
-          sx={{ zIndex: (theme) => theme.zIndex.modal }}
-          data-testid="editor-comment-thread"
-        >
-          <CommentThreadPopover
-            key={threadComment.id}
-            maxHeight={threadFrame.maxHeight}
-            comment={threadComment}
-            contextLabel={contextLabel(threadComment)}
-            editDisabledReason={threadEditDisabledReason}
-            deleteDisabledReason={threadDeleteDisabledReason}
-            deleting={deletingCommentId === threadComment.id}
-            draft={threadDraft}
-            onDraftChange={setThreadDraft}
-            onReply={handleThreadReply}
-            onResolveToggle={handleThreadResolveToggle}
-            onEdit={handleThreadEdit}
-            onDelete={handleThreadDelete}
-          />
+              コメント追加
+            </Button>
+          </Paper>
         </Popper>
       )}
 

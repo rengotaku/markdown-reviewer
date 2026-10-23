@@ -280,6 +280,32 @@ export function extractAnchorBlocks(doc: ProseMirrorNode): AnchorBlock[] {
 }
 
 /** resolveAnchorInDoc resolves a stored anchor to a live PM range (or null). */
+/**
+ * Earliest live position of a comment that carries its first block in
+ * `anchor` and any further blocks in `anchors` (#162 / cross_section), or
+ * null when none of them resolves (orphan).
+ *
+ * #326: the comment rail needs this for *resolved* comments, which paint no
+ * decoration (#96/#97) and so cannot be measured through the DOM the way
+ * open comments are.
+ */
+export function firstAnchorPosInBlocks(
+  blocks: ReadonlyArray<AnchorBlock>,
+  comment: { anchor?: PmAnchor; anchors?: PmAnchor[] }
+): number | null {
+  const anchors = [
+    ...(comment.anchor ? [comment.anchor] : []),
+    ...(comment.anchors ?? []),
+  ];
+  let first: number | null = null;
+  for (const a of anchors) {
+    const range = resolveAnchorInBlocks(blocks, a);
+    if (!range) continue;
+    if (first === null || range.from < first) first = range.from;
+  }
+  return first;
+}
+
 export function resolveAnchorInDoc(
   doc: ProseMirrorNode,
   anchor: PmAnchor

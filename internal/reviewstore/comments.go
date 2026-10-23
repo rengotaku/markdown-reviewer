@@ -602,6 +602,13 @@ var (
 	mdEmUnderRe     = regexp.MustCompile(`(^|[^\p{L}\p{N}])_([^_\n]+?)_($|[^\p{L}\p{N}])`)
 )
 
+// StripInlineMarkup exposes the anchor package's inline-markup stripper to
+// out-of-package callers that compare line text across revisions (the mr
+// CLI's drift-banner classification, #322), so that comparison normalizes
+// text identically to ResolveAnchor/FingerprintAt — otherwise a line whose
+// only "change" is e.g. added `**bold**` markup would look like new text.
+func StripInlineMarkup(s string) string { return stripInlineMarkup(s) }
+
 // stripInlineMarkup removes inline Markdown formatting so backend anchor text
 // matches the frontend's ProseMirror textContent, which renders these marks
 // away (the editor uses tiptap-markdown / markdown-it). Without this, a code

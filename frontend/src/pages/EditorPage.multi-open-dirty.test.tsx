@@ -30,8 +30,8 @@
 // quirk of the shared test fixture, not something #289 touches. This file
 // overrides /api/files/* with plain prose bodies so the only thing that can
 // flip isDirty is the bug under test.
-import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { render, screen, waitFor, cleanup } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
 import { EditorPage } from "./EditorPage";
@@ -70,8 +70,49 @@ async function settleWellPastDebounce() {
   await new Promise((resolve) => setTimeout(resolve, 800));
 }
 
+// Every /api/files/* request the current test's mock handler has served,
+// oldest first. Reset in beforeEach, read by waitForRequestsToSettle below.
+let requestedPaths: string[] = [];
+
+// The deeplink-expansion effect (EditorPage's `initialFilePathRef` effect)
+// opens the main path and every `open=` extra as one sequential, un-awaited
+// `void (async () => { ... })()` chain — it isn't tied to the component's
+// render lifecycle, so unmounting the page (afterEach's cleanup()) does not
+// cancel it if it's still mid-flight. If that chain is still issuing
+// requests when the *next* test's beforeEach resets the shared
+// `useOpenFiles` store, the stray `openServerFile` call it eventually makes
+// lands in the next test's state instead of this one's — exactly the
+// "tab order flipped" cross-test leak this file used to hit in CI (a slow
+// first test's third `open=` request settled only after the next test had
+// already started). Draining here, before the shared store is ever reset,
+// makes the two tests independent regardless of how slow either one runs.
+//
+// This is independent of (and a backstop for) generous `waitFor` timeouts
+// on the assertions below: those already imply "the chain reached this
+// point", but only if they resolve before their own timeout. Idle-polling
+// the actual request log ties draining to real completion instead of a
+// fixed duration.
+// maxWaitMs stays under vitest's default 10s hookTimeout (afterEach runs
+// this) with margin to spare.
+async function waitForRequestsToSettle(idleMs = 300, maxWaitMs = 8_000) {
+  const start = Date.now();
+  let lastCount = requestedPaths.length;
+  let lastChangeAt = Date.now();
+  for (;;) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    if (requestedPaths.length !== lastCount) {
+      lastCount = requestedPaths.length;
+      lastChangeAt = Date.now();
+    } else if (Date.now() - lastChangeAt >= idleMs) {
+      return;
+    }
+    if (Date.now() - start >= maxWaitMs) return;
+  }
+}
+
 describe("EditorPage multi-open deeplink dirty tracking (#289 follow-up)", () => {
   beforeEach(async () => {
+    requestedPaths = [];
     localStorage.clear();
     useOpenFiles.setState({ files: [], activeIdByRoot: {} });
     useToast.setState({ toasts: [] });
@@ -102,6 +143,7 @@ describe("EditorPage multi-open deeplink dirty tracking (#289 follow-up)", () =>
       http.get(`${API_BASE}/api/files/*`, async ({ request }) => {
         const url = new URL(request.url);
         const path = url.pathname.replace(/^\/api\/files\//, "");
+        requestedPaths.push(path);
         // A little real async latency per read (unlike MSW's otherwise
         // near-instant resolution) is what actually exposes the original
         // activate/deactivate race: it gives the browser's event loop real
@@ -120,49 +162,92 @@ describe("EditorPage multi-open deeplink dirty tracking (#289 follow-up)", () =>
     );
   });
 
-  it("leaves every tab clean after a multi-file deeplink settles, none autosave-eligible", async () => {
-    renderPage(
-      `/${DEFAULT_ROOT}/README.md?open=docs/intro.md&open=docs/api/spec.md`
-    );
-
-    await waitFor(() => {
-      expect(
-        useOpenFiles.getState().files.map((f) => f.path)
-      ).toEqual(["README.md", "docs/intro.md", "docs/api/spec.md"]);
-    });
-    await waitFor(() => {
-      expect(screen.getByTestId("editor-active-path")).toHaveTextContent("README.md");
-    });
-
-    await settleWellPastDebounce();
-
-    const dirty = useOpenFiles
-      .getState()
-      .files.filter((f) => f.isDirty)
-      .map((f) => f.path);
-    expect(dirty).toEqual([]);
+  afterEach(async () => {
+    // Unmount first so no further DOM-driven ProseMirror activity starts,
+    // then drain the deeplink-expansion chain (see waitForRequestsToSettle)
+    // before the next test's beforeEach resets the shared useOpenFiles
+    // store out from under it.
+    cleanup();
+    await waitForRequestsToSettle();
+    useOpenFiles.setState({ files: [], activeIdByRoot: {} });
   });
 
-  it("keeps the last background tab clean even with only one open= alongside the main path", async () => {
-    // Same intent as the test above, but with the minimal shape (one main +
-    // one extra) that most directly exercised the old
-    // activate-then-deactivate race, since the single background tab used
-    // to be activated right before the effect reactivated the main path.
-    renderPage(`/${DEFAULT_ROOT}/README.md?open=docs/api/spec.md`);
+  it(
+    "leaves every tab clean after a multi-file deeplink settles, none autosave-eligible",
+    async () => {
+      renderPage(
+        `/${DEFAULT_ROOT}/README.md?open=docs/intro.md&open=docs/api/spec.md`
+      );
 
-    await waitFor(() => {
-      expect(
-        useOpenFiles.getState().files.map((f) => f.path)
-      ).toEqual(["README.md", "docs/api/spec.md"]);
-    });
+      // 10s, well above the 5s default: this test drives a real (unmocked)
+      // ProseMirror instance through three sequential file opens, each with
+      // its own network round-trip — CI's slower, shared runners have been
+      // observed to blow well past the default waitFor timeout (1s) here
+      // even though nothing is actually wrong, which used to fail this
+      // assertion outright and then leak the still-in-flight third open
+      // into the next test (see waitForRequestsToSettle's comment).
+      await waitFor(
+        () => {
+          expect(
+            useOpenFiles.getState().files.map((f) => f.path)
+          ).toEqual(["README.md", "docs/intro.md", "docs/api/spec.md"]);
+        },
+        { timeout: 10_000 }
+      );
+      await waitFor(
+        () => {
+          expect(screen.getByTestId("editor-active-path")).toHaveTextContent(
+            "README.md"
+          );
+        },
+        { timeout: 10_000 }
+      );
 
-    await settleWellPastDebounce();
+      await settleWellPastDebounce();
 
-    const specTab = useOpenFiles
-      .getState()
-      .files.find((f) => f.path === "docs/api/spec.md");
-    expect(specTab?.isDirty).toBe(false);
-    const mainTab = useOpenFiles.getState().files.find((f) => f.path === "README.md");
-    expect(mainTab?.isDirty).toBe(false);
-  });
+      const dirty = useOpenFiles
+        .getState()
+        .files.filter((f) => f.isDirty)
+        .map((f) => f.path);
+      expect(dirty).toEqual([]);
+    },
+    // Test-level timeout: must exceed the waitFor timeouts above (10s each,
+    // sequential) plus the 800ms settle wait, or vitest's own 5s default
+    // would cut the test short before waitFor gets the chance to.
+    25_000
+  );
+
+  it(
+    "keeps the last background tab clean even with only one open= alongside the main path",
+    async () => {
+      // Same intent as the test above, but with the minimal shape (one main
+      // + one extra) that most directly exercised the old
+      // activate-then-deactivate race, since the single background tab used
+      // to be activated right before the effect reactivated the main path.
+      renderPage(`/${DEFAULT_ROOT}/README.md?open=docs/api/spec.md`);
+
+      // See the timeout comment on the test above — same CI-slowness reason,
+      // scaled down slightly since this test only opens two files.
+      await waitFor(
+        () => {
+          expect(
+            useOpenFiles.getState().files.map((f) => f.path)
+          ).toEqual(["README.md", "docs/api/spec.md"]);
+        },
+        { timeout: 10_000 }
+      );
+
+      await settleWellPastDebounce();
+
+      const specTab = useOpenFiles
+        .getState()
+        .files.find((f) => f.path === "docs/api/spec.md");
+      expect(specTab?.isDirty).toBe(false);
+      const mainTab = useOpenFiles
+        .getState()
+        .files.find((f) => f.path === "README.md");
+      expect(mainTab?.isDirty).toBe(false);
+    },
+    15_000
+  );
 });

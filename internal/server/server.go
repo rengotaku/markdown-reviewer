@@ -22,6 +22,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
+	"markdown-reviewer/internal/agentsetup"
 	"markdown-reviewer/internal/events"
 	"markdown-reviewer/internal/files"
 	"markdown-reviewer/internal/handler"
@@ -129,6 +130,7 @@ func Run(ctx context.Context) error {
 	}
 
 	h := handler.NewHandler(svc, roots, hub)
+	h.SetAgentSender(agentsetup.NewService())
 	if adhocDirHook != nil {
 		h.SetAdhocDirHook(adhocDirHook)
 	}

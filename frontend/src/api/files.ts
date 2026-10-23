@@ -323,3 +323,23 @@ export async function restoreRevision(
     )
     .json<FileReadResponse>();
 }
+
+export interface SendReviewResponse {
+  sent: boolean;
+  command: string;
+  reason?: string;
+  session_name?: string;
+  agent_id?: string;
+}
+
+export async function sendReviewCommand(
+  path: string,
+  root?: string
+): Promise<SendReviewResponse> {
+  return apiClient
+    .post(`api/agents/send/${encodePath(path)}${rootQuery(root, "?")}`, {
+      retry: 0,
+      timeout: 9000,
+    })
+    .json<SendReviewResponse>();
+}

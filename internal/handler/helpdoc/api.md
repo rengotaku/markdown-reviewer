@@ -29,6 +29,7 @@ mr inbox    [--root NAME] [--all]    # open コメントを持つファイルを
 mr comments <path> [--json] [--since ID] [--unanswered]   # コメント一覧（解決位置 / orphan）
 mr review   <path> [--all] [--since ID] [--unanswered]    # open コメントを整形 Markdown で（/api/review 相当）
 mr reply    <path> <id> <text> [--author NAME]   # スレッド返信（既定 author=ai）
+mr apply    <path> [<json-file>|-] [--author NAME] [--force]  # 本文の修正と返信を 1 回で反映
 mr resolve  <path> <id>              # resolved にする
 mr reopen   <path> <id>              # resolved を open に戻す
 ```
@@ -36,6 +37,26 @@ mr reopen   <path> <id>              # resolved を open に戻す
 ルートは `REVIEW_ROOTS` 環境変数、無ければ launchd plist から自動解決する。
 
 「人がコメントした」と言われたら **`mr inbox` でどのファイルか特定** → `mr review <path>` で読む。前回見た以降の新規だけ見たいときは `--since <最後に見た ID>`、AI 未対応分だけは `--unanswered`。コメント ID は `c-NNN` の単調増加なので、`mr comments` 末尾の最大 ID を控えておけば次回の `--since` に使える。
+
+### `mr apply`（本文の修正と返信をまとめる）
+
+AI のツール呼び出しは 1 回ごとにセッションの文脈全体を送り直すので、Edit と `mr reply` を件数分
+繰り返すより、1 回にまとめた方が安い。入力は JSON（ファイル、または `-` / 省略で標準入力）:
+
+```json
+{
+  "edits":   [{"old": "置換前の文字列", "new": "置換後の文字列"}],
+  "replies": [{"id": "c-001", "body": "返信本文"}]
+}
+```
+
+- `edits` は先頭から順に適用する。`old` が本文にちょうど 1 回現れなければエラー（0 回・2 回以上とも。重なり合う一致も 2 回と数える）
+- `new` は必須。削除するときは `""` を明示する（欠落・`null` はエラー）。JSON は 1 つだけで、後ろに余分なデータがあればエラー
+- 書き込む前に全件を検証する。照合の失敗、存在しない ID、resolved の ID、空の返信が 1 件でもあれば何も書かない
+- `mr reply` と同じ書き込みガード（前回読んだ後に本文が変わっていれば止まる。`--force` で解除）
+- 本文を書く前に、修正前の本文を revision として残し（残せなければ何も書かない）、コメントのアンカーを張り直し、書いた本文を revision（author は `--author`、既定 `ai`）として残す
+- 最後に新しい本文で `last_read` を記録するので、続けて `mr reply` / `mr comments` を実行しても drift 扱いにならない
+- resolve はしない。`edits` / `replies` はどちらかが空でもよい（両方空はエラー）
 
 ## ベース URL
 
@@ -52,7 +73,8 @@ hint URL は環境変数 `MARKDOWN_REVIEWER_BASE_URL` で固定でき、未設�
 ## コメントモデル（sidecar）
 
 コメントは `review.json` に保存され、本文には埋め込まれない。各コメントは**内容由来アンカー**
-（`heading_path` + `snippet` + `occurrence`）で正典に紐付く。ロード時に正典本文を再走査して
+（`heading_path` + `snippet` + `occurrence`）で正典に紐付く。`occurrence` は、同じ見出し配下で
+同じ `snippet` が何個目に出てくるかを **0 から数える**（1 回しか出てこない文なら `0`）。ロード時に正典本文を再走査して
 位置（`context.line_range`）を復元する。見つからなければ `orphan: true`（位置不明として明示）。
 
 複数行にまたがる選択も、`anchor`（先頭ブロック）+ `anchors[]`（2 件目以降）で**全ブロックに
@@ -108,6 +130,11 @@ hint URL は環境変数 `MARKDOWN_REVIEWER_BASE_URL` で固定でき、未設�
 ボディ: `{ scope, body, author?, date?, group_id?, anchor?{heading_path,snippet,occurrence}, anchors?[] }`。
 `id` はサーバが採番（`c-NNN`）、`status` は `open` 既定。201 で作成コメントを返す。
 
+アンカー付きのコメントは、作成時点の正典本文でアンカーを解決できなければ **422** で拒否され、
+保存されない（複数アンカーの場合は全件が解決できないときのみ。`orphan` の定義と同じ）。
+`snippet` の記法の剥がし忘れや `occurrence` のずれ（0 始まり）を疑うこと。
+位置不明のまま残したいときだけ `?allow_orphan=1` を付けると、201・`orphan: true` で保存される。
+
 ## PATCH /api/comments/*path?id=<id>
 
 status / body を更新する。ボディは `{ "status": "resolved" }`（`open`/`resolved` のみ）
@@ -134,6 +161,7 @@ open コメントを **AI 向けに整形した Markdown** で返す（`?status=
 | 400 | path が `.md` 以外 / traversal / 未知 root / 必須項目欠落 |
 | 404 | ファイル無し / コメント id 無し |
 | 409 | 未取り込み（draft）への作成・更新 / resolved コメントへの返信・本文編集（先に reopen が必要） |
+| 422 | `POST /api/comments` でアンカーを解決できない（`?allow_orphan=1` 無し） |
 | 500 | files API 未設定 |
 
 ---
@@ -348,5 +376,53 @@ Response は `PUT /api/files` と同じ形: `{ "path": "...", "content": "...", 
 
 正典本文にレビューマーカーは無い。**推奨は CLI `mr`**: `mr review <path>` で open コメントを読み、
 本文をエディタ/ツールで in-place 更新し、`mr reply <path> <id> '...'` / `mr resolve <path> <id>`
-で対応状況を返す。CLI が使えない環境では HTTP API（`GET /api/review` → 本文を `PUT /api/files`
+で対応状況を返す。本文の修正と返信は `mr apply` で 1 回にまとめられる。CLI が使えない環境では HTTP API（`GET /api/review` → 本文を `PUT /api/files`
 → `POST /api/replies` / `PATCH ...?status=resolved`）で同じことができる。`.vN.md` 等の派生ファイルは作らない。
+
+## AI セッションへの引き継ぎ
+
+### `POST /api/agents/register/*path?root=<name>`
+
+`mr open` が呼ぶ best-effort 登録。本文は `{"agent_id":"claude","pid":123,"session_id":"..."}`。
+公開セッション JSON と実プロセスを照合できた場合のみ `{"registered":true}`。
+ファイルとセッションの対応はサーバのメモリに保持し、再起動時に失われる。
+追加パスにも登録する。サーバ停止中や旧版でも `mr open` 自体は継続する。
+
+### `POST /api/agents/send/*path?root=<name>`
+
+本文なし。サーバで解決した絶対パスから `mr comments '<path>'` を生成する。
+任意コマンドは受け付けない。応答は `{"sent":true,"command":"...","session_name":"..."}`。
+送れなければ `sent:false` と `reason`（`no_session` / `busy` / `no_terminal` / `send_failed`）。
+クライアントは保存・revision 作成後に呼び、失敗時はコマンドをクリップボードへコピーする。
+保存失敗時は直接送信せずコピーのみ。自動再送はしない。
+
+送り先は `mr open` 元の生存セッションを優先し、無ければファイルを含む最深 cwd の
+生存セッション。同じ深さなら session ID 順。作業中の送り先を別セッションへ置き換えない。
+`CLAUDE_CONFIG_DIR`（未設定なら `~/.claude`）の `sessions/<pid>.json` のみ読み、
+`status=idle` または `shell`、PID・session ID・起動時刻を送信直前にも照合する。不明な状態は送信しない。
+`shell` は応答完了後にバックグラウンドのシェル処理が残る場合を含む。
+観測例: https://github.com/herdrdev/herdr/issues/3414
+認証キーと内部ソケットは読まない。
+ブラウザからの登録・送信は API と同じホストの Origin のみ許可する（開発用のポート違いは可）。
+
+macOS の iTerm2 AppleScript の `tty` / `write text` を使用する。
+本文は `newline NO` で入力し、0.2秒後に Enter に対応する CR（ASCII 13）を別に送る。
+本文と同じ入力に含む改行が Claude の入力欄内の改行として扱われることを避ける。
+初回は macOS の Automation 許可が必要で、拒否・タイムアウト時もコピーへ戻す。
+AppleScript 実行は最大5秒。許可後は次のクリックから再試行できる。
+状態確認と端末入力は原子的ではないため、確認直後に作業開始・手入力があった場合の競合は残る。
+仕様出典: https://github.com/rengotaku/markdown-reviewer/issues/343
+AppleScript: https://iterm2.com/documentation-scripting.html
+
+### AI 連携の構成
+
+`internal/agent` が共通の登録・送り先選択・コマンド生成・結果を担当する。
+`agent.Adapter` は `ID`・`Sessions`・`Send` を実装し、セッション ID・cwd・表示名・
+送信可能状態を共通型に変換する。ネイティブ状態の解釈・プロセス照合・送信直前の再確認は
+各アダプターが担当する。セッション ID は `agent_id` と組にして識別する。
+登録先が作業中でも別の AI に振り替えない。cwd が同じ場合は agent ID、session ID 順。
+
+現在の構成は Claude のみ。Claude 固有の JSON と環境変数は `internal/claudeterm`、
+iTerm2 の入力は `internal/terminal/iterm` に分離する。
+対応先を追加する際はアダプターを実装し、`internal/agentsetup` にアダプターの生成と
+CLI の起動元検出を一組登録する。HTTP ハンドラーと画面に AI 固有の条件分岐は追加しない。

@@ -90,13 +90,18 @@ export async function listComments(
     .json<CommentsResponse>();
 }
 
+// allowOrphan stores the comment even when the server cannot resolve its
+// anchor against the file on disk; without it that POST is a 422 (#347).
 export async function createComment(
   path: string,
   req: CreateCommentRequest,
-  root?: string
+  root?: string,
+  allowOrphan = false
 ): Promise<CommentJSON> {
+  const query = rootQuery(root, "?");
+  const orphanQuery = allowOrphan ? `${query ? "&" : "?"}allow_orphan=1` : "";
   return apiClient
-    .post(`api/comments/${encodePath(path)}${rootQuery(root, "?")}`, { json: req })
+    .post(`api/comments/${encodePath(path)}${query}${orphanQuery}`, { json: req })
     .json<CommentJSON>();
 }
 

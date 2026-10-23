@@ -54,6 +54,8 @@ describe("EditorPage save conflict (#119 case 5)", () => {
       expect(screen.getByTestId("editor-active-path")).toHaveTextContent("README.md")
     );
     useOpenFiles.getState().updateActiveMarkdown("mock-root", "edited content");
+    const id = useOpenFiles.getState().activeIdByRoot["mock-root"]!;
+    useOpenFiles.getState().markFileUserEdited(id);
   }
 
   it("sends If-Match with the file's serverSha on a normal save", async () => {

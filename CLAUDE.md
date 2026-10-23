@@ -30,6 +30,7 @@ CLI(推奨):  mr review <このファイルのパス>   # 返信: mr reply <path
 2. **コメントは修正・確認依頼の指示として扱う。** `mr review` の出力には解決位置（行番号）・対象 snippet・指摘・返信が含まれる。
 3. **本文はそのファイルを in-place 修正する。** `.v2.md` などの派生ファイルを作らない。
 4. **対応したら `mr reply <path> <id> '<対応内容>'` で返信し、完了したものは `mr resolve <path> <id>` する。**
+   本文の修正と返信は `mr apply <path>` で 1 回にまとめる（入力 JSON の形式は `GET /api/help` の「`mr apply`」）。ツールの呼び出しは 1 回ごとに文脈全体を送り直すため、件数分の Edit と `mr reply` を繰り返すより安い。
 5. **hint コメントは削除しない。** サーバが保存のたびに管理・再注入する。
 6. `mr` が使えない環境では HTTP API で同じことができる（`GET /api/review` → 本文を `PUT /api/files` → `POST /api/replies` / `PATCH /api/comments?status=resolved`）。全仕様は `GET /api/help`。
 
@@ -39,15 +40,19 @@ CLI(推奨):  mr review <このファイルのパス>   # 返信: mr reply <path
 mr inbox    [--root NAME] [--all]                        # open コメントを持つファイル一覧
 mr comments <path> [--json] [--since ID] [--unanswered]  # コメント一覧
 mr review   <path> [--all] [--since ID] [--unanswered]   # open コメントを整形 Markdown で
-mr reply    <path> <id> <text> [--author NAME]           # スレッド返信（既定 author=ai）
-mr resolve  <path> <id>                                  # resolved にする
-mr reopen   <path> <id>                                  # resolved を open に戻す
+mr reply    <path> <id> <text> [--author NAME] [--force] # スレッド返信（既定 author=ai）
+mr apply    <path> [<json-file>|-] [--author NAME] [--force]  # 本文の修正と返信を 1 回で（JSON: edits / replies）
+mr resolve  <path> <id> [--force]                        # resolved にする
+mr reopen   <path> <id> [--force]                        # resolved を open に戻す
 mr open     <path> [<extra-path>...] [--comment ID] [--print]  # Web UI で開く（--print: URL のみ出力）
 mr revisions <path> [--json]                              # 履歴一覧（新しい順・id / 日時 / author）
 mr restore  <path> <id> [--author NAME]                   # その版へ書き戻す（既定 author=external）
+mr diff     <path> [--since ID] [--since-last-read]       # 前回 mr で読んだ時（既定）/ 指定 revision との差分
 ```
 
 パスは絶対 / cwd 相対のどちらでもよい。サーバ未起動でも動作する（`mr open` の URL 出力も同様。ブラウザで開くにはサーバが必要）。
+
+`mr comments` / `mr review` は読み取りに成功するたびに `last_read`（本文の sha・その時点の最新 revision・時刻）を記録し、前回の `last_read` から本文が変わっていれば冒頭に変更バナーを出す（変わっていなければ何も出さない）。バナーの「影響」に載るのは、アンカーが解決できなくなったコメント（位置不明）と、アンカー先の行そのものが書き換わったコメント（アンカー行が変更）だけで、単に位置がずれただけのコメントは載らない。`mr reply` / `mr resolve` / `mr reopen` は、`last_read` を記録した後に本文が変わっていると exit 1 で止まる（`mr diff <path> --since-last-read` で差分を確認してから `mr comments` で読み直すか、意図的に無視する場合のみ `--force` を付ける）。
 
 人間に「この画面を見てほしい」と伝えるときは `mr open <path> --print` の URL を貼る（deeplink を手で組まない）。特定のコメント1件を指したいときは `mr open <path> --comment <id> --print` で、そのコメントへ自動スクロールするリンクを貼れる（`id` は `mr comments <path> --json` で確認できる）。指定した `id` がそのファイルに存在しない場合はエラーになる。
 

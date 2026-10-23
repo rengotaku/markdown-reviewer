@@ -50,7 +50,7 @@ func TestReadForReview_OutOfBandEdit_Reanchors(t *testing.T) {
 		t.Fatal(werr)
 	}
 
-	_, content, comments, err := readForReview(doc)
+	_, _, content, comments, err := readForReview(doc)
 	if err != nil {
 		t.Fatalf("readForReview: %v", err)
 	}

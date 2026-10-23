@@ -28,12 +28,6 @@ interface UIState {
   sidebarPinned: boolean;
   setSidebarPinned: (pinned: boolean) => void;
   toggleSidebarPinned: () => void;
-  /** Whether the comment list is showing. Closed by default (#253): comments
-   *  are read and answered beside the text now, so the list is something the
-   *  reviewer opens to survey what is left, not a standing third column. */
-  isCommentPaneOpen: boolean;
-  toggleCommentPane: () => void;
-  setCommentPaneOpen: (open: boolean) => void;
   /**
    * Folder path currently highlighted in the sidebar. Used so that opening a
    * toast notification for a newly-detected directory can scroll & expand the
@@ -61,10 +55,6 @@ export const useUIStore = create<UIState>()(
       sidebarPinned: true,
       setSidebarPinned: (pinned) => set({ sidebarPinned: pinned }),
       toggleSidebarPinned: () => set((state) => ({ sidebarPinned: !state.sidebarPinned })),
-      isCommentPaneOpen: false,
-      toggleCommentPane: () =>
-        set((state) => ({ isCommentPaneOpen: !state.isCommentPaneOpen })),
-      setCommentPaneOpen: (open) => set({ isCommentPaneOpen: open }),
       selectedDirPath: null,
       setSelectedDirPath: (path) => set({ selectedDirPath: path }),
       sidebarViewMode: "tree",
@@ -75,10 +65,11 @@ export const useUIStore = create<UIState>()(
     {
       name: STORAGE_KEY,
       version: 1,
-      // Persist view mode, sidebar width and pin state; pane visibility, the
-      // transient dir highlight, and the hover-overlay's isSidebarOpen flag
-      // intentionally reset each session (#219: re-opening the app should
-      // never resume mid-hover).
+      // Persist view mode, sidebar width and pin state; the transient dir
+      // highlight and the hover-overlay's isSidebarOpen flag intentionally
+      // reset each session (#219: re-opening the app should never resume
+      // mid-hover). The comment pane no longer has an open/close state to
+      // persist (#304: it is always shown).
       partialize: (state) => ({
         sidebarViewMode: state.sidebarViewMode,
         sidebarWidth: state.sidebarWidth,

@@ -7,6 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"markdown-reviewer/internal/agent"
 	"markdown-reviewer/internal/events"
 	"markdown-reviewer/internal/files"
 	"markdown-reviewer/internal/service"
@@ -28,6 +29,7 @@ type Handler struct {
 	// the file watcher can follow it (prev is "" the first time). See
 	// SetAdhocDirHook.
 	onAdhocDir func(prev, dir string)
+	agents     agent.Sender
 	writeLocks sync.Map
 }
 
@@ -37,7 +39,7 @@ type Handler struct {
 // exercise SSE); GET /api/events responds with 500 in that case, same
 // pattern as the unconfigured-roots files endpoints.
 func NewHandler(userService *service.UserService, roots *files.Roots, hub *events.Hub) *Handler {
-	return &Handler{userService: userService, roots: roots, hub: hub}
+	return &Handler{userService: userService, roots: roots, hub: hub, agents: agent.New()}
 }
 
 // SetWatcherReady wires a file watcher's readiness signal (events.Watcher's
@@ -102,6 +104,8 @@ func (h *Handler) Routes(staticHandler http.Handler) http.Handler {
 		api.POST("/adhoc", h.Adhoc)
 		api.GET("/adhoc", h.AdhocCurrent)
 		api.GET("/events", h.Events)
+		api.POST("/agents/register/*path", h.RegisterAgent)
+		api.POST("/agents/send/*path", h.SendAgent)
 	}
 
 	r.NoRoute(gin.WrapH(staticHandler))
@@ -175,4 +179,9 @@ func corsMiddleware() gin.HandlerFunc {
 		}
 		c.Next()
 	}
+}
+
+// SetAgentSender injects the configured AI adapters before Routes is served.
+func (h *Handler) SetAgentSender(sender agent.Sender) {
+	h.agents = sender
 }

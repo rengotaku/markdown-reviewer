@@ -185,6 +185,66 @@ func TestComments_CreateIgnoresClientSuppliedFingerprint(t *testing.T) {
 	require.NotNil(t, created.Context)
 }
 
+// TestComments_CreateRejectsUnresolvableAnchor (#347) confirms an anchored
+// POST whose anchor matches nothing in the current body is refused with 422
+// and leaves review.json untouched, instead of a 201 carrying orphan: true
+// that the caller has to notice on its own. The repro from the issue is an
+// off-by-one occurrence on a snippet that appears exactly once.
+func TestComments_CreateRejectsUnresolvableAnchor(t *testing.T) {
+	useTempReviewStore(t)
+	h, root := setupFilesHandler(t)
+	content := "# Title\n\nこの文は一回だけ出てくる。\n"
+	require.NoError(t, os.WriteFile(filepath.Join(root, "doc.md"), []byte(content), 0o644))
+	require.Equal(t, http.StatusOK, serve(h, httptest.NewRequest(http.MethodPost, "/api/ingest/doc.md", nil)).Code)
+
+	second := anchor("# Title", "この文は一回だけ出てくる。")
+	second.Occurrence = 1
+	missing := anchor("# Title", "本文に無い文")
+	cases := map[string]handler.CreateCommentRequest{
+		"occurrence past the last match": {Scope: "inline", Body: "x", Anchor: second},
+		"snippet absent":                 {Scope: "inline", Body: "x", Anchor: missing},
+		"every anchor of a multi-anchor comment unresolvable": {
+			Scope: "inline", Body: "x", Anchor: missing,
+			Anchors: []reviewstore.Anchor{*second},
+		},
+	}
+	for name, req := range cases {
+		t.Run(name, func(t *testing.T) {
+			rec := postJSON(t, h, http.MethodPost, "/api/comments/doc.md", req)
+			assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+			assert.Contains(t, rec.Body.String(), "allow_orphan")
+		})
+	}
+	review, err := reviewstore.ReadReview("default", "doc.md")
+	require.NoError(t, err)
+	assert.Empty(t, review.Comments, "a rejected comment must not be stored")
+
+	// The same snippet at occurrence 0 resolves and is accepted.
+	rec := postJSON(t, h, http.MethodPost, "/api/comments/doc.md", handler.CreateCommentRequest{
+		Scope: "inline", Body: "x", Anchor: anchor("# Title", "この文は一回だけ出てくる。"),
+	})
+	require.Equal(t, http.StatusCreated, rec.Code)
+}
+
+// TestComments_CreatePartiallyResolvableAnchorsAccepted (#347) pins the
+// rejection to the existing orphan definition: a multi-anchor comment is only
+// orphan when none of its anchors resolve, so one live anchor is enough.
+func TestComments_CreatePartiallyResolvableAnchorsAccepted(t *testing.T) {
+	useTempReviewStore(t)
+	h, root := setupFilesHandler(t)
+	require.NoError(t, os.WriteFile(filepath.Join(root, "doc.md"), []byte("# Title\n\n生きている行\n"), 0o644))
+	require.Equal(t, http.StatusOK, serve(h, httptest.NewRequest(http.MethodPost, "/api/ingest/doc.md", nil)).Code)
+
+	rec := postJSON(t, h, http.MethodPost, "/api/comments/doc.md", handler.CreateCommentRequest{
+		Scope: "inline", Body: "x", Anchor: anchor("# Title", "生きている行"),
+		Anchors: []reviewstore.Anchor{*anchor("# Title", "消えた行")},
+	})
+	require.Equal(t, http.StatusCreated, rec.Code)
+	var created handler.CommentJSON
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&created))
+	assert.False(t, created.Orphan)
+}
+
 func TestReplies_EditAndDeleteByIndex(t *testing.T) {
 	useTempReviewStore(t)
 	h, root := setupFilesHandler(t)
@@ -225,13 +285,16 @@ func TestReplies_EditAndDeleteByIndex(t *testing.T) {
 		httptest.NewRequest(http.MethodDelete, "/api/replies/doc.md?id=c-001&index=0", nil)).Code)
 }
 
+// TestComments_OrphanWhenSnippetMissing also covers the ?allow_orphan=1
+// opt-in (#347): without it this POST is a 422, with it the pre-#347
+// behavior (201 + orphan: true) is kept.
 func TestComments_OrphanWhenSnippetMissing(t *testing.T) {
 	useTempReviewStore(t)
 	h, root := setupFilesHandler(t)
 	require.NoError(t, os.WriteFile(filepath.Join(root, "doc.md"), []byte("# Title\n\nbody\n"), 0o644))
 	require.Equal(t, http.StatusOK, serve(h, httptest.NewRequest(http.MethodPost, "/api/ingest/doc.md", nil)).Code)
 
-	rec := postJSON(t, h, http.MethodPost, "/api/comments/doc.md", handler.CreateCommentRequest{
+	rec := postJSON(t, h, http.MethodPost, "/api/comments/doc.md?allow_orphan=1", handler.CreateCommentRequest{
 		Scope: "inline", Body: "x", Anchor: anchor("", "存在しない"),
 	})
 	require.Equal(t, http.StatusCreated, rec.Code)
@@ -327,14 +390,15 @@ func TestBuildCommentJSON_C3_PartiallyResolvedIsNotOrphan(t *testing.T) {
 	assert.False(t, created.Orphan)
 }
 
-// C4: every anchor fails to resolve — orphan=true, context nil.
+// C4: every anchor fails to resolve — orphan=true, context nil. Created via
+// ?allow_orphan=1 since an unresolvable POST is otherwise a 422 (#347).
 func TestBuildCommentJSON_C4_AllUnresolvedIsOrphan(t *testing.T) {
 	useTempReviewStore(t)
 	h, root := setupFilesHandler(t)
 	require.NoError(t, os.WriteFile(filepath.Join(root, "doc.md"), []byte(multiAnchorContent), 0o644))
 	require.Equal(t, http.StatusOK, serve(h, httptest.NewRequest(http.MethodPost, "/api/ingest/doc.md", nil)).Code)
 
-	rec := postJSON(t, h, http.MethodPost, "/api/comments/doc.md", handler.CreateCommentRequest{
+	rec := postJSON(t, h, http.MethodPost, "/api/comments/doc.md?allow_orphan=1", handler.CreateCommentRequest{
 		Scope:  "inline",
 		Body:   "x",
 		Anchor: anchor("", "存在しない1"),

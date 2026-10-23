@@ -14,7 +14,6 @@ import { EditorPage } from "./EditorPage";
 import { useOpenFiles } from "@/hooks/useOpenFiles";
 import { useToast } from "@/hooks/useToast";
 import { useConfirm } from "@/hooks/useConfirm";
-import { useUIStore } from "@/hooks/useUIStore";
 import { useEditorInstance } from "@/hooks/useEditorInstance";
 
 vi.mock("@/components/tiptap/TiptapEditor", () => ({
@@ -98,7 +97,6 @@ describe("EditorPage restore-to-this-version (#282)", () => {
     useOpenFiles.setState({ files: [], activeIdByRoot: {} });
     useToast.setState({ toasts: [] });
     useConfirm.setState({ pending: null, queue: [] });
-    useUIStore.setState({ isCommentPaneOpen: false });
     useEditorInstance.setState({ restoringFileId: null });
     mockUnderReview();
   });
@@ -330,6 +328,7 @@ describe("EditorPage restore-to-this-version (#282)", () => {
       useOpenFiles
         .getState()
         .updateActiveMarkdown(DEFAULT_ROOT, "# README.md\n\nunsaved buffer\n");
+      useOpenFiles.getState().markFileUserEdited(id!);
     });
     expect(useOpenFiles.getState().files.find((f) => f.id === id)?.isDirty).toBe(true);
 
@@ -425,6 +424,7 @@ describe("EditorPage restore-to-this-version (#282)", () => {
       useOpenFiles
         .getState()
         .updateActiveMarkdown(DEFAULT_ROOT, "# README.md\n\nunsaved buffer\n");
+      useOpenFiles.getState().markFileUserEdited(id!);
     });
 
     await user.click(screen.getByTestId("diff-btn-restore"));

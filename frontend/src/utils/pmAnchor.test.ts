@@ -13,6 +13,7 @@ import {
   blockIndexAtPos,
   extractAnchorBlocks,
   resolveAnchorInDoc,
+  firstAnchorPosInBlocks,
   stripBlockMarkers,
   type AnchorBlock,
 } from "./pmAnchor";
@@ -75,6 +76,34 @@ describe("pmAnchor", () => {
       occurrence: 0,
     });
     expect(r).toEqual({ from: 50, to: 50 + "24 時間".length });
+  });
+
+  // #326: the comment rail measures *resolved* comments through this helper,
+  // because they paint no decoration to read a DOM position from.
+  describe("firstAnchorPosInBlocks (#326)", () => {
+    it("takes the earliest of anchor + anchors, whichever order they came in", () => {
+      const late = { heading_path: ["## エラー"], snippet: "24 時間", occurrence: 0 };
+      const early = {
+        heading_path: ["## トークンの期限"],
+        snippet: "アクセストークン",
+        occurrence: 0,
+      };
+      // `anchor` holds the later block, `anchors` the earlier one — the result
+      // must not be "whatever `anchor` says".
+      expect(firstAnchorPosInBlocks(blocks, { anchor: late, anchors: [early] })).toBe(20);
+    });
+
+    it("skips anchors that do not resolve and uses the ones that do", () => {
+      const missing = { heading_path: [], snippet: "無い", occurrence: 0 };
+      const found = { heading_path: ["## エラー"], snippet: "24 時間", occurrence: 0 };
+      expect(firstAnchorPosInBlocks(blocks, { anchors: [missing, found] })).toBe(50);
+    });
+
+    it("returns null when nothing resolves (orphan) or there is no anchor at all", () => {
+      const missing = { heading_path: [], snippet: "無い", occurrence: 0 };
+      expect(firstAnchorPosInBlocks(blocks, { anchor: missing })).toBeNull();
+      expect(firstAnchorPosInBlocks(blocks, {})).toBeNull();
+    });
   });
 
   it("returns null for an orphaned snippet", () => {

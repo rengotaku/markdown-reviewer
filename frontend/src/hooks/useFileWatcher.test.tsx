@@ -37,6 +37,7 @@ function seedActiveFile(opts: {
         markdown: opts.markdown,
         savedMarkdown: opts.isDirty ? "older" : opts.markdown,
         isDirty: !!opts.isDirty,
+        userEdited: !!opts.isDirty,
         reloadToken: 0,
         serverSha: opts.serverSha,
         serverModified: opts.serverModified,

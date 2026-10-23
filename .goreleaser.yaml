@@ -70,10 +70,22 @@ homebrew_casks:
         mr inbox / mr review <path> / mr reply / mr resolve
     # Unsigned binaries: strip the quarantine attribute so Gatekeeper
     # doesn't block the first run.
-    hooks:
-      post:
-        install: |
-          if OS.mac?
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/markdown-review-server"]
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/mr"]
-          end
+    #
+    # This has to go through custom_block rather than hooks.post.install:
+    # that option emits `postflight`, which Homebrew deprecated in favour of
+    # `postflight_steps`, so every `brew` command touching the Cask printed a
+    # warning. GoReleaser cannot emit the new stanza yet — the option for it is
+    # https://github.com/goreleaser/goreleaser/pull/6873 (open). Once that
+    # lands, move this back under `hooks.post.install_steps` and drop the
+    # custom_block, which also puts the stanza back in Cask Cookbook order.
+    #
+    # `{{staged_path}}` is a Homebrew install-steps token, and GoReleaser runs
+    # a final template pass over the whole generated Cask, so it is quoted to
+    # survive that pass.
+    custom_block: |
+      postflight_steps do
+        on_macos do
+          run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ "{{staged_path}}" }}/markdown-review-server"]
+          run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ "{{staged_path}}" }}/mr"]
+        end
+      end
