@@ -73,7 +73,8 @@ hint URL は環境変数 `MARKDOWN_REVIEWER_BASE_URL` で固定でき、未設�
 ## コメントモデル（sidecar）
 
 コメントは `review.json` に保存され、本文には埋め込まれない。各コメントは**内容由来アンカー**
-（`heading_path` + `snippet` + `occurrence`）で正典に紐付く。ロード時に正典本文を再走査して
+（`heading_path` + `snippet` + `occurrence`）で正典に紐付く。`occurrence` は、同じ見出し配下で
+同じ `snippet` が何個目に出てくるかを **0 から数える**（1 回しか出てこない文なら `0`）。ロード時に正典本文を再走査して
 位置（`context.line_range`）を復元する。見つからなければ `orphan: true`（位置不明として明示）。
 
 複数行にまたがる選択も、`anchor`（先頭ブロック）+ `anchors[]`（2 件目以降）で**全ブロックに
@@ -129,6 +130,11 @@ hint URL は環境変数 `MARKDOWN_REVIEWER_BASE_URL` で固定でき、未設�
 ボディ: `{ scope, body, author?, date?, group_id?, anchor?{heading_path,snippet,occurrence}, anchors?[] }`。
 `id` はサーバが採番（`c-NNN`）、`status` は `open` 既定。201 で作成コメントを返す。
 
+アンカー付きのコメントは、作成時点の正典本文でアンカーを解決できなければ **422** で拒否され、
+保存されない（複数アンカーの場合は全件が解決できないときのみ。`orphan` の定義と同じ）。
+`snippet` の記法の剥がし忘れや `occurrence` のずれ（0 始まり）を疑うこと。
+位置不明のまま残したいときだけ `?allow_orphan=1` を付けると、201・`orphan: true` で保存される。
+
 ## PATCH /api/comments/*path?id=<id>
 
 status / body を更新する。ボディは `{ "status": "resolved" }`（`open`/`resolved` のみ）
@@ -155,6 +161,7 @@ open コメントを **AI 向けに整形した Markdown** で返す（`?status=
 | 400 | path が `.md` 以外 / traversal / 未知 root / 必須項目欠落 |
 | 404 | ファイル無し / コメント id 無し |
 | 409 | 未取り込み（draft）への作成・更新 / resolved コメントへの返信・本文編集（先に reopen が必要） |
+| 422 | `POST /api/comments` でアンカーを解決できない（`?allow_orphan=1` 無し） |
 | 500 | files API 未設定 |
 
 ---

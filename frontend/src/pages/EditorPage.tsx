@@ -2577,10 +2577,14 @@ export function EditorPage() {
           closeComposer();
           return;
         }
+        // allowOrphan: the selection may cover text typed since the last
+        // autosave, which the server cannot resolve against the file on disk
+        // yet. The anchor comes from the live doc, so it resolves once saved.
         await createComment(
           path,
           { scope: "inline", body, author, date, anchor: anchors[0], anchors: anchors.slice(1) },
-          root
+          root,
+          true
         );
         // The selection has done its job. Left standing it covers the very
         // highlight it just produced, and hovering there reads as "pointer is
