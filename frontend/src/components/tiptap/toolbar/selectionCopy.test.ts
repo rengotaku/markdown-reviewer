@@ -2,6 +2,10 @@ import { describe, it, expect, afterEach } from "vitest";
 import { Editor } from "@tiptap/core";
 import StarterKit from "@tiptap/starter-kit";
 import { Markdown } from "tiptap-markdown";
+import { Table } from "@tiptap/extension-table";
+import { TableRow } from "@tiptap/extension-table-row";
+import { TableCell } from "@tiptap/extension-table-cell";
+import { TableHeader } from "@tiptap/extension-table-header";
 import type { Editor as ReactEditor } from "@tiptap/react";
 import { selectionMarkdownOf } from "./selectionCopy";
 
@@ -22,6 +26,10 @@ function createEditor(content: string, withMarkdown = true): Editor {
       ...(withMarkdown
         ? [Markdown.configure({ transformPastedText: false, transformCopiedText: false })]
         : []),
+      Table.configure({ resizable: false }),
+      TableRow,
+      TableCell,
+      TableHeader,
     ],
     content: "",
   });
@@ -71,6 +79,39 @@ describe("selectionMarkdownOf (#199)", () => {
     const ed = createEditor("<p>前 <strong>強調</strong> 後</p>", false);
     select(ed, "前", "後");
     expect(copy(ed)).toBe("前 強調 後");
+  });
+
+  it("keeps the spaces at either end of a partial selection", () => {
+    const ed = createEditor("left middle right\n");
+    ed.commands.setTextSelection({ from: posOf(ed, " middle "), to: posOf(ed, " middle ") + 8 });
+    expect(copy(ed)).toBe(" middle ");
+  });
+
+  const TABLE = "| A | B |\n| --- | --- |\n| alpha | beta |\n| gamma | delta |\n";
+
+  it("copies a selection across the header and body rows as a table, every cell kept", () => {
+    const ed = createEditor(TABLE);
+    select(ed, "A", "delta");
+    const out = copy(ed)!;
+    for (const cell of ["A", "B", "alpha", "beta", "gamma", "delta"]) expect(out).toContain(cell);
+    expect(out.split("\n")[0]).toMatch(/^\|/);
+  });
+
+  it("keeps every selected body cell when the header row is not selected", () => {
+    const ed = createEditor(TABLE);
+    select(ed, "alpha", "delta");
+    const out = copy(ed)!;
+    for (const cell of ["alpha", "beta", "gamma", "delta"]) expect(out).toContain(cell);
+    expect(out).not.toContain("<");
+  });
+
+  it("keeps every selected cell of a single row", () => {
+    const ed = createEditor(TABLE);
+    select(ed, "alpha", "beta");
+    const out = copy(ed)!;
+    expect(out).toContain("alpha");
+    expect(out).toContain("beta");
+    expect(out).not.toContain("<");
   });
 
   it("returns null for an empty selection", () => {

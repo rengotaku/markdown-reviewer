@@ -1,4 +1,4 @@
-import { Fragment } from "@tiptap/pm/model";
+import { Fragment, type Schema } from "@tiptap/pm/model";
 import type { Editor } from "@tiptap/react";
 
 interface MarkdownStorage {
@@ -26,17 +26,40 @@ export function selectionMarkdownOf(editor: Editor): string | null {
   const serializer = (editor.storage as MarkdownStorage).markdown?.serializer;
   if (!serializer) return plain;
   const { content } = state.doc.slice(from, to);
-  // A selection within one paragraph slices to bare inline nodes; the
-  // serializer renders the block content of the Fragment it is handed, so
-  // give them a paragraph to sit in.
-  const blocks =
-    content.firstChild?.isInline === true
-      ? Fragment.from(state.schema.nodes.paragraph.create(null, content))
-      : content;
+  const blocks = asBlocks(state.schema, content);
   try {
-    const markdown = serializer.serialize(blocks).trim();
-    return markdown.length > 0 ? markdown : plain;
+    // Only the trailing newline the serializer ends blocks with goes: spaces
+    // the selection took in are part of what was selected.
+    const markdown = serializer.serialize(blocks).replace(/\n+$/, "");
+    if (markdown.trim().length === 0) return plain;
+    // A table without its header row has no GFM form and comes out as HTML;
+    // plain text at least keeps every selected cell.
+    if (blocks.firstChild?.type.name === "table" && markdown.startsWith("<")) return plain;
+    return markdown;
   } catch {
     return plain;
   }
+}
+
+/**
+ * Turns the selected slice into block content the serializer can render.
+ * A slice keeps only what lies below the selection's shared ancestor, so a
+ * selection within one paragraph is bare inline nodes, and one across table
+ * cells or rows is cells or rows with no table around them — which the
+ * serializer drops cells from rather than failing. Each is put back inside the
+ * parents it lost.
+ */
+function asBlocks(schema: Schema, content: Fragment): Fragment {
+  const first = content.firstChild;
+  if (!first) return content;
+  if (first.isInline) return Fragment.from(schema.nodes.paragraph.create(null, content));
+  const { table, tableRow } = schema.nodes;
+  if (table && tableRow) {
+    const kind = first.type.name;
+    if (kind === "tableCell" || kind === "tableHeader") {
+      return Fragment.from(table.create(null, tableRow.create(null, content)));
+    }
+    if (kind === "tableRow") return Fragment.from(table.create(null, content));
+  }
+  return content;
 }
