@@ -304,10 +304,11 @@ interface Props {
   railRevealRef?: MutableRefObject<RailReveal | null>;
 }
 
-/** The viewport top a comment's highlight should be scrolled to so that its
- *  card lands inside the aligned rail (#339), or null when the rail has not
- *  placed that card. */
-export type RailReveal = (id: string) => number | null;
+/** How many px the body must scroll (positive = down) for a comment's card to
+ *  land inside the aligned rail (#339). `undefined` while the rail is still
+ *  laying out (worth waiting for); null when it cannot place that card at all
+ *  (not worth waiting for — e.g. a pane with no height). */
+export type RailReveal = (id: string) => number | null | undefined;
 
 type StatusFilter = "all" | "open" | "resolved";
 
@@ -1266,7 +1267,7 @@ function AlignedCommentRail({
   revealRef,
 }: AlignedRailProps) {
   const railRef = useRef<HTMLDivElement | null>(null);
-  const [paneBox, setPaneBox] = useState({ top: 0, height: 0 });
+  const [paneBox, setPaneBox] = useState({ top: 0, height: 0, measured: false });
   const [cardHeights, setCardHeights] = useState<Record<string, number>>({});
   const rafRef = useRef<number | null>(null);
 
@@ -1277,9 +1278,9 @@ function AlignedCommentRail({
       const rect = railRef.current?.getBoundingClientRect();
       if (!rect) return;
       setPaneBox((prev) =>
-        prev.top === rect.top && prev.height === rect.height
+        prev.measured && prev.top === rect.top && prev.height === rect.height
           ? prev
-          : { top: rect.top, height: rect.height }
+          : { top: rect.top, height: rect.height, measured: true }
       );
     });
   }, []);
@@ -1422,11 +1423,14 @@ function AlignedCommentRail({
   useEffect(() => {
     if (!revealRef) return;
     revealRef.current = (id) => {
+      if (!paneBox.measured) return undefined;
+      if (paneBox.height <= 0) return null;
       const key = entries.find((e) => e.ids.includes(id))?.key;
       const placed = layout.placed.find((p) => p.id === key);
-      if (!placed || !Object.hasOwn(anchorTops, id) || paneBox.height <= 0) return null;
+      // Not measured or placed yet: the next layout pass may still bring it.
+      if (!placed || !Object.hasOwn(anchorTops, id)) return undefined;
       const anchorRel = anchorTops[id] - paneBox.top;
-      return paneBox.top + revealAnchorTop(placed, anchorRel, paneBox.height);
+      return anchorRel - revealAnchorTop(placed, anchorRel, paneBox.height);
     };
     return () => {
       revealRef.current = null;

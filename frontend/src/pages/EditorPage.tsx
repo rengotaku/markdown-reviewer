@@ -2148,17 +2148,20 @@ export function EditorPage() {
   //  - orphan (no anchor resolves): do nothing, as before — canJump already
   //    keeps the label from being clickable in this case.
   // Brings a comment's highlight into view. Centred by default; opened from
-  // its card (`revealCard`), it goes wherever the aligned rail says keeps that
-  // card in the pane (#339) — on a crowded line the card is stacked below the
-  // others, and centring the highlight pushed it past the pane's bottom.
+  // its card (`revealCard`), the body scrolls by however much the aligned rail
+  // says keeps that card in the pane (#339) — on a crowded line the card is
+  // stacked below the others, and centring the highlight pushed it past the
+  // pane's bottom. The amount comes from the rail's own anchor measurement,
+  // not from `el`, whose top need not be the anchor's line (a resolved
+  // comment's `el` is the whole paragraph).
   const scrollHighlightIntoView = (el: HTMLElement, id: string, revealCard: boolean) => {
-    const target = revealCard ? (railRevealRef.current?.(id) ?? null) : null;
-    const scroller = target === null ? null : findScrollableAncestor(el);
-    if (target === null || !scroller) {
+    const delta = revealCard ? (railRevealRef.current?.(id) ?? null) : null;
+    const scroller = delta === null ? null : findScrollableAncestor(el);
+    if (delta === null || !scroller) {
       el.scrollIntoView({ behavior: "smooth", block: "center" });
       return;
     }
-    scroller.scrollBy({ top: el.getBoundingClientRect().top - target, behavior: "smooth" });
+    scroller.scrollBy({ top: delta, behavior: "smooth" });
   };
 
   const handleJumpToComment = (id: string, { revealCard = false } = {}) => {
@@ -2234,9 +2237,44 @@ export function EditorPage() {
    * in its own section.
    */
   const handleSelectComment = (id: string) => {
-    handleJumpToComment(id, { revealCard: true });
     setRailSelectedId(id);
+    setPendingReveal({ id, path: activePath, frames: 0 });
   };
+
+  // #339: the jump for a selection waits for the rail to lay out what the
+  // selection produced — in icon mode the previously selected card folds back
+  // into an icon and this one opens, moving it — so that the scroll keeps the
+  // card that is actually shown in the pane. Bounded, and dropped if the file
+  // changes meanwhile. The list mode has no rail placement to wait for.
+  const [pendingReveal, setPendingReveal] = useState<{
+    id: string;
+    path: string | undefined;
+    frames: number;
+  } | null>(null);
+  useEffect(() => {
+    if (!pendingReveal) return;
+    if (pendingReveal.path !== activePath || !editor || editor.isDestroyed) {
+      setPendingReveal(null);
+      return;
+    }
+    const { id, frames } = pendingReveal;
+    const target = comments.find((c) => c.id === id);
+    const waitsForRail =
+      commentRailMode !== "list" && !!target && target.scope !== "global" && !target.orphan;
+    const reveal = railRevealRef.current;
+    const laidOut = reveal !== null && reveal(id) !== undefined;
+    // Two frames at least: one for the selection's render, one for the card
+    // measurements it triggers to feed back into the layout.
+    if (waitsForRail && (frames < 2 || !laidOut) && frames < 30) {
+      const raf = requestAnimationFrame(() =>
+        setPendingReveal((p) => (p && p.id === id ? { ...p, frames: p.frames + 1 } : p))
+      );
+      return () => cancelAnimationFrame(raf);
+    }
+    setPendingReveal(null);
+    handleJumpToComment(id, { revealCard: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingReveal, activePath, editor, comments, commentRailMode]);
 
   // Deeplink: `?comment_id=<id>` jumps to that comment once the file and comments land.
   useEffect(() => {
@@ -2249,20 +2287,7 @@ export function EditorPage() {
     initialCommentIdRef.current = null;
     // A shared link exists to show one comment, so open it rather than making
     // the reader hunt for the highlight that just flashed (#253).
-    // #339: the rail places its cards a frame or more after the comments
-    // land. Give it a bounded wait to place this one, so the jump can keep the
-    // card in view rather than centring the highlight alone.
-    const target = comments.find((c) => c.id === commentId);
-    const anchored = !!target && target.scope !== "global" && !target.orphan;
-    let frames = 0;
-    const open = () => {
-      if (anchored && railRevealRef.current?.(commentId) == null && frames++ < 30) {
-        requestAnimationFrame(open);
-        return;
-      }
-      handleSelectComment(commentId);
-    };
-    open();
+    handleSelectComment(commentId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activePath, reviewState, commentsLoadedForPath, editor, comments]);
 
