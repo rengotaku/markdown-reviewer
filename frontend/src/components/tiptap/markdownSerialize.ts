@@ -1,6 +1,6 @@
 import type { Editor } from "@tiptap/core";
 import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
-import { topLevelBlockRanges } from "@/utils/diffGutterMarks";
+import { hasLinkReferenceDefinitions, topLevelBlockRanges } from "@/utils/diffGutterMarks";
 import { trueEndLine } from "@/utils/blankLines";
 
 // getEditorMarkdown restores blank lines around top-level blocks so saving
@@ -102,7 +102,8 @@ function contentBlocksAndBlanks(doc: ProseMirrorNode): ContentBlocks {
 // changed are serialized. A block that was edited and then put back exactly
 // as it was (undo rebuilds the block around its restored content) is a new
 // object, so a miss falls back to a block loaded with the same structure
-// (`node.eq`). Adding,
+// (`node.eq`) — only when exactly one loaded block matches, since two equal
+// blocks may have been written differently (`* item` and `- item`). Adding,
 // deleting and reordering blocks needs no bookkeeping. The original gap
 // between two blocks is kept too, while both are untouched, still next to
 // each other, and the blank lines between them haven't been edited.
@@ -117,6 +118,11 @@ interface BlockSource {
   separator: number;
   /** Blank-line paragraphs the load put in front of this block. */
   blanksBefore: number;
+  /** The file's last block. Only there can a construct be left open — an
+   *  unclosed fence or HTML comment — since anywhere else it would already
+   *  have swallowed what followed, so its source is reused only while it is
+   *  still the last block. */
+  last: boolean;
 }
 
 /** markdown-it's top-level token type → the node types it loads as. */
@@ -146,7 +152,8 @@ const textKey = (node: ProseMirrorNode) => `${node.type.name}\u0000${node.textCo
 function lookupSource(sources: BlockSources, node: ProseMirrorNode): BlockSource | undefined {
   const hit = sources.byNode.get(node);
   if (hit) return hit;
-  return sources.byText.get(textKey(node))?.find(([loaded]) => loaded.eq(node))?.[1];
+  const matches = sources.byText.get(textKey(node))?.filter(([loaded]) => loaded.eq(node)) ?? [];
+  return matches.length === 1 ? matches[0][1] : undefined;
 }
 
 /**
@@ -155,9 +162,10 @@ function lookupSource(sources: BlockSources, node: ProseMirrorNode): BlockSource
  * are paired with markdown-it's top-level ranges by position, so this records
  * nothing — and every block is serialized as before — unless the pairing is
  * certain: the same number of blocks, of matching kinds, and no non-blank
- * line outside every block (a link reference definition, say, has no node of
- * its own, and keeping `[text][ref]` while the definition is dropped would
- * break the link).
+ * line outside every block. A file with a link reference definition is left
+ * to the serializer too, wherever the definition sits: it has no node of its
+ * own, so serializing the block around it drops it, and an untouched
+ * `[text][ref]` elsewhere would be left pointing at nothing.
  */
 export function recordBlockSources(editor: Editor, body: string): void {
   const sources: BlockSources = { byNode: new WeakMap(), byText: new Map() };
@@ -166,6 +174,7 @@ export function recordBlockSources(editor: Editor, body: string): void {
   const { nodes, blanksBefore } = contentBlocksAndBlanks(editor.state.doc);
   const ranges = topLevelBlockRanges(body);
   if (nodes.length === 0 || nodes.length !== ranges.length) return;
+  if (hasLinkReferenceDefinitions(body)) return;
   const lines = body.split("\n");
   const ends = ranges.map((range) => trueEndLine(lines, range));
 
@@ -182,6 +191,7 @@ export function recordBlockSources(editor: Editor, body: string): void {
       index: i,
       separator: i === 0 ? 0 : ranges[i].start - ends[i - 1] + 1,
       blanksBefore: blanksBefore[i] ?? 0,
+      last: i === nodes.length - 1,
     };
     sources.byNode.set(node, source);
     const key = textKey(node);
@@ -199,7 +209,10 @@ export function getEditorMarkdown(editor: Editor): string {
   if (nodes.length === 0) return "";
 
   const sources = sourcesByEditor.get(editor);
-  const kept = nodes.map((node) => (sources ? lookupSource(sources, node) : undefined));
+  const kept = nodes.map((node, i) => {
+    const source = sources ? lookupSource(sources, node) : undefined;
+    return source?.last && i !== nodes.length - 1 ? undefined : source;
+  });
   const raws = nodes.map((node, i) => kept[i]?.text ?? serializeBlock(editor, node));
 
   // Strip each block's own trailing newline(s) before rejoining — the

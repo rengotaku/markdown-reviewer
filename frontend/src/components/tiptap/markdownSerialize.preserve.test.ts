@@ -154,6 +154,50 @@ describe("unedited blocks keep their source on save (#268)", () => {
     expect(getEditorMarkdown(ed)).toBe("一つ目\n\n\n二つ目");
   });
 
+  // Cases from the codex review.
+  it.each([["an unclosed fence", "~~~\ncode"]])(
+    "closes %s at the end of the file once a block is added after it",
+    (_label, body) => {
+    const ed = open(`前の段落\n\n${body}\n`);
+    ed.commands.insertContentAt(ed.state.doc.content.size, {
+      type: "paragraph",
+      content: [{ type: "text", text: "足した段落" }],
+    });
+    const saved = getEditorMarkdown(ed);
+    // Read back, the added paragraph is still a paragraph of its own.
+    const reread = open(`${saved}\n`);
+    const last = reread.state.doc.lastChild!;
+    const lastBlock = last.content.size === 0 ? reread.state.doc.child(reread.state.doc.childCount - 2) : last;
+    expect(lastBlock.type.name).toBe("paragraph");
+    expect(lastBlock.textContent).toBe("足した段落");
+    }
+  );
+
+  it("serializes everything when a reference definition sits inside a block", () => {
+    const ed = open("> [ref]: https://example.com\n> note\n\n[text][ref]\n");
+    ed.commands.insertContentAt(posAfter(ed, "note"), "!");
+    const saved = getEditorMarkdown(ed);
+    // Wherever the definition went, the link still points at it.
+    expect(saved).not.toMatch(/\[text\]\[ref\]/);
+    expect(saved).toContain("https://example.com");
+  });
+
+  it("does not pick one of two equal blocks' sources after an undo", () => {
+    // Two lists with the same content but different markers: undoing an
+    // edit to the second must not write it with the first one's `*`.
+    const ed = open("* item\n\n- item\n");
+    ed.view.dispatch(closeHistory(ed.state.tr));
+    const ends: number[] = [];
+    ed.state.doc.descendants((node, pos) => {
+      if (node.isText && node.text === "item") ends.push(pos + node.text.length);
+    });
+    ed.commands.insertContentAt(ends[1], "!");
+    ed.commands.undo();
+    const saved = getEditorMarkdown(ed);
+    expect(saved.startsWith("* item\n\n")).toBe(true);
+    expect(saved).not.toBe("* item\n\n* item");
+  });
+
   it("falls back to serializing everything when a line belongs to no block", () => {
     // A link reference definition has no node: keeping `[文書][ref]` verbatim
     // while the definition is dropped would break the link.

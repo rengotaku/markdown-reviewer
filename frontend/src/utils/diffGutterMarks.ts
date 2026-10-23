@@ -57,6 +57,14 @@ export function topLevelBlockRanges(markdownBody: string): BlockRange[] {
   return ranges;
 }
 
+/** Whether `markdownBody` defines any link reference (`[ref]: url`),
+ *  including one nested inside a blockquote or list. */
+export function hasLinkReferenceDefinitions(markdownBody: string): boolean {
+  const env: { references?: Record<string, unknown> } = {};
+  md.parse(markdownBody, env);
+  return Object.keys(env.references ?? {}).length > 0;
+}
+
 function findBlockIndex(ranges: BlockRange[], lineIndex: number): number | null {
   for (let i = 0; i < ranges.length; i++) {
     if (lineIndex >= ranges[i].start && lineIndex < ranges[i].end) return i;
