@@ -30,6 +30,8 @@ const BLOCK_OPEN_TYPES = new Set([
 const BLOCK_STANDALONE_TYPES = new Set(["fence", "code_block", "hr", "html_block"]);
 
 export interface BlockRange {
+  /** markdown-it token that opened the block (`heading_open`, `fence`, ...). */
+  type: string;
   /** 0-indexed, inclusive first line of the block. */
   start: number;
   /** 0-indexed, exclusive line just past the block's last line. */
@@ -49,10 +51,18 @@ export function topLevelBlockRanges(markdownBody: string): BlockRange[] {
   for (const token of tokens) {
     if (token.level !== 0 || !token.map) continue;
     if (BLOCK_OPEN_TYPES.has(token.type) || BLOCK_STANDALONE_TYPES.has(token.type)) {
-      ranges.push({ start: token.map[0], end: token.map[1] });
+      ranges.push({ type: token.type, start: token.map[0], end: token.map[1] });
     }
   }
   return ranges;
+}
+
+/** Whether `markdownBody` defines any link reference (`[ref]: url`),
+ *  including one nested inside a blockquote or list. */
+export function hasLinkReferenceDefinitions(markdownBody: string): boolean {
+  const env: { references?: Record<string, unknown> } = {};
+  md.parse(markdownBody, env);
+  return Object.keys(env.references ?? {}).length > 0;
 }
 
 function findBlockIndex(ranges: BlockRange[], lineIndex: number): number | null {

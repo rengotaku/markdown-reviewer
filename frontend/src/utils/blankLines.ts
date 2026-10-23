@@ -37,7 +37,7 @@ export interface BlankLinePayload {
  * blockquotes don't exhibit this and are unaffected by the trim (their map
  * already ends right after their last content line).
  */
-function trueEndLine(lines: string[], range: { start: number; end: number }): number {
+export function trueEndLine(lines: string[], range: { start: number; end: number }): number {
   for (let line = range.end - 1; line >= range.start; line--) {
     if (lines[line]?.trim() !== "") return line + 1;
   }

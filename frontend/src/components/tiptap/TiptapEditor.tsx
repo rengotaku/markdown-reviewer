@@ -35,7 +35,7 @@ import { MarkdownLink } from "./extensions/MarkdownLink";
 import { IndentKeymap } from "./extensions/IndentKeymap";
 import { LinkPreviewCard } from "../LinkPreviewCard";
 import { LinkHoverGuard } from "./linkHoverGuard";
-import { getEditorMarkdown } from "./markdownSerialize";
+import { getEditorMarkdown, recordBlockSources } from "./markdownSerialize";
 import { PROGRAMMATIC_TRANSACTION_META } from "./programmaticTransaction";
 import { computeBlankLines } from "@/utils/blankLines";
 import "./styles/editor.css";
@@ -371,6 +371,9 @@ export function TiptapEditor() {
       // (see BlankLines.ts) rather than relying on a time window to be
       // ignored by onUpdate's gate (#293).
       editor.commands.setBlankLinesBefore(computeBlankLines(body));
+      // Remember each block's source, so a save writes the blocks nobody
+      // edited back exactly as they were (#268).
+      recordBlockSources(editor, body);
     }
   }, [editor, activeId, activeReloadToken]);
 
