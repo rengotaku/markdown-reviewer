@@ -22,11 +22,8 @@ export default defineConfig({
     // with a queue overflow, and a couple of timing-sensitive frontend tests
     // fail — all of which pass on a re-run. Half the cores costs 11s (46s ->
     // 57s standalone) and buys back the ability to run next to other work.
-    poolOptions: {
-      threads: {
-        maxThreads: 4,
-      },
-    },
+    // Vitest 4 moved the per-pool `poolOptions` to top-level options.
+    maxWorkers: 4,
     coverage: {
       provider: "v8",
       reporter: ["text", "json", "json-summary", "html"],
