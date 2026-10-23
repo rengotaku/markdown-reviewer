@@ -1526,6 +1526,25 @@ describe("EditorPage selection menu (#233)", () => {
     );
   });
 
+  it("選択メニューのコピーで選択範囲をクリップボードへ入れる (#199)", async () => {
+    const user = await openReadme();
+    const ed = installEditor("<p>SLA遵守率 98%</p>");
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+
+    await act(async () => {
+      ed.commands.setTextSelection({ from: 1, to: 5 });
+    });
+    await hoverAt(ed, 3);
+    await user.click(await screen.findByTestId("editor-menu-copy"));
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("SLA遵"));
+    expect(screen.queryByTestId("editor-comment-menu")).not.toBeInTheDocument();
+  });
+
   it("選択の外にポインタがあるとメニューは出ない", async () => {
     await openReadme();
     const ed = installEditor("<p>SLA遵守率 98%</p>");

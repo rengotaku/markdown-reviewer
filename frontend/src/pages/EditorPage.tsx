@@ -49,6 +49,7 @@ import { useChangedPaths } from "@/hooks/useChangedPaths";
 import { useServerEvents } from "@/hooks/useServerEvents";
 import { useServerConnection } from "@/hooks/useServerConnection";
 import { useConfirm } from "@/hooks/useConfirm";
+import { selectionMarkdownOf } from "@/components/tiptap/toolbar/selectionCopy";
 import { useToast } from "@/hooks/useToast";
 import { useEditorPrefs } from "@/hooks/useEditorPrefs";
 import { computeLineNumbers } from "@/utils/lineNumbers";
@@ -2561,6 +2562,25 @@ export function EditorPage() {
     if (await handleIngest()) open();
   };
 
+  // The selection menu's "コピー" (#199): the selection as Markdown, so the
+  // syntax under review survives the trip to the clipboard.
+  const handleCopySelection = async () => {
+    if (!editor) return;
+    setHoverTarget(null);
+    hoverKey.current = null;
+    const text = selectionMarkdownOf(editor);
+    if (text === null) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast("選択範囲を Markdown でコピーしました", "success");
+    } catch (err) {
+      showToast(
+        `クリップボードへのコピーに失敗しました: ${(err as Error).message ?? "unknown"}`,
+        "error"
+      );
+    }
+  };
+
   const handleAddCommentClick = (rect: DOMRect) => {
     if (!editor) return;
     if (!reviewActive) {
@@ -2579,9 +2599,9 @@ export function EditorPage() {
     openGlobalComposer(rect);
   };
 
-  // The only entry left on this menu is "コメント追加" (#304 removed the
-  // hover-preview entry it used to also carry for an existing highlight).
-  // Anchored at the pointer, inside the live selection.
+  // The menu offers "コメント追加" and "コピー" (#199) for the live selection
+  // (#304 removed the hover-preview entry it used to also carry for an
+  // existing highlight). Anchored at the pointer, inside the selection.
   const menuAnchor = hoverTarget
     ? {
         rect: new DOMRect(
@@ -3461,9 +3481,9 @@ export function EditorPage() {
             hoverKey.current = null;
           }}
         >
-          {/* Resting inside a selection is the only thing left on this menu
-              (#304 removed the hover-preview entry it used to carry for an
-              existing highlight — that highlight's click now selects its
+          {/* Resting inside a selection is the only thing that opens this
+              menu (#304 removed the hover-preview entry it used to carry for
+              an existing highlight — that highlight's click now selects its
               rail card directly instead). */}
           <Paper elevation={4} sx={{ p: 0.5, minWidth: 180 }}>
             <Button
@@ -3482,6 +3502,17 @@ export function EditorPage() {
               data-testid="editor-menu-add-comment"
             >
               コメント追加
+            </Button>
+            <Button
+              size="small"
+              fullWidth
+              startIcon={<ContentCopyIcon fontSize="small" />}
+              sx={{ justifyContent: "flex-start" }}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => void handleCopySelection()}
+              data-testid="editor-menu-copy"
+            >
+              コピー
             </Button>
           </Paper>
         </Popper>
