@@ -224,9 +224,10 @@ export function extractAnchorBlocks(doc: ProseMirrorNode): AnchorBlock[] {
     parent.forEach((child, offset) => {
       const childPos = pos + 1 + offset;
 
-      if (child.type.name === "codeBlock") {
+      if (child.type.name === "codeBlock" || child.type.name === "rawHtmlBlock") {
         // One PM textblock, N Markdown lines: split on "\n" so each line is
-        // its own unit and none of them carry a literal newline (#163).
+        // its own unit and none of them carry a literal newline (#163). A raw
+        // HTML block (#297) holds its source the same way.
         const lines = child.textContent.split("\n");
         let lineStart = childPos + 1;
         for (const line of lines) {
