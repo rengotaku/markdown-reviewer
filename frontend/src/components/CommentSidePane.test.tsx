@@ -601,6 +601,45 @@ describe("CommentSidePane", () => {
     expect(screen.queryByTestId("comment-body-toggle")).toBeNull();
   });
 
+  it("#148: a long source that renders within the clamp gets no toggle", async () => {
+    stubRenderedHeight(40);
+    const body = `[短い表示名](https://example.com/${"a".repeat(300)})`;
+    renderPane({ comments: [comment("c1", { body })] });
+    await act(async () => {});
+    expect(screen.getByTestId("comment-body")).toHaveAttribute("data-collapsed", "false");
+    expect(screen.queryByTestId("comment-body-toggle")).toBeNull();
+  });
+
+  it("#148: links below the clamp leave the tab order while collapsed, and return on expand", async () => {
+    const user = userEvent.setup();
+    stubRenderedHeight(400);
+    // Clamp edge at 42px: the first link sits inside it, the second below.
+    const rect = (top: number, height: number) =>
+      ({ top, left: 0, right: 300, bottom: top + height, width: 300, height, x: 0, y: top, toJSON() {} }) as DOMRect;
+    vi.mocked(HTMLElement.prototype.getBoundingClientRect).mockImplementation(function (
+      this: HTMLElement
+    ) {
+      if (this.style.height === "3em") return rect(0, 42);
+      if (this.dataset.testid === "comment-body") return rect(0, 42);
+      if (this.textContent === "見えるリンク") return rect(10, 16);
+      if (this.textContent === "隠れるリンク") return rect(120, 16);
+      return rect(0, 4000);
+    });
+    const body = "[見えるリンク](https://a.example)\n\n本文\n\n本文\n\n[隠れるリンク](https://b.example)";
+    renderPane({ comments: [comment("c1", { body })] });
+    await waitFor(() =>
+      expect(screen.getByTestId("comment-body")).toHaveAttribute("data-collapsed", "true")
+    );
+    expect(screen.getByText("見えるリンク")).not.toHaveAttribute("tabindex");
+    expect(screen.getByText("見えるリンク")).not.toHaveAttribute("aria-hidden");
+    expect(screen.getByText("隠れるリンク")).toHaveAttribute("tabindex", "-1");
+    expect(screen.getByText("隠れるリンク")).toHaveAttribute("aria-hidden", "true");
+
+    await user.click(screen.getByTestId("comment-body-toggle"));
+    expect(screen.getByText("隠れるリンク")).not.toHaveAttribute("tabindex");
+    expect(screen.getByText("隠れるリンク")).not.toHaveAttribute("aria-hidden");
+  });
+
   it("#330: a rail card's body is clamped from first paint, before any measurement lands", () => {
     // setup.ts's no-op ResizeObserver never calls back — the state a card is
     // in when the rail's own card observer reports its height first. If the
