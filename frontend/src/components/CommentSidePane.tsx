@@ -243,10 +243,19 @@ const FOCUSABLE = "a[href], button, input, select, textarea, [tabindex]";
 /** Marks a node useHideClippedFocusables took out of the tab order; holds the
  *  tabindex it had before ("" for none). */
 const CLAMP_HIDDEN = "data-clamp-hidden";
+/** The aria-hidden that node had before ("" for none). */
+const CLAMP_HIDDEN_ARIA = "data-clamp-hidden-aria";
+
+/** Puts back an attribute saved as "" (absent) or its previous value. */
+function restoreAttr(node: HTMLElement, name: string, saved: string | null) {
+  if (saved) node.setAttribute(name, saved);
+  else node.removeAttribute(name);
+}
 
 /** #148: while `collapsed`, gives every focusable inside `el` that starts at
- *  or below the clamp's bottom edge `tabindex="-1"`, and puts back whatever
- *  it had once the body expands. The body is `dangerouslySetInnerHTML`, which
+ *  or below the clamp's bottom edge `tabindex="-1"` and `aria-hidden` (so a
+ *  screen reader's link list skips it too), and puts back whatever it had
+ *  once the body expands. The body is `dangerouslySetInnerHTML`, which
  *  React rewrites on its own re-renders (dropping whatever was set on the old
  *  nodes), so this re-applies after every commit and keeps no state of its
  *  own: a marked node carries its previous tabindex in CLAMP_HIDDEN. It also
@@ -267,14 +276,16 @@ function useHideClippedFocusables(el: HTMLElement | null, collapsed: boolean) {
     }
     for (const node of el.querySelectorAll<HTMLElement>(`[${CLAMP_HIDDEN}]`)) {
       if (clipped.delete(node)) continue; // already marked
-      const prev = node.getAttribute(CLAMP_HIDDEN);
-      if (prev) node.setAttribute("tabindex", prev);
-      else node.removeAttribute("tabindex");
+      restoreAttr(node, "tabindex", node.getAttribute(CLAMP_HIDDEN));
+      restoreAttr(node, "aria-hidden", node.getAttribute(CLAMP_HIDDEN_ARIA));
       node.removeAttribute(CLAMP_HIDDEN);
+      node.removeAttribute(CLAMP_HIDDEN_ARIA);
     }
     for (const node of clipped) {
       node.setAttribute(CLAMP_HIDDEN, node.getAttribute("tabindex") ?? "");
+      node.setAttribute(CLAMP_HIDDEN_ARIA, node.getAttribute("aria-hidden") ?? "");
       node.setAttribute("tabindex", "-1");
+      node.setAttribute("aria-hidden", "true");
     }
   }, [el, collapsed]);
 

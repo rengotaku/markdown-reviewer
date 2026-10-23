@@ -552,10 +552,13 @@ describe("CommentSidePane", () => {
       expect(screen.getByTestId("comment-body")).toHaveAttribute("data-collapsed", "true")
     );
     expect(screen.getByText("見えるリンク")).not.toHaveAttribute("tabindex");
+    expect(screen.getByText("見えるリンク")).not.toHaveAttribute("aria-hidden");
     expect(screen.getByText("隠れるリンク")).toHaveAttribute("tabindex", "-1");
+    expect(screen.getByText("隠れるリンク")).toHaveAttribute("aria-hidden", "true");
 
     await user.click(screen.getByTestId("comment-body-toggle"));
     expect(screen.getByText("隠れるリンク")).not.toHaveAttribute("tabindex");
+    expect(screen.getByText("隠れるリンク")).not.toHaveAttribute("aria-hidden");
   });
 
   it("#330: a rail card's body is clamped from first paint, before any measurement lands", () => {
