@@ -1,4 +1,4 @@
-import { Node, mergeAttributes } from "@tiptap/core";
+import { Mark, Node, mergeAttributes } from "@tiptap/core";
 import type { Node as PmNode } from "@tiptap/pm/model";
 
 /**
@@ -7,13 +7,19 @@ import type { Node as PmNode } from "@tiptap/pm/model";
  * ProseMirror's schema has no node for raw HTML, so on load markdown-it's
  * `html_inline` / `html_block` tokens were turned into DOM and whatever the
  * schema didn't know was dropped (`topic.<name>` lost `<name>`, an HTML comment
- * vanished, `<br/>` became a hard break). These two nodes keep the token's
- * source verbatim and write it back unchanged on save. The editor shows that
- * source as text rather than rendering it: this is a review tool, and
- * rendering arbitrary HTML from the file would be an XSS hole.
+ * vanished, `<br/>` became a hard break). Here the token's source is kept as
+ * text — inline under the `rawHtml` mark, a block as a `rawHtmlBlock` — and
+ * written back unchanged on save. Kept as text rather than as an atom holding
+ * the source in an attribute, so every character still sits at its own
+ * document position: comment anchors map text offsets to positions one to one
+ * (utils/pmAnchor.ts), and the table serializer judges a cell empty by its
+ * textContent. The editor shows the source rather than rendering it: this is a
+ * review tool, and rendering arbitrary HTML from the file would be an XSS hole.
  */
 
 interface MarkdownWriter {
+  out: string;
+  inTable?: boolean;
   write(text: string): void;
   text(text: string, escape?: boolean): void;
   closeBlock(node: PmNode): void;
@@ -33,63 +39,46 @@ interface MarkdownItLike {
 
 const INLINE_ATTR = "data-raw-html";
 const BLOCK_ATTR = "data-raw-html-block";
+export const RAW_HTML_MARK = "rawHtml";
 
 /** The checkbox markdown-it-task-lists injects into a `- [ ]` item, itself as
  *  an `html_inline` token; tiptap-markdown's task item parses it from the DOM. */
 const TASK_CHECKBOX = /^<input class="task-list-item-checkbox"/;
 
-/** Render markdown-it's raw HTML tokens as the placeholders these nodes parse,
- *  carrying the source in an attribute instead of letting it become DOM. */
+/** Render markdown-it's raw HTML tokens as escaped text inside the elements
+ *  these extensions parse, instead of letting the HTML become DOM. */
 function patchHtmlRenderer(md: MarkdownItLike) {
   const esc = md.utils.escapeHtml;
   md.renderer.rules.html_inline = (tokens, idx) => {
     const { content } = tokens[idx];
     if (TASK_CHECKBOX.test(content)) return content;
-    return `<span ${INLINE_ATTR}="${esc(content)}"></span>`;
+    return `<span ${INLINE_ATTR}="">${esc(content)}</span>`;
   };
   md.renderer.rules.html_block = (tokens, idx) =>
-    `<div ${BLOCK_ATTR}="${esc(tokens[idx].content.replace(/\n+$/, ""))}"></div>\n`;
+    `<pre ${BLOCK_ATTR}="">${esc(tokens[idx].content.replace(/\n+$/, ""))}</pre>\n`;
 }
 
-export const RawHtmlInline = Node.create({
-  name: "rawHtmlInline",
-  group: "inline",
-  inline: true,
-  atom: true,
-  selectable: true,
-
-  addAttributes() {
-    return {
-      raw: {
-        default: "",
-        parseHTML: (el) => el.getAttribute(INLINE_ATTR) ?? "",
-        renderHTML: (attrs) => ({ [INLINE_ATTR]: attrs.raw }),
-      },
-    };
-  },
+export const RawHtml = Mark.create({
+  name: RAW_HTML_MARK,
+  // Typing next to a tag is prose, not more of the tag.
+  inclusive: false,
+  // The source is literal: no emphasis, link or code inside it.
+  excludes: "_",
+  code: true,
 
   parseHTML() {
     return [{ tag: `span[${INLINE_ATTR}]` }];
   },
 
-  renderHTML({ node, HTMLAttributes }) {
-    return [
-      "span",
-      mergeAttributes(HTMLAttributes, { class: "raw-html-inline", contenteditable: "false" }),
-      String(node.attrs.raw),
-    ];
-  },
-
-  renderText({ node }) {
-    return String(node.attrs.raw);
+  renderHTML({ HTMLAttributes }) {
+    return ["span", mergeAttributes(HTMLAttributes, { [INLINE_ATTR]: "", class: "raw-html-inline" }), 0];
   },
 
   addStorage() {
     return {
       markdown: {
-        serialize(state: MarkdownWriter, node: PmNode) {
-          state.write(String(node.attrs.raw));
-        },
+        // The text itself is written by MarkdownText, which sees the mark.
+        serialize: { open: "", close: "" },
         parse: {
           setup(this: unknown, markdownit: MarkdownItLike) {
             patchHtmlRenderer(markdownit);
@@ -103,40 +92,27 @@ export const RawHtmlInline = Node.create({
 export const RawHtmlBlock = Node.create({
   name: "rawHtmlBlock",
   group: "block",
-  atom: true,
-  selectable: true,
-
-  addAttributes() {
-    return {
-      raw: {
-        default: "",
-        parseHTML: (el) => el.getAttribute(BLOCK_ATTR) ?? "",
-        renderHTML: (attrs) => ({ [BLOCK_ATTR]: attrs.raw }),
-      },
-    };
-  },
+  content: "text*",
+  marks: "",
+  code: true,
+  defining: true,
 
   parseHTML() {
-    return [{ tag: `div[${BLOCK_ATTR}]` }];
+    // Ahead of the code block's own `pre` rule.
+    return [{ tag: `pre[${BLOCK_ATTR}]`, preserveWhitespace: "full", priority: 60 }];
   },
 
-  renderHTML({ node, HTMLAttributes }) {
-    return [
-      "div",
-      mergeAttributes(HTMLAttributes, { class: "raw-html-block", contenteditable: "false" }),
-      String(node.attrs.raw),
-    ];
-  },
-
-  renderText({ node }) {
-    return String(node.attrs.raw);
+  renderHTML({ HTMLAttributes }) {
+    return ["pre", mergeAttributes(HTMLAttributes, { [BLOCK_ATTR]: "", class: "raw-html-block" }), 0];
   },
 
   addStorage() {
     return {
       markdown: {
         serialize(state: MarkdownWriter, node: PmNode) {
-          state.write(String(node.attrs.raw));
+          // `text` (not `write`) so each line gets the enclosing blockquote's
+          // "> " or list item's indent, as a code block's lines do.
+          state.text(node.textContent, false);
           state.closeBlock(node);
         },
         parse: {},
@@ -145,20 +121,26 @@ export const RawHtmlBlock = Node.create({
   },
 });
 
-/** `<` followed by what would open a tag, a comment or a declaration. */
-const TAG_START = /<(?=[A-Za-z/!?])/g;
+/** `<` that would open a tag, comment or declaration, and `&` that would start
+ *  a character reference — both read back as something other than the text. */
+const READ_BACK_AS_MARKUP = /<(?=[A-Za-z/!?])|&(?=#?[A-Za-z0-9]+;)/g;
+/** The same, plus a `>` that begins an output line and would open a quote. */
+const READ_BACK_AS_MARKUP_AT_LINE_START = /^>|<(?=[A-Za-z/!?])|&(?=#?[A-Za-z0-9]+;)/g;
 
 /**
- * Text that writes `<` and `>` as themselves (#297). tiptap-markdown's own
- * text serializer turns every `<` / `>` into `&lt;` / `&gt;`, so `1 < 2` came
- * back as `1 &lt; 2`. Only a `<` that would be read back as the start of a tag
- * is escaped, and the CommonMark way (`\<`); a `>` that would start a
- * blockquote is already escaped by the serializer's line-start rules.
+ * Text, with the serializer #297 needs. tiptap-markdown's own turns every `<`
+ * / `>` into `&lt;` / `&gt;`, so `1 < 2` came back as `1 &lt; 2`. Here `<`, `&`
+ * and `>` are written as themselves unless they would be read back as markup,
+ * and then escaped the CommonMark way (`\<`). A `>` at the start of a block is
+ * already escaped by the serializer's own line-start rules; one right after a
+ * hard break starts an output line it does not know about, so that case is
+ * handled here. Text under the `rawHtml` mark is written verbatim, except for
+ * `|` inside a table, which would split the cell.
+ *
+ * The same node as @tiptap/extension-text (which StarterKit bundles but does
+ * not export); StarterKit's own is turned off where this is registered.
  */
 export const MarkdownText = Node.create({
-  // The same node as @tiptap/extension-text (which StarterKit bundles but does
-  // not export), plus the serializer. StarterKit's own is turned off where
-  // this is registered (`text: false`).
   name: "text",
   group: "inline",
 
@@ -166,10 +148,17 @@ export const MarkdownText = Node.create({
     return {
       markdown: {
         serialize(state: MarkdownWriter, node: PmNode) {
+          const text = node.text ?? "";
+          if (node.marks.some((m) => m.type.name === RAW_HTML_MARK)) {
+            state.text(state.inTable ? text.replace(/\|/g, "\\|") : text, false);
+            return;
+          }
           const prev = state.options.escapeExtraCharacters;
-          state.options.escapeExtraCharacters = TAG_START;
+          state.options.escapeExtraCharacters = state.out.endsWith("\n")
+            ? READ_BACK_AS_MARKUP_AT_LINE_START
+            : READ_BACK_AS_MARKUP;
           try {
-            state.text(node.text ?? "");
+            state.text(text);
           } finally {
             state.options.escapeExtraCharacters = prev;
           }

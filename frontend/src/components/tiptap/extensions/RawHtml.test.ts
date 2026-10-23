@@ -12,7 +12,8 @@ import { TaskItem } from "@tiptap/extension-task-item";
 import { createLowlight } from "lowlight";
 import { BlankLines } from "./BlankLines";
 import { MarkdownLink } from "./MarkdownLink";
-import { MarkdownText, RawHtmlBlock, RawHtmlInline } from "./RawHtml";
+import { MarkdownText, RawHtml, RawHtmlBlock } from "./RawHtml";
+import { extractAnchorBlocks } from "@/utils/pmAnchor";
 import { getEditorMarkdown } from "../markdownSerialize";
 import { computeBlankLines } from "@/utils/blankLines";
 
@@ -29,7 +30,7 @@ function makeEditor(): Editor {
     extensions: [
       StarterKit.configure({ link: false, codeBlock: false, text: false }),
       MarkdownText,
-      RawHtmlInline,
+      RawHtml,
       RawHtmlBlock,
       CodeBlockLowlight.configure({ lowlight: createLowlight() }),
       MarkdownLink,
@@ -78,6 +79,45 @@ describe("raw HTML and angle brackets survive a save (#297)", () => {
     ["an ampersand", "- A & B"],
   ])("keeps %s", (_label, body) => {
     expect(roundTrip(`${body}\n`)).toBe(body);
+  });
+
+  // Cases from the codex review of the first version.
+  it.each([
+    ["a multi-line HTML block in a blockquote", "> <div>\n> line1\n> line2\n> </div>"],
+    ["a multi-line HTML block in a list item", "- item\n\n  <div>\n  line1\n  </div>"],
+    ["a table cell holding only HTML", "| html |\n| --- |\n| <br/> |"],
+    ["a | inside an HTML attribute in a table cell", '| c |\n| --- |\n| a <span title="a\\|b">z</span> |'],
+    ["a > after a hard break", "a\\\n\\> literal"],
+  ])("keeps %s", (_label, body) => {
+    // A table's own serializer ends with "\n" (there before this change).
+    const save = (md: string) => roundTrip(`${md}\n`).replace(/\n+$/, "");
+    expect(save(body)).toBe(body);
+    // ...and keeps it on the next save too.
+    expect(save(save(body))).toBe(body);
+  });
+
+  it("keeps a literal character reference as the same text across saves", () => {
+    // `&amp;copy;` reads as the text "&copy;". Written back as `\&copy;` (the
+    // same text, the CommonMark way), not as `&copy;`, which reads as "©".
+    const once = roundTrip("A &amp;copy; and &amp;#65;\n");
+    expect(once).toBe("A \\&copy; and \\&#65;");
+    expect(roundTrip(`${once}\n`)).toBe(once);
+    const ed = makeEditor();
+    ed.commands.setContent(`${once}\n`, { emitUpdate: false });
+    expect(ed.state.doc.textContent).toBe("A &copy; and &#65;");
+  });
+
+  it("maps comment anchor text to document positions one to one across raw HTML", () => {
+    const ed = makeEditor();
+    ed.commands.setContent("alpha <b>beta</b> tail\n\n<div>\nblock text\n</div>\n", {
+      emitUpdate: false,
+    });
+    const blocks = extractAnchorBlocks(ed.state.doc);
+    for (const word of ["beta", "tail", "block text"]) {
+      const block = blocks.find((b) => b.text.includes(word))!;
+      const from = block.start + block.text.indexOf(word);
+      expect(ed.state.doc.textBetween(from, from + word.length)).toBe(word);
+    }
   });
 
   it("leaves a task list's checkbox to the task item, not to raw HTML", () => {

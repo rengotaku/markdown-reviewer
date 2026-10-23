@@ -107,6 +107,7 @@
 }
 
 .ProseMirror .raw-html-block {
+  background-color: transparent;
   white-space: pre-wrap;
   padding: 4px 8px;
   margin-bottom: var(--paragraph-gap);

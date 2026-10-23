@@ -22,7 +22,7 @@ import { FrontmatterTable } from "./FrontmatterTable";
 import { TableMenu } from "./toolbar/TableMenu";
 import { BlockCopyButton } from "./toolbar/BlockCopyButton";
 import { SlashCommand } from "./extensions/SlashCommand";
-import { MarkdownText, RawHtmlBlock, RawHtmlInline } from "./extensions/RawHtml";
+import { MarkdownText, RawHtml, RawHtmlBlock } from "./extensions/RawHtml";
 import { MermaidBlock } from "./extensions/MermaidBlock";
 import { createCodeLowlight } from "./extensions/codeHighlight";
 import { MarkdownPaste } from "./extensions/MarkdownPaste";
@@ -171,7 +171,7 @@ export function TiptapEditor() {
       MarkdownText,
       // Raw HTML in the file is kept as its source and written back as is
       // (#297), instead of being dropped or turned into other nodes.
-      RawHtmlInline,
+      RawHtml,
       RawHtmlBlock,
       // Tab inside code blocks + indent-preserving Backspace on emptied list
       // items (#278). Registered with a higher priority than StarterKit so
