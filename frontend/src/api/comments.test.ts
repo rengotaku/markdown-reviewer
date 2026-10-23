@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { http, HttpResponse } from "msw";
+import { server } from "@/test/mocks/server";
 import {
   listComments,
   createComment,
@@ -41,6 +43,24 @@ describe("comments API client", () => {
     expect(created.body).toBe("気になる");
     expect(created.status).toBe("open");
     expect(created.anchor?.snippet).toBe("text");
+  });
+
+  it.each([
+    ["mock-root", false, "?root=mock-root"],
+    ["mock-root", true, "?root=mock-root&allow_orphan=1"],
+    [undefined, true, "?allow_orphan=1"],
+    [undefined, false, ""],
+  ])("createComment(root=%s, allowOrphan=%s) sends query %j", async (root, allowOrphan, query) => {
+    let captured: URL | undefined;
+    server.use(
+      http.post("*/api/comments/*", ({ request }) => {
+        captured = new URL(request.url);
+        return HttpResponse.json({ id: "c-001" }, { status: 201 });
+      })
+    );
+    await createComment("docs/intro.md", { scope: "global", body: "x" }, root, allowOrphan);
+    expect(captured?.pathname).toBe("/api/comments/docs/intro.md");
+    expect(captured?.search).toBe(query);
   });
 
   it("setCommentStatus patches the status by id (with root)", async () => {

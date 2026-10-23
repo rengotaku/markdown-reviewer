@@ -169,13 +169,17 @@ type CreateCommentRequest struct {
 }
 
 // CreateComment appends a comment to the file's review.json. Requires the file
-// to be ingested (review state); a draft yields 409.
+// to be ingested (review state); a draft yields 409. An anchored comment none
+// of whose anchors resolve against the current canonical body is rejected
+// with 422 (#347): a 201 carrying `orphan: true` went unnoticed by callers
+// that never look at the flag. `?allow_orphan=1` opts back into storing it.
 func (h *Handler) CreateComment(c *gin.Context) {
 	full, rel, name, ok := h.resolveRequest(c)
 	if !ok {
 		return
 	}
-	if _, statOK := h.statCanonical(c, full); !statOK {
+	body, ok := h.readCanonical(c, full)
+	if !ok {
 		return
 	}
 	var req CreateCommentRequest
@@ -189,28 +193,31 @@ func (h *Handler) CreateComment(c *gin.Context) {
 	}
 	// Stamp a line fingerprint on each incoming anchor (#287) so a later
 	// reanchor can tell "still resolves" apart from "silently resolves to a
-	// different line". This is a best-effort optimization, not a
-	// requirement: if the canonical body cannot be read here, comments still
-	// get created with no fingerprint (fail-open), same as pre-#287
-	// behavior. Any client-supplied line_fingerprint/orphan is discarded —
-	// the server always computes its own, never trusts the caller's.
-	if content, rerr := os.ReadFile(full); rerr == nil {
-		body := string(content)
-		stampFingerprint(body, req.Anchor)
-		for i := range req.Anchors {
-			stampFingerprint(body, &req.Anchors[i])
-		}
+	// different line". Any client-supplied line_fingerprint/orphan is
+	// discarded — the server always computes its own, never trusts the
+	// caller's.
+	stampFingerprint(body, req.Anchor)
+	for i := range req.Anchors {
+		stampFingerprint(body, &req.Anchors[i])
 	}
-	created, err := reviewstore.AddComment(name, rel, reviewstore.Comment{
+	comment := reviewstore.Comment{
 		Scope: req.Scope, GroupID: req.GroupID, Author: req.Author,
 		Date: req.Date, Body: req.Body, Anchor: req.Anchor, Anchors: req.Anchors,
-	})
+	}
+	if c.Query("allow_orphan") != "1" && buildCommentJSON(body, comment).Orphan {
+		c.JSON(http.StatusUnprocessableEntity, gin.H{
+			"error": "anchor does not resolve against the current file " +
+				"(check heading_path / snippet / occurrence, which is 0-based); " +
+				"pass ?allow_orphan=1 to store it as orphan anyway",
+		})
+		return
+	}
+	created, err := reviewstore.AddComment(name, rel, comment)
 	if err != nil {
 		h.writeCommentErr(c, err)
 		return
 	}
-	content, _ := os.ReadFile(full)
-	c.JSON(http.StatusCreated, buildCommentJSON(string(content), created))
+	c.JSON(http.StatusCreated, buildCommentJSON(body, created))
 }
 
 // stampFingerprint sets a's LineFingerprint from the line it resolves to in
