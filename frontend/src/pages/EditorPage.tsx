@@ -39,7 +39,7 @@ import {
   DiffView,
   NameTooltip,
 } from "@/components";
-import type { DocBox } from "@/components/CommentSidePane";
+import type { DocBox, RailReveal } from "@/components/CommentSidePane";
 import { useOpenFiles } from "@/hooks/useOpenFiles";
 import { useRecentOpened } from "@/hooks/useRecentOpened";
 import { useReadFile, useWriteFile } from "@/hooks/useFileContent";
@@ -433,6 +433,8 @@ export function EditorPage() {
   // Pending clear for the shared comment-flash decoration (#167), so a second
   // jump within the flash window does not get cut short by the first timer.
   const flashTimerRef = useRef<number | null>(null);
+  // Set by the aligned rail while it is shown (#339); see scrollHighlightIntoView.
+  const railRevealRef = useRef<RailReveal | null>(null);
 
   // True when some open tab (any root) already has this root/path — used to
   // decide whether an SSE `comments` event should bump the tab-badge sweep
@@ -2145,7 +2147,24 @@ export function EditorPage() {
   //    (CommentHighlight.flashCommentRanges) instead.
   //  - orphan (no anchor resolves): do nothing, as before — canJump already
   //    keeps the label from being clickable in this case.
-  const handleJumpToComment = (id: string) => {
+  // Brings a comment's highlight into view. Centred by default; opened from
+  // its card (`revealCard`), the body scrolls by however much the aligned rail
+  // says keeps that card in the pane (#339) — on a crowded line the card is
+  // stacked below the others, and centring the highlight pushed it past the
+  // pane's bottom. The amount comes from the rail's own anchor measurement,
+  // not from `el`, whose top need not be the anchor's line (a resolved
+  // comment's `el` is the whole paragraph).
+  const scrollHighlightIntoView = (el: HTMLElement, id: string, revealCard: boolean) => {
+    const delta = revealCard ? (railRevealRef.current?.(id) ?? null) : null;
+    const scroller = delta === null ? null : findScrollableAncestor(el);
+    if (delta === null || !scroller) {
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      return;
+    }
+    scroller.scrollBy({ top: delta, behavior: "smooth" });
+  };
+
+  const handleJumpToComment = (id: string, { revealCard = false } = {}) => {
     if (!editor || editor.isDestroyed) return;
     const comment = comments.find((c) => c.id === id);
     if (!comment) return;
@@ -2178,7 +2197,7 @@ export function EditorPage() {
       `[data-comment-id="${CSS.escape(id)}"]`
     );
     if (decorated.length > 0) {
-      decorated[0].scrollIntoView({ behavior: "smooth", block: "center" });
+      scrollHighlightIntoView(decorated[0], id, revealCard);
       // #310: `scrollIntoView`'s vertical centering doesn't reliably pull a
       // highlight out from a wide table's own horizontal scroll region
       // (#152) — bring it inside that container's visible width too.
@@ -2197,8 +2216,10 @@ export function EditorPage() {
     const { node } = editor.view.domAtPos(ranges[0].from);
     const target =
       node.nodeType === Node.TEXT_NODE ? node.parentElement : (node as HTMLElement);
-    target?.scrollIntoView({ behavior: "smooth", block: "center" });
-    if (target) scrollTableIntoView(target);
+    if (target) {
+      scrollHighlightIntoView(target, id, revealCard);
+      scrollTableIntoView(target);
+    }
     editor.commands.flashCommentRanges(ranges);
     flashTimerRef.current = window.setTimeout(() => {
       flashTimerRef.current = null;
@@ -2216,9 +2237,47 @@ export function EditorPage() {
    * in its own section.
    */
   const handleSelectComment = (id: string) => {
-    handleJumpToComment(id);
     setRailSelectedId(id);
+    setPendingReveal({ id, path: activePath, frames: 0 });
   };
+
+  // #339: the jump for a selection waits for the rail to lay out what the
+  // selection produced — in icon mode the previously selected card folds back
+  // into an icon and this one opens, moving it — so that the scroll keeps the
+  // card that is actually shown in the pane. Bounded, and dropped if the file
+  // changes meanwhile. The list mode has no rail placement to wait for.
+  const [pendingReveal, setPendingReveal] = useState<{
+    id: string;
+    path: string | undefined;
+    frames: number;
+  } | null>(null);
+  useEffect(() => {
+    if (!pendingReveal) return;
+    if (pendingReveal.path !== activePath || !editor || editor.isDestroyed) {
+      setPendingReveal(null);
+      return;
+    }
+    const { id, frames } = pendingReveal;
+    const target = comments.find((c) => c.id === id);
+    const waitsForRail =
+      commentRailMode !== "list" && !!target && target.scope !== "global" && !target.orphan;
+    // No aligned rail mounted (it registers itself on mount, before this
+    // runs), or one that cannot place the card at all, means there is nothing
+    // to wait for.
+    const reveal = railRevealRef.current;
+    const answer = reveal === null ? null : reveal(id);
+    // Otherwise two frames at least: one for the selection's render, one for
+    // the card measurements it triggers to feed back into the layout.
+    if (waitsForRail && answer !== null && (frames < 2 || answer === undefined) && frames < 30) {
+      const raf = requestAnimationFrame(() =>
+        setPendingReveal((p) => (p && p.id === id ? { ...p, frames: p.frames + 1 } : p))
+      );
+      return () => cancelAnimationFrame(raf);
+    }
+    setPendingReveal(null);
+    handleJumpToComment(id, { revealCard: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingReveal, activePath, editor, comments, commentRailMode]);
 
   // Deeplink: `?comment_id=<id>` jumps to that comment once the file and comments land.
   useEffect(() => {
@@ -3353,6 +3412,7 @@ export function EditorPage() {
         }}
       >
         <CommentSidePane
+          railRevealRef={railRevealRef}
           root={activeFileRoot}
           filePath={activePath}
           comments={comments}

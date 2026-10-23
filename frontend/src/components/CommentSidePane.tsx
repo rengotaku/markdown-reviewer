@@ -7,6 +7,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type MutableRefObject,
 } from "react";
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
@@ -53,6 +54,7 @@ import {
   isPlacedInPane,
   layoutCommentRail,
   RAIL_GAP,
+  revealAnchorTop,
   type RailItem,
 } from "@/utils/commentRailLayout";
 import { groupIconRailEntries, type IconRailEntry } from "@/utils/commentIconGroups";
@@ -365,7 +367,16 @@ interface Props {
   railMode?: CommentRailMode;
   /** Renders the mode switch when given; without it the pane stays aligned. */
   onRailModeChange?: (mode: CommentRailMode) => void;
+  /** Filled in by the aligned rail with a {@link RailReveal} for the caller's
+   *  jump to use (#339); null while no aligned rail is shown. */
+  railRevealRef?: MutableRefObject<RailReveal | null>;
 }
+
+/** How many px the body must scroll (positive = down) for a comment's card to
+ *  land inside the aligned rail (#339). `undefined` while the rail is still
+ *  laying out (worth waiting for); null when it cannot place that card at all
+ *  (not worth waiting for — e.g. a pane with no height). */
+export type RailReveal = (id: string) => number | null | undefined;
 
 type StatusFilter = "all" | "open" | "resolved";
 
@@ -448,6 +459,7 @@ export function CommentSidePane({
   unresolvedIds = EMPTY_IDS,
   railMode = "aligned",
   onRailModeChange,
+  railRevealRef,
 }: Props) {
   const canCopyLink = Boolean(root && filePath);
   const handleCopyLink = async (id: string) => {
@@ -839,6 +851,7 @@ export function CommentSidePane({
             anchorTops={anchorTops}
             docBox={docBox}
             onOverhangChange={onRailOverhangChange}
+            revealRef={railRevealRef}
             selectedId={selectedId ?? null}
             onSelect={onSelect}
             onCopyLink={handleCopyLink}
@@ -1321,6 +1334,7 @@ interface AlignedRailProps {
   onOpenDetail: (id: string) => void;
   /** #332: show a count icon per line instead of each non-selected card. */
   iconMode?: boolean;
+  revealRef?: MutableRefObject<RailReveal | null>;
 }
 
 /** Lays anchored cards out down the rail, level with the paragraph each is
@@ -1343,9 +1357,10 @@ function AlignedCommentRail({
   onDeleteReply,
   onOpenDetail,
   iconMode = false,
+  revealRef,
 }: AlignedRailProps) {
   const railRef = useRef<HTMLDivElement | null>(null);
-  const [paneBox, setPaneBox] = useState({ top: 0, height: 0 });
+  const [paneBox, setPaneBox] = useState({ top: 0, height: 0, measured: false });
   const [cardHeights, setCardHeights] = useState<Record<string, number>>({});
   const rafRef = useRef<number | null>(null);
 
@@ -1356,9 +1371,9 @@ function AlignedCommentRail({
       const rect = railRef.current?.getBoundingClientRect();
       if (!rect) return;
       setPaneBox((prev) =>
-        prev.top === rect.top && prev.height === rect.height
+        prev.measured && prev.top === rect.top && prev.height === rect.height
           ? prev
-          : { top: rect.top, height: rect.height }
+          : { top: rect.top, height: rect.height, measured: true }
       );
     });
   }, []);
@@ -1494,6 +1509,26 @@ function AlignedCommentRail({
   useEffect(() => {
     onOverhangChange?.(overhang);
   }, [overhang, onOverhangChange]);
+
+  // #339: hand the caller the current layout's answer to "where must this
+  // card's highlight go for the card to stay in view". A comment folded into
+  // an icon (#332) is looked up by its entry, which shares its line.
+  useEffect(() => {
+    if (!revealRef) return;
+    revealRef.current = (id) => {
+      if (!paneBox.measured) return undefined;
+      if (paneBox.height <= 0) return null;
+      const key = entries.find((e) => e.ids.includes(id))?.key;
+      const placed = layout.placed.find((p) => p.id === key);
+      // Not measured or placed yet: the next layout pass may still bring it.
+      if (!placed || !Object.hasOwn(anchorTops, id)) return undefined;
+      const anchorRel = anchorTops[id] - paneBox.top;
+      return anchorRel - revealAnchorTop(placed, anchorRel, paneBox.height);
+    };
+    return () => {
+      revealRef.current = null;
+    };
+  }, [revealRef, entries, layout, anchorTops, paneBox]);
   useEffect(() => () => onOverhangChange?.(0), [onOverhangChange]);
 
   const byId = useMemo(() => new Map(comments.map((c) => [c.id, c])), [comments]);

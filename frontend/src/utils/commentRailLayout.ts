@@ -110,3 +110,26 @@ export function layoutCommentRail(
 export function isPlacedInPane(placed: RailPlacedItem, paneHeight: number): boolean {
   return placed.top < paneHeight && placed.top + placed.maxHeight > 0;
 }
+
+/** Where a selected card's highlight should be scrolled to — its top relative
+ *  to the pane — so the card itself lands inside the pane (#339). Centring the
+ *  highlight is the default, but a card stacked below others on the same line
+ *  sits `placed.top - anchorRel` further down than its highlight, and with
+ *  enough of them that pushes it past the pane's bottom edge. The card is
+ *  pulled back up until its bottom fits, never above `gap` from the top. The
+ *  room kept for it is RAIL_CARD_MAX_HEIGHT, not its current height: the
+ *  selected card shows its body in full (#330), so it grows once selected.
+ *  `anchorRel` is the highlight's current top relative to the pane; the
+ *  offset between highlight and card holds still while the body scrolls,
+ *  since both move by the same amount. */
+export function revealAnchorTop(
+  placed: RailPlacedItem,
+  anchorRel: number,
+  paneHeight: number,
+  gap: number = RAIL_GAP
+): number {
+  const offset = placed.top - anchorRel;
+  const centred = paneHeight / 2 + offset;
+  const lowest = Math.max(gap, paneHeight - gap - RAIL_CARD_MAX_HEIGHT);
+  return Math.max(gap, Math.min(centred, lowest)) - offset;
+}
