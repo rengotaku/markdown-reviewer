@@ -2261,11 +2261,14 @@ export function EditorPage() {
     const target = comments.find((c) => c.id === id);
     const waitsForRail =
       commentRailMode !== "list" && !!target && target.scope !== "global" && !target.orphan;
+    // No aligned rail mounted (it registers itself on mount, before this
+    // runs), or one that cannot place the card at all, means there is nothing
+    // to wait for.
     const reveal = railRevealRef.current;
-    const laidOut = reveal !== null && reveal(id) !== undefined;
-    // Two frames at least: one for the selection's render, one for the card
-    // measurements it triggers to feed back into the layout.
-    if (waitsForRail && (frames < 2 || !laidOut) && frames < 30) {
+    const answer = reveal === null ? null : reveal(id);
+    // Otherwise two frames at least: one for the selection's render, one for
+    // the card measurements it triggers to feed back into the layout.
+    if (waitsForRail && answer !== null && (frames < 2 || answer === undefined) && frames < 30) {
       const raf = requestAnimationFrame(() =>
         setPendingReveal((p) => (p && p.id === id ? { ...p, frames: p.frames + 1 } : p))
       );
