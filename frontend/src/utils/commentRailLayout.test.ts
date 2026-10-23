@@ -3,6 +3,8 @@ import {
   isPlacedInPane,
   layoutCommentRail,
   RAIL_CARD_MAX_HEIGHT,
+  RAIL_GAP,
+  revealAnchorTop,
   type RailItem,
 } from "./commentRailLayout";
 
@@ -145,5 +147,52 @@ describe("isPlacedInPane", () => {
     expect(isPlacedInPane({ id: "a", top: -40, maxHeight: 40 }, PANE_HEIGHT)).toBe(false);
     expect(isPlacedInPane({ id: "a", top: 599, maxHeight: 40 }, PANE_HEIGHT)).toBe(true);
     expect(isPlacedInPane({ id: "a", top: 600, maxHeight: 40 }, PANE_HEIGHT)).toBe(false);
+  });
+});
+
+describe("revealAnchorTop (#339)", () => {
+  // Same-line comments stack below one another; the n-th card sits that many
+  // card heights below its highlight.
+  const sameLine = (n: number, anchorTop: number): RailItem[] =>
+    Array.from({ length: n }, (_, i) => ({ id: `c${i}`, anchorTop, height: 100, order: i }));
+
+  // Scroll by (current highlight top - target) and lay out again, the way
+  // the body scrolling moves every anchor by the same amount.
+  const afterReveal = (items: RailItem[], id: string) => {
+    const before = layoutCommentRail(items, VIEWPORT).placed.find((p) => p.id === id)!;
+    const anchorRel = items.find((i) => i.id === id)!.anchorTop! - VIEWPORT.paneTop;
+    const delta = anchorRel - revealAnchorTop(before, anchorRel, PANE_HEIGHT);
+    const scrolled = items.map((i) => ({ ...i, anchorTop: i.anchorTop! - delta }));
+    return layoutCommentRail(scrolled, VIEWPORT).placed.find((p) => p.id === id)!;
+  };
+
+  it("centres the highlight of a card that has the line to itself", () => {
+    // 800px: tall enough that a full-height card below the centre still fits.
+    const placed = layoutCommentRail(sameLine(1, 900), VIEWPORT).placed[0];
+    expect(revealAnchorTop(placed, 800, 800)).toBe(400);
+  });
+
+  it("lifts a lone card when a full-height card would not fit below the centre", () => {
+    const placed = layoutCommentRail(sameLine(1, 900), VIEWPORT).placed[0];
+    expect(revealAnchorTop(placed, 800, PANE_HEIGHT)).toBe(
+      PANE_HEIGHT - RAIL_GAP - RAIL_CARD_MAX_HEIGHT
+    );
+  });
+
+  it("keeps the 8th card on a crowded line inside a 600px pane", () => {
+    // The issue's repro: centring the highlight put this card at
+    // 300 + 7 * 108 = 1056, past the pane's 600px.
+    const placed = afterReveal(sameLine(8, 900), "c7");
+    expect(isPlacedInPane(placed, PANE_HEIGHT)).toBe(true);
+    expect(placed.top).toBeGreaterThanOrEqual(RAIL_GAP);
+    // Room for the card at full height, which it grows to once selected.
+    expect(placed.top + RAIL_CARD_MAX_HEIGHT).toBeLessThanOrEqual(PANE_HEIGHT - RAIL_GAP);
+  });
+
+  it("pins the card to the pane's top when the pane is shorter than the card", () => {
+    // Highlight at 200, card stacked 216px below it, 320px tall, 200px pane.
+    const placed = { id: "c2", top: 416, maxHeight: RAIL_CARD_MAX_HEIGHT };
+    const target = revealAnchorTop(placed, 200, 200);
+    expect(target + (placed.top - 200)).toBe(RAIL_GAP);
   });
 });

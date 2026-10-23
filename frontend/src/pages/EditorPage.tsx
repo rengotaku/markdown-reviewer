@@ -39,7 +39,7 @@ import {
   DiffView,
   NameTooltip,
 } from "@/components";
-import type { DocBox } from "@/components/CommentSidePane";
+import type { DocBox, RailReveal } from "@/components/CommentSidePane";
 import { useOpenFiles } from "@/hooks/useOpenFiles";
 import { useRecentOpened } from "@/hooks/useRecentOpened";
 import { useReadFile, useWriteFile } from "@/hooks/useFileContent";
@@ -433,6 +433,8 @@ export function EditorPage() {
   // Pending clear for the shared comment-flash decoration (#167), so a second
   // jump within the flash window does not get cut short by the first timer.
   const flashTimerRef = useRef<number | null>(null);
+  // Set by the aligned rail while it is shown (#339); see scrollHighlightIntoView.
+  const railRevealRef = useRef<RailReveal | null>(null);
 
   // True when some open tab (any root) already has this root/path — used to
   // decide whether an SSE `comments` event should bump the tab-badge sweep
@@ -2145,7 +2147,21 @@ export function EditorPage() {
   //    (CommentHighlight.flashCommentRanges) instead.
   //  - orphan (no anchor resolves): do nothing, as before — canJump already
   //    keeps the label from being clickable in this case.
-  const handleJumpToComment = (id: string) => {
+  // Brings a comment's highlight into view. Centred by default; opened from
+  // its card (`revealCard`), it goes wherever the aligned rail says keeps that
+  // card in the pane (#339) — on a crowded line the card is stacked below the
+  // others, and centring the highlight pushed it past the pane's bottom.
+  const scrollHighlightIntoView = (el: HTMLElement, id: string, revealCard: boolean) => {
+    const target = revealCard ? (railRevealRef.current?.(id) ?? null) : null;
+    const scroller = target === null ? null : findScrollableAncestor(el);
+    if (target === null || !scroller) {
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      return;
+    }
+    scroller.scrollBy({ top: el.getBoundingClientRect().top - target, behavior: "smooth" });
+  };
+
+  const handleJumpToComment = (id: string, { revealCard = false } = {}) => {
     if (!editor || editor.isDestroyed) return;
     const comment = comments.find((c) => c.id === id);
     if (!comment) return;
@@ -2178,7 +2194,7 @@ export function EditorPage() {
       `[data-comment-id="${CSS.escape(id)}"]`
     );
     if (decorated.length > 0) {
-      decorated[0].scrollIntoView({ behavior: "smooth", block: "center" });
+      scrollHighlightIntoView(decorated[0], id, revealCard);
       // #310: `scrollIntoView`'s vertical centering doesn't reliably pull a
       // highlight out from a wide table's own horizontal scroll region
       // (#152) — bring it inside that container's visible width too.
@@ -2197,8 +2213,10 @@ export function EditorPage() {
     const { node } = editor.view.domAtPos(ranges[0].from);
     const target =
       node.nodeType === Node.TEXT_NODE ? node.parentElement : (node as HTMLElement);
-    target?.scrollIntoView({ behavior: "smooth", block: "center" });
-    if (target) scrollTableIntoView(target);
+    if (target) {
+      scrollHighlightIntoView(target, id, revealCard);
+      scrollTableIntoView(target);
+    }
     editor.commands.flashCommentRanges(ranges);
     flashTimerRef.current = window.setTimeout(() => {
       flashTimerRef.current = null;
@@ -2216,7 +2234,7 @@ export function EditorPage() {
    * in its own section.
    */
   const handleSelectComment = (id: string) => {
-    handleJumpToComment(id);
+    handleJumpToComment(id, { revealCard: true });
     setRailSelectedId(id);
   };
 
@@ -2231,7 +2249,20 @@ export function EditorPage() {
     initialCommentIdRef.current = null;
     // A shared link exists to show one comment, so open it rather than making
     // the reader hunt for the highlight that just flashed (#253).
-    handleSelectComment(commentId);
+    // #339: the rail places its cards a frame or more after the comments
+    // land. Give it a bounded wait to place this one, so the jump can keep the
+    // card in view rather than centring the highlight alone.
+    const target = comments.find((c) => c.id === commentId);
+    const anchored = !!target && target.scope !== "global" && !target.orphan;
+    let frames = 0;
+    const open = () => {
+      if (anchored && railRevealRef.current?.(commentId) == null && frames++ < 30) {
+        requestAnimationFrame(open);
+        return;
+      }
+      handleSelectComment(commentId);
+    };
+    open();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activePath, reviewState, commentsLoadedForPath, editor, comments]);
 
@@ -3353,6 +3384,7 @@ export function EditorPage() {
         }}
       >
         <CommentSidePane
+          railRevealRef={railRevealRef}
           root={activeFileRoot}
           filePath={activePath}
           comments={comments}
