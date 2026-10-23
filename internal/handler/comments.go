@@ -437,20 +437,6 @@ func (h *Handler) readCanonical(c *gin.Context, full string) (string, bool) {
 	return string(data), true
 }
 
-// statCanonical confirms the canonical file exists before a write op.
-func (h *Handler) statCanonical(c *gin.Context, full string) (os.FileInfo, bool) {
-	info, err := os.Stat(full)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "file not found"})
-			return nil, false
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to stat file"})
-		return nil, false
-	}
-	return info, true
-}
-
 // writeCommentErr maps reviewstore errors to HTTP responses.
 func (h *Handler) writeCommentErr(c *gin.Context, err error) {
 	switch {
