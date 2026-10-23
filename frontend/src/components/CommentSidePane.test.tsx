@@ -319,6 +319,85 @@ describe("CommentSidePane", () => {
       expect(screen.getByText("global body")).toBeInTheDocument();
     });
 
+    describe("a comment_id link to a comment with no live anchor (#226)", () => {
+      const noop = () => {};
+      const paneWith = (
+        comments: CommentJSON[],
+        selectedId: string | null,
+        unresolvedIds: ReadonlySet<string> = new Set()
+      ) => (
+        <CommentSidePane
+          root="works"
+          filePath="doc.md"
+          comments={comments}
+          reviewActive
+          canAddComment
+          onRefresh={noop}
+          onAddComment={noop}
+          onAddGlobal={noop}
+          onDelete={noop}
+          onResolveToggle={noop}
+          onReply={noop}
+          onEdit={noop}
+          onEditReply={noop}
+          onDeleteReply={noop}
+          onJump={noop}
+          onSelect={noop}
+          selectedId={selectedId}
+          unresolvedIds={unresolvedIds}
+        />
+      );
+      const selectedRow = () =>
+        within(screen.getByTestId("global-comments-dialog"))
+          .getAllByTestId("comment-item")
+          .find((el) => el.dataset.selected === "true");
+
+      it("opens the dialog on the global tab with the row marked", () => {
+        const comments = [pinned("g1"), pinned("g2"), comment("o1", { orphan: true, context: null })];
+        const { rerender } = render(paneWith(comments, null));
+        expect(screen.queryByTestId("global-comments-dialog")).toBeNull();
+        rerender(paneWith(comments, "g2"));
+        expect(screen.getByTestId("global-comments-tab-global")).toHaveAttribute("aria-selected", "true");
+        expect(selectedRow()?.dataset.commentId).toBe("g2");
+        // Marked in words too, not by the background colour alone.
+        expect(within(selectedRow()!).getByTestId("comment-linked-badge")).toHaveTextContent("リンク先");
+        expect(screen.getAllByTestId("comment-linked-badge")).toHaveLength(1);
+      });
+
+      it("opens once the caller finds an anchored comment unresolvable after the selection", () => {
+        // The server says anchored (orphan: false); the editor can't place it,
+        // and says so a frame after the link selected it.
+        const comments = [comment("u1")];
+        const { rerender } = render(paneWith(comments, null));
+        rerender(paneWith(comments, "u1"));
+        expect(screen.queryByTestId("global-comments-dialog")).toBeNull();
+        rerender(paneWith(comments, "u1", new Set(["u1"])));
+        expect(selectedRow()?.dataset.commentId).toBe("u1");
+      });
+
+      it("opens the orphan tab for an orphan comment", () => {
+        const comments = [pinned("g1"), comment("o1", { orphan: true, context: null })];
+        const { rerender } = render(paneWith(comments, null));
+        rerender(paneWith(comments, "o1"));
+        expect(screen.getByTestId("global-comments-tab-orphan")).toHaveAttribute("aria-selected", "true");
+        expect(selectedRow()?.dataset.commentId).toBe("o1");
+      });
+
+      it("widens the status filter so a resolved global comment is there to mark", () => {
+        const comments = [pinned("g1", { status: "resolved" })];
+        const { rerender } = render(paneWith(comments, null));
+        rerender(paneWith(comments, "g1"));
+        expect(selectedRow()?.dataset.commentId).toBe("g1");
+      });
+
+      it("leaves the dialog closed for an anchored comment", () => {
+        const comments = [comment("c1"), pinned("g1")];
+        const { rerender } = render(paneWith(comments, null));
+        rerender(paneWith(comments, "c1"));
+        expect(screen.queryByTestId("global-comments-dialog")).toBeNull();
+      });
+    });
+
     it("shows tabs only when both global and orphan comments exist", async () => {
       const user = userEvent.setup();
       renderPane({

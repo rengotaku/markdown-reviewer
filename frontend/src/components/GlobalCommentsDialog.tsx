@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Dialog from "@mui/material/Dialog";
 import DialogTitle from "@mui/material/DialogTitle";
 import DialogContent from "@mui/material/DialogContent";
@@ -17,6 +17,9 @@ import type { GlobalBadgeKind } from "./GlobalCommentBadges";
 
 interface Props {
   open: boolean;
+  /** #226: the comment a `?comment_id=` link pointed at — its row is marked
+   *  and scrolled into view. */
+  selectedId?: string | null;
   /** Which tab to show first — determined by which badge was pressed. */
   initialTab: GlobalBadgeKind;
   globalComments: ReadonlyArray<CommentJSON>;
@@ -55,6 +58,7 @@ export function GlobalCommentsDialog({
   onCopyLink,
   canCopyLink = true,
   onAddGlobal,
+  selectedId = null,
 }: Props) {
   const [tab, setTab] = useState<GlobalBadgeKind>(initialTab);
   // Re-sync whenever the dialog is (re)opened for a possibly different
@@ -79,6 +83,21 @@ export function GlobalCommentsDialog({
       : "orphan";
   const list = activeTab === "global" ? globalComments : orphanComments;
 
+  // #226: bring the linked row into view once the dialog has it on screen.
+  // On the commit that opens the dialog its content is not mounted yet (the
+  // portal renders it after), so the first scroll waits for the enter
+  // transition; later selection or tab changes scroll from the effect.
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const scrollToSelected = useCallback(() => {
+    if (!selectedId) return;
+    contentRef.current
+      ?.querySelector<HTMLElement>(`[data-comment-id="${CSS.escape(selectedId)}"]`)
+      ?.scrollIntoView?.({ block: "nearest" });
+  }, [selectedId]);
+  useEffect(() => {
+    if (open) scrollToSelected();
+  }, [open, scrollToSelected, activeTab]);
+
   return (
     <Dialog
       open={open}
@@ -86,6 +105,7 @@ export function GlobalCommentsDialog({
       maxWidth="sm"
       fullWidth
       data-testid="global-comments-dialog"
+      TransitionProps={{ onEntered: scrollToSelected }}
     >
       <DialogTitle sx={{ display: "flex", alignItems: "center", gap: 1, pr: 1 }}>
         <Box sx={{ flexGrow: 1 }}>
@@ -121,7 +141,7 @@ export function GlobalCommentsDialog({
           <CloseIcon fontSize="small" />
         </IconButton>
       </DialogTitle>
-      <DialogContent dividers sx={{ p: 0 }}>
+      <DialogContent ref={contentRef} dividers sx={{ p: 0 }}>
         {list.map((c) => (
           <CommentRow
             key={c.id}
@@ -142,6 +162,7 @@ export function GlobalCommentsDialog({
             onOpenDetail={() => {}}
             onCopyLink={onCopyLink}
             canCopyLink={canCopyLink}
+            selected={c.id === selectedId}
           />
         ))}
       </DialogContent>
