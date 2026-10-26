@@ -87,7 +87,7 @@ func (a *Adapter) Sessions(ctx context.Context) ([]agent.Session, error) {
 		if _, alive := a.process(ctx, s); !alive {
 			continue
 		}
-		sessions = append(sessions, agent.Session{ID: s.SessionID, Cwd: s.Cwd, Name: s.Name, Instance: s.ProcStart, PID: s.PID, Ready: readyForInput(s.Status)})
+		sessions = append(sessions, agent.Session{ID: s.SessionID, Cwd: s.Cwd, Name: s.Name, Instance: s.ProcStart, PID: s.PID, Ready: readyForInput(s.Status), Background: s.Status == "shell"})
 	}
 	return sessions, nil
 }

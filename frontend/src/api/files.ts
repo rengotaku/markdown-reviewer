@@ -343,3 +343,24 @@ export async function sendReviewCommand(
     })
     .json<SendReviewResponse>();
 }
+
+export type AgentState = "none" | "idle" | "busy" | "background";
+
+export interface AgentStatusResponse {
+  state: AgentState;
+  session_name?: string;
+  agent_id?: string;
+}
+
+/** State of the session a send would go to. Never sends anything. */
+export async function fetchAgentStatus(
+  path: string,
+  root?: string
+): Promise<AgentStatusResponse> {
+  return apiClient
+    .get(`api/agents/status/${encodePath(path)}${rootQuery(root, "?")}`, {
+      retry: 0,
+      timeout: 4000,
+    })
+    .json<AgentStatusResponse>();
+}

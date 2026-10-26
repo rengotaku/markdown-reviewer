@@ -60,6 +60,8 @@ import {
 import { groupIconRailEntries, type IconRailEntry } from "@/utils/commentIconGroups";
 import { GlobalCommentBadges, type GlobalBadgeKind } from "./GlobalCommentBadges";
 import { GlobalCommentsDialog } from "./GlobalCommentsDialog";
+import { AgentActivityContext, type AgentCardActivity } from "./agentActivityContext";
+import { pulseSx } from "./pulseSx";
 
 /** Placeholder height for a card whose real height hasn't been measured yet
  *  (first paint, before its ResizeObserver fires) — enough to avoid every
@@ -408,7 +410,14 @@ interface Props {
   /** Filled in by the aligned rail with a {@link RailReveal} for the caller's
    *  jump to use (#339); null while no aligned rail is shown. */
   railRevealRef?: MutableRefObject<RailReveal | null>;
+  /** The AI is working on these comments after a send from this editor
+   *  (#360): open cards show that a reply is on its way. */
+  agentReplying?: boolean;
+  /** New AI replies per comment id since that work began (#360). */
+  agentNewReplies?: ReadonlyMap<string, number>;
 }
+
+const NO_NEW_REPLIES: ReadonlyMap<string, number> = new Map();
 
 /** How many px the body must scroll (positive = down) for a comment's card to
  *  land inside the aligned rail (#339). `undefined` while the rail is still
@@ -498,7 +507,13 @@ export function CommentSidePane({
   railMode = "aligned",
   onRailModeChange,
   railRevealRef,
+  agentReplying = false,
+  agentNewReplies = NO_NEW_REPLIES,
 }: Props) {
+  const agentActivity = useMemo<AgentCardActivity>(
+    () => ({ replying: agentReplying, newReplies: agentNewReplies }),
+    [agentReplying, agentNewReplies]
+  );
   const canCopyLink = Boolean(root && filePath);
   const handleCopyLink = async (id: string) => {
     if (!root || !filePath) return;
@@ -945,7 +960,11 @@ export function CommentSidePane({
     </Box>
   );
 
-  return <CardDraftsContext.Provider value={cardDrafts}>{pane}</CardDraftsContext.Provider>;
+  return (
+    <CardDraftsContext.Provider value={cardDrafts}>
+      <AgentActivityContext.Provider value={agentActivity}>{pane}</AgentActivityContext.Provider>
+    </CardDraftsContext.Provider>
+  );
 }
 
 interface CardProps {
@@ -989,6 +1008,9 @@ function CommentCard({
   const replies = c.replies?.length ?? 0;
   const resolved = c.status === "resolved";
   const aiOwned = isAiAuthored(c.author);
+  const agentActivity = useContext(AgentActivityContext);
+  const newAiReplies = agentActivity.newReplies.get(c.id) ?? 0;
+  const awaitingAi = agentActivity.replying && !resolved;
 
   const [{ replyOpen, replyBody, editOpen, editBody }, updateDraft] = useCardDraft(c.id);
   // #334: focus a form only when the reader opens it. A draft's form also
@@ -1082,6 +1104,16 @@ function CommentCard({
             variant="outlined"
             sx={{ height: 18, fontSize: "0.65rem", "& .MuiChip-label": { px: 0.75 } }}
             data-testid="comment-status-resolved"
+          />
+        )}
+        {newAiReplies > 0 && (
+          <Chip
+            label={`新着 ${newAiReplies}`}
+            size="small"
+            color="success"
+            variant="outlined"
+            sx={{ height: 18, fontSize: "0.65rem", "& .MuiChip-label": { px: 0.75 } }}
+            data-testid="comment-new-ai-replies"
           />
         )}
         {selected && !editOpen && (
@@ -1329,6 +1361,29 @@ function CommentCard({
             返信 {replies} 件
           </Typography>
         )
+      )}
+
+      {awaitingAi && (
+        <Typography
+          variant="caption"
+          data-testid="comment-awaiting-ai"
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            gap: 0.75,
+            mt: 0.75,
+            pl: 1,
+            borderLeft: "2px solid",
+            borderColor: "warning.main",
+            color: "warning.main",
+          }}
+        >
+          <Box
+            component="span"
+            sx={[{ width: 6, height: 6, borderRadius: "50%", bgcolor: "warning.main" }, pulseSx]}
+          />
+          AI が確認中
+        </Typography>
       )}
     </Box>
   );
