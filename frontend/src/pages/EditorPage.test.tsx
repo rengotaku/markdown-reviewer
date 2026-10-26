@@ -706,11 +706,17 @@ describe("EditorPage", () => {
 
   it("does not show a version badge while the initial stat fetch is in flight (#143 round 3)", async () => {
     const user = userEvent.setup();
-    const { http, HttpResponse, delay } = await import("msw");
+    const { http, HttpResponse } = await import("msw");
     const { server } = await import("@/test/mocks/server");
+    // Hold the stat response until the assertion below has run. A fixed delay
+    // raced the click under a loaded test run and let stat resolve first.
+    let releaseStat = () => {};
+    const statGate = new Promise<void>((resolve) => {
+      releaseStat = resolve;
+    });
     server.use(
       http.get("http://localhost:8080/api/stat/*", async () => {
-        await delay(30);
+        await statGate;
         return HttpResponse.json({
           path: "README.md",
           root: "mock-root",
@@ -731,6 +737,7 @@ describe("EditorPage", () => {
     // The stat fetch is still in flight — versionReady hasn't resolved yet,
     // so the badge must not render a guessed version (#143 round 3).
     expect(screen.queryByTestId("editor-active-version")).not.toBeInTheDocument();
+    releaseStat();
 
     // Once stat resolves (draft, no history), v1 is exact and shows up.
     await waitFor(() =>
