@@ -1430,13 +1430,18 @@ export function EditorPage() {
     /** Set in "edit" mode: the comment whose body is being rewritten. */
     editingId?: string;
   } | null>(null);
-  const [composerDraft, setComposerDraft] = useState("");
+  // #357: the body being typed lives in the composer itself. This page only
+  // reads it when deciding whether closing would discard something, so it
+  // keeps a ref — state here re-rendered the whole page on every keystroke
+  // (~140ms each). `key` remounts the composer per open so its local draft
+  // starts from `draft`.
+  const [composerSeed, setComposerSeed] = useState({ key: 0, draft: "" });
   const composerRef = useRef<typeof composer>(null);
   const composerDraftRef = useRef("");
 
   const closeComposer = () => {
     setComposer(null);
-    setComposerDraft("");
+    composerDraftRef.current = "";
   };
 
   // Whether a pointer gesture in the editor is still in progress — the
@@ -1467,8 +1472,7 @@ export function EditorPage() {
 
   useEffect(() => {
     composerRef.current = composer;
-    composerDraftRef.current = composerDraft;
-  }, [composer, composerDraft]);
+  }, [composer]);
 
   // The comment card the pane highlights as selected: a highlight click, a
   // pane row click, a deep link, or the jump-to-comment path all land here
@@ -1885,7 +1889,7 @@ export function EditorPage() {
       composer?.mode === "edit"
         ? (comments.find((c) => c.id === composer.editingId)?.body ?? "")
         : "";
-    if (composerDraft.trim() === seed.trim()) {
+    if (composerDraftRef.current.trim() === seed.trim()) {
       closeComposer();
       return;
     }
@@ -2532,7 +2536,8 @@ export function EditorPage() {
   ) => {
     hoverKey.current = null;
     setHoverTarget(null);
-    setComposerDraft(initialDraft);
+    composerDraftRef.current = initialDraft;
+    setComposerSeed((s) => ({ key: s.key + 1, draft: initialDraft }));
     setComposer(next);
   };
 
@@ -3531,11 +3536,14 @@ export function EditorPage() {
           data-testid="editor-comment-composer"
         >
           <CommentComposerPopover
+            key={composerSeed.key}
             mode={composer.mode}
             targetSnippet={composer.snippet}
             maxHeight={composerFrame.maxHeight}
-            draft={composerDraft}
-            onDraftChange={setComposerDraft}
+            initialDraft={composerSeed.draft}
+            onDraftChange={(next) => {
+              composerDraftRef.current = next;
+            }}
             onSubmit={handleCommentSubmit}
             onCancel={requestCloseComposer}
           />
