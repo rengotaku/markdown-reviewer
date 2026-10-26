@@ -168,6 +168,7 @@ function CollapsibleText({
   clampHeight = "6em",
   measureOverflow = false,
   clampDisabled = false,
+  stickyToggle = false,
 }: {
   text: string;
   testid: string;
@@ -175,6 +176,10 @@ function CollapsibleText({
   clampHeight?: string;
   measureOverflow?: boolean;
   clampDisabled?: boolean;
+  /** #355: pin the expanded "折りたたむ" to the bottom of the scroller. Only
+   *  for a card's own body — a reply's toggle only ever shows in a selected
+   *  card, whose action row is already pinned there and would cover it. */
+  stickyToggle?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [overflowing, setBodyEl, bodyEl] = useClampOverflow(!clampDisabled, clampHeight, text);
@@ -222,7 +227,7 @@ function CollapsibleText({
           sx={
             [
               { display: "block", width: "100%", textAlign: "left", mt: 0.25 },
-              expanded ? stickyRowSx("bottom", false) : false,
+              expanded && stickyToggle ? stickyRowSx("bottom", false) : false,
             ].filter(Boolean) as SxProps<Theme>
           }
         >
@@ -1209,6 +1214,7 @@ function CommentCard({
           clampHeight="3em"
           measureOverflow
           clampDisabled={selected}
+          stickyToggle
         />
       )}
 
