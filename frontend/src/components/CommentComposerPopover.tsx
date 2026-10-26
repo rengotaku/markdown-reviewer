@@ -1,3 +1,4 @@
+import { useState } from "react";
 import Box from "@mui/material/Box";
 import Paper from "@mui/material/Paper";
 import Button from "@mui/material/Button";
@@ -46,8 +47,11 @@ interface Props {
   targetSnippet: string;
   /** Ceiling in px, computed by the caller from the room around the anchor. */
   maxHeight: number;
-  /** Body being typed. Lifted out so the caller can refuse to discard it. */
-  draft: string;
+  /** Body the field starts with. The composer owns the text from there on
+   *  (#357: keeping it in the caller re-rendered the whole editor per
+   *  keystroke); remount it with a new `key` to start over. */
+  initialDraft: string;
+  /** Reports every change, so the caller can refuse to discard unsent text. */
   onDraftChange: (next: string) => void;
   onSubmit: (input: ComposerSubmit) => void;
   onCancel: () => void;
@@ -61,11 +65,12 @@ export function CommentComposerPopover({
   mode,
   targetSnippet,
   maxHeight,
-  draft,
+  initialDraft,
   onDraftChange,
   onSubmit,
   onCancel,
 }: Props) {
+  const [draft, setDraft] = useState(initialDraft);
   const trimmed = draft.trim();
   const canSubmit = trimmed.length > 0;
 
@@ -137,7 +142,10 @@ export function CommentComposerPopover({
         size="small"
         placeholder="コメントを書く…"
         value={draft}
-        onChange={(e) => onDraftChange(e.target.value)}
+        onChange={(e) => {
+          setDraft(e.target.value);
+          onDraftChange(e.target.value);
+        }}
         onKeyDown={(e) => {
           // Enter alone stays a newline: these bodies are Markdown.
           if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
