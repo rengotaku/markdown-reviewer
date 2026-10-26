@@ -28,7 +28,10 @@ describe("AgentStatusIndicator", () => {
         onShowReplies={vi.fn()}
       />
     );
-    expect(screen.getByTestId("editor-agent-status")).toHaveTextContent(/Claude 返信中 0:4[23]/);
+    const indicator = screen.getByTestId("editor-agent-status");
+    expect(indicator).toHaveTextContent(/Claude 返信中\s*0:4[23]/);
+    // The ticking timer stays out of the live region's announcement.
+    expect(indicator.querySelector('[aria-hidden="true"]')).toHaveTextContent(/^0:4[23]$/);
     expect(screen.queryByTestId("editor-agent-new-replies")).toBeNull();
   });
 

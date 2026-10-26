@@ -398,7 +398,12 @@ export function EditorPage() {
   const keyOf = (root: string | undefined, path: string) => `${root ?? ""}:${path}`;
   const fileKey = activePath ? keyOf(activeFileRoot, activePath) : "";
   // #360: whether the AI the send button reaches is still replying.
-  const agentActivity = useAgentStatus(activePath, activeFileRoot, comments);
+  const agentActivity = useAgentStatus(
+    activePath,
+    activeFileRoot,
+    comments,
+    !reviewActive || commentsLoadedForPath === activePath
+  );
   const agentBusy = agentActivity.status?.state === "busy";
   const newAgentReplyCount = [...agentActivity.newReplies.values()].reduce((a, b) => a + b, 0);
 
@@ -3080,7 +3085,19 @@ export function EditorPage() {
                 onShowReplies={() => {
                   const first = comments.find((c) => agentActivity.newReplies.has(c.id));
                   agentActivity.acknowledge();
-                  if (first) handleSelectComment(first.id);
+                  if (!first) return;
+                  handleSelectComment(first.id);
+                  // The button disappears once acknowledged, so hand keyboard
+                  // focus to the card. It may only mount after the rail lays
+                  // out the selection; give it a few frames, then give up.
+                  const selector = `[data-testid="comment-item"][data-comment-id="${CSS.escape(first.id)}"]`;
+                  let frames = 0;
+                  const focusCard = () => {
+                    const card = document.querySelector<HTMLElement>(selector);
+                    if (card) card.focus({ preventScroll: true });
+                    else if (++frames < 10) requestAnimationFrame(focusCard);
+                  };
+                  requestAnimationFrame(focusCard);
                 }}
               />
             )}

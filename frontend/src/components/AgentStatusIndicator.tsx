@@ -48,7 +48,9 @@ export function AgentStatusIndicator({ status, busySince, newReplyCount, onShowR
       ]}
     />
   );
-  const label = (text: string, color: string, marker: ReactNode, title: string) => (
+  // `ticker` is outside what assistive tech announces: the live region should
+  // speak once per state change, not every second while the timer runs.
+  const label = (text: string, color: string, marker: ReactNode, title: string, ticker?: string) => (
     <Tooltip title={title}>
       <Typography
         variant="caption"
@@ -69,16 +71,18 @@ export function AgentStatusIndicator({ status, busySince, newReplyCount, onShowR
       >
         {marker}
         {text}
+        {ticker && <span aria-hidden="true">{ticker}</span>}
       </Typography>
     </Tooltip>
   );
 
   if (status.state === "busy") {
     return label(
-      `${name} 返信中 ${elapsed}`,
+      `${name} 返信中`,
       "warning.main",
       dot("warning.main", true),
-      `${session}（処理中。いま送信ボタンを押すとコマンドのコピーになります）`
+      `${session}（処理中。いま送信ボタンを押すとコマンドのコピーになります）`,
+      elapsed
     );
   }
   if (newReplyCount > 0) {

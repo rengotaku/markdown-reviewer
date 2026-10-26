@@ -15,8 +15,8 @@ export interface AgentTracking {
   busySince: number | null;
   /** The current busy period was started by this editor's send button. */
   sentByUs: boolean;
-  /** Reply count per comment when the last busy period began. Replies past
-   *  these counts are new. Null once the reader has acknowledged them. */
+  /** AI reply count per comment when the last busy period began; anything
+   *  above it is new. Null once the reader has acknowledged them. */
   baseline: ReadonlyMap<string, number> | null;
 }
 
@@ -28,8 +28,13 @@ export const emptyTracking = (key: string): AgentTracking => ({
   baseline: null,
 });
 
+const aiReplyCount = (c: CommentJSON) =>
+  (c.replies ?? []).filter((r) => isAiAuthored(r.author)).length;
+
+/** AI replies only: they are read-only to the reviewer, so unlike the reader's
+ *  own replies they never disappear and the count only grows. */
 export function replyCounts(comments: ReadonlyArray<CommentJSON>): Map<string, number> {
-  return new Map(comments.map((c) => [c.id, c.replies?.length ?? 0]));
+  return new Map(comments.map((c) => [c.id, aiReplyCount(c)]));
 }
 
 /** AI replies added since `baseline`, per comment id. Comments that did not
@@ -44,7 +49,7 @@ export function newAiReplies(
   for (const c of comments) {
     const before = baseline.get(c.id);
     if (before === undefined) continue;
-    const added = (c.replies ?? []).slice(before).filter((r) => isAiAuthored(r.author)).length;
+    const added = aiReplyCount(c) - before;
     if (added > 0) out.set(c.id, added);
   }
   return out;
@@ -63,6 +68,9 @@ export function applyStatus(
   now: number
 ): AgentTracking {
   const base = prev.key === key ? prev : emptyTracking(key);
+  // A failed poll says nothing about the session: hide the state but keep the
+  // busy period and baseline, so a reply that lands meanwhile still counts.
+  if (next === null) return base.status === null && base === prev ? prev : { ...base, status: null };
   const wasBusy = base.busySince !== null;
   const nowBusy = next?.state === "busy";
   if (wasBusy && !nowBusy && base.sentByUs && now - base.busySince! < SEND_GRACE_MS) {
@@ -84,9 +92,11 @@ export function applySent(
   comments: ReadonlyArray<CommentJSON>,
   now: number
 ): AgentTracking {
-  const base = prev.key === key ? prev : emptyTracking(key);
-  const status: AgentStatusResponse = { ...(base.status ?? {}), state: "busy" };
-  return { ...base, status, busySince: now, sentByUs: true, baseline: replyCounts(comments) };
+  // The send resolves after a network round trip. If another file is active
+  // by then, this send no longer describes what is on screen.
+  if (prev.key !== key) return prev;
+  const status: AgentStatusResponse = { ...(prev.status ?? {}), state: "busy" };
+  return { ...prev, status, busySince: now, sentByUs: true, baseline: replyCounts(comments) };
 }
 
 /** Display name for an adapter id ("claude" → "Claude"). */

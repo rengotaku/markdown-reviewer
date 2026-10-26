@@ -31,7 +31,11 @@ export interface AgentActivity {
 export function useAgentStatus(
   path: string | undefined,
   root: string | undefined,
-  comments: ReadonlyArray<CommentJSON>
+  comments: ReadonlyArray<CommentJSON>,
+  /** False while the active file's comments are still loading. A busy period
+   *  that began then would take an empty reply baseline and miss every reply,
+   *  so polling waits until the list is in. */
+  commentsReady: boolean
 ): AgentActivity {
   const key = path ? `${root ?? ""}:${path}` : "";
   const [tracking, setTracking] = useState<AgentTracking>(() => emptyTracking(key));
@@ -43,7 +47,7 @@ export function useAgentStatus(
   }, [comments]);
 
   useEffect(() => {
-    if (!path) return;
+    if (!path || !commentsReady) return;
     let cancelled = false;
     let inFlight = false;
     const poll = async () => {
@@ -74,7 +78,7 @@ export function useAgentStatus(
       window.clearInterval(handle);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [path, root, key]);
+  }, [path, root, key, commentsReady]);
 
   const current = tracking.key === key ? tracking : emptyTracking(key);
   const baseline = current.baseline;

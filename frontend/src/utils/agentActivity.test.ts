@@ -30,6 +30,11 @@ describe("newAiReplies", () => {
     ]);
   });
 
+  it("is not fooled by the reader deleting their own reply", () => {
+    const baseline = replyCounts([comment("c1", ["kishira"])]);
+    expect([...newAiReplies(baseline, [comment("c1", ["ai"])])]).toEqual([["c1", 1]]);
+  });
+
   it("is empty without a baseline", () => {
     expect(newAiReplies(null, [comment("c1", ["ai"])]).size).toBe(0);
   });
@@ -71,6 +76,21 @@ describe("applyStatus", () => {
     const busy = applyStatus(sent, key, { state: "busy", session_name: "s" }, [comment("c1", [])], 3000);
     expect(busy.busySince).toBe(1000);
     expect(busy.sentByUs).toBe(true);
+  });
+
+  it("keeps the busy period and baseline across a failed poll", () => {
+    const busy = applyStatus(emptyTracking(key), key, { state: "busy" }, [comment("c1", [])], 1000);
+    const failed = applyStatus(busy, key, null, [comment("c1", ["ai"])], 20_000);
+    expect(failed.status).toBeNull();
+    expect(failed.busySince).toBe(1000);
+    const again = applyStatus(failed, key, { state: "busy" }, [comment("c1", ["ai"])], 23_000);
+    expect(again.busySince).toBe(1000);
+    expect(again.baseline?.get("c1")).toBe(0);
+  });
+
+  it("drops a send that resolves after switching to another file", () => {
+    const current = applyStatus(emptyTracking(key), key, { state: "idle" }, [], 1);
+    expect(applySent(current, "units:b.md", [], 2)).toBe(current);
   });
 
   it("discards tracking from another file", () => {
