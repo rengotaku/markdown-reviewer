@@ -83,7 +83,10 @@ export function CommentComposerPopover({
       elevation={6}
       data-testid="comment-composer-popover"
       sx={{
-        width: 352,
+        // #355: 1.5x the original 352px, so a pasted log wraps less. Capped
+        // to the viewport so a narrow window still shows the whole frame.
+        width: 528,
+        maxWidth: "calc(100vw - 16px)",
         maxHeight,
         overflow: "hidden",
         p: 1.5,
@@ -101,14 +104,24 @@ export function CommentComposerPopover({
           variant="body2"
           data-testid="comment-target-snippet"
           sx={{
-            p: 1,
+            px: 1,
+            // Vertical spacing as a transparent border, not padding: a
+            // scroller clips at its padding box, so padding would let a third
+            // line peek in half-cut below the two that fit. The border sits
+            // outside the clip and the background still paints under it.
+            borderBlock: "8px solid transparent",
             bgcolor: "action.hover",
             borderRadius: 1,
             whiteSpace: "pre-wrap",
             wordBreak: "break-word",
             // The quoted target is context, not the thing being written.
             color: "text.secondary",
-            minHeight: 0,
+            // #355: the quote takes at most two lines and scrolls past that,
+            // leaving the rest of the frame to the body being written. It
+            // keeps those two lines when the body grows instead of being
+            // squeezed to a sliver by the flex column.
+            flexShrink: 0,
+            maxHeight: "calc(2lh + 16px)",
             overflow: "auto",
           }}
         >
@@ -133,9 +146,31 @@ export function CommentComposerPopover({
           }
         }}
         inputProps={{ "data-testid": "comment-body-input" }}
+        // #355: the field grows with what's typed or pasted, and the Paper
+        // clips at `maxHeight` — a pasted terminal log used to push the
+        // buttons below the clip, out of reach. Every level down to the
+        // textarea may shrink below its content (minHeight: 0), so the field
+        // stops at the room left over and the text scrolls inside its own
+        // outline: the buttons stay visible and the outline keeps all four
+        // edges.
+        sx={{
+          flex: "1 1 auto",
+          minHeight: 0,
+          "& .MuiInputBase-root": {
+            flex: "1 1 auto",
+            minHeight: 0,
+            display: "flex",
+            flexDirection: "column",
+          },
+          "& .MuiInputBase-inputMultiline": {
+            flex: "1 1 auto",
+            minHeight: 0,
+            overflow: "auto !important",
+          },
+        }}
       />
 
-      <Box sx={{ display: "flex", alignItems: "center", gap: 0.75 }}>
+      <Box sx={{ display: "flex", alignItems: "center", gap: 0.75, flexShrink: 0 }}>
         <Button
           size="small"
           variant="contained"

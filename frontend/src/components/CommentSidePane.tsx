@@ -81,6 +81,10 @@ const ICON_PREVIEW_CHARS = 60;
  *  dialog always shows the full text. */
 const BODY_PREVIEW_LIMIT = 200;
 
+/** #355: reply/edit fields in the pane scroll inside themselves past this
+ *  many rows, so a pasted log can't push their submit buttons out of view. */
+const RAIL_FIELD_MAX_ROWS = 12;
+
 /** CSS-only height clamp for a collapsed long body: unlike slicing the
  *  Markdown source (which breaks mid-syntax — a table or fence cut in half),
  *  the full source is always rendered and only the *visual* height is capped,
@@ -105,6 +109,28 @@ function clampSx(theme: Theme, maxHeight: string, fade = true): SystemStyleObjec
       background: `linear-gradient(to bottom, transparent, ${theme.palette.background.default})`,
       pointerEvents: "none",
     },
+  };
+}
+
+/** #355: a card's header and action row stay pinned to the edges of whatever
+ *  scrolls them (the rail card's own 320px box, or the list's pane) so a
+ *  multi-thousand-character body can't push the buttons screens away. A
+ *  sticky row needs an opaque fill, but the selected card's tint
+ *  (`action.selected`) is translucent — layer it over the paper so the pinned
+ *  row matches the card behind it and the body doesn't show through. */
+function stickyRowSx(
+  edge: "top" | "bottom",
+  selected: boolean
+): (theme: Theme) => SystemStyleObject<Theme> {
+  return (theme) => {
+    const paper = theme.palette.background.paper;
+    const tint = theme.palette.action.selected;
+    return {
+      position: "sticky",
+      [edge]: 0,
+      zIndex: 1,
+      background: selected ? `linear-gradient(${tint}, ${tint}), ${paper}` : paper,
+    };
   };
 }
 
@@ -142,6 +168,7 @@ function CollapsibleText({
   clampHeight = "6em",
   measureOverflow = false,
   clampDisabled = false,
+  stickyToggle = false,
 }: {
   text: string;
   testid: string;
@@ -149,6 +176,10 @@ function CollapsibleText({
   clampHeight?: string;
   measureOverflow?: boolean;
   clampDisabled?: boolean;
+  /** #355: pin the expanded "折りたたむ" to the bottom of the scroller. Only
+   *  for a card's own body — a reply's toggle only ever shows in a selected
+   *  card, whose action row is already pinned there and would cover it. */
+  stickyToggle?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [overflowing, setBodyEl, bodyEl] = useClampOverflow(!clampDisabled, clampHeight, text);
@@ -191,7 +222,14 @@ function CollapsibleText({
             setExpanded((v) => !v);
           }}
           data-testid={`${testid}-toggle`}
-          sx={{ display: "block", mt: 0.25 }}
+          // #355: once expanded, "折りたたむ" sits at the end of the full body —
+          // pin it to the bottom so it can be pressed without scrolling there.
+          sx={
+            [
+              { display: "block", width: "100%", textAlign: "left", mt: 0.25 },
+              expanded && stickyToggle ? stickyRowSx("bottom", false) : false,
+            ].filter(Boolean) as SxProps<Theme>
+          }
         >
           {expanded ? "折りたたむ" : "続きを表示"}
         </Link>
@@ -1014,7 +1052,12 @@ function CommentCard({
         "&:hover": { bgcolor: selected ? "action.selected" : "action.hover" },
       }}
     >
-      <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 0.5 }}>
+      <Box
+        sx={[
+          { display: "flex", alignItems: "center", gap: 1, mb: 0.5 },
+          stickyRowSx("top", selected),
+        ]}
+      >
         <CommentId id={c.id} />
         <CommentAuthor author={c.author} date={c.date} />
         <Box sx={{ flexGrow: 1 }} />
@@ -1137,6 +1180,7 @@ function CommentCard({
             onChange={(e) => updateDraft({ editBody: e.target.value })}
             multiline
             minRows={2}
+            maxRows={RAIL_FIELD_MAX_ROWS}
             fullWidth
             size="small"
             autoFocus={focusForm}
@@ -1170,6 +1214,7 @@ function CommentCard({
           clampHeight="3em"
           measureOverflow
           clampDisabled={selected}
+          stickyToggle
         />
       )}
 
@@ -1200,6 +1245,7 @@ function CommentCard({
                 placeholder="返信を入力"
                 multiline
                 minRows={2}
+                maxRows={RAIL_FIELD_MAX_ROWS}
                 fullWidth
                 size="small"
                 autoFocus={focusForm}
@@ -1222,8 +1268,14 @@ function CommentCard({
             </Box>
           )}
 
-          <Divider sx={{ my: 1 }} />
-          <Box sx={{ display: "flex", gap: 0.5 }} onClick={(e) => e.stopPropagation()}>
+          <Box
+            sx={[
+              { display: "flex", gap: 0.5, mt: 1, pt: 0.5 },
+              stickyRowSx("bottom", selected),
+            ]}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <Divider sx={{ position: "absolute", top: 0, insetInline: 0 }} />
             <Tooltip title={resolved ? "解決済みのため返信できません" : "返信を追加"}>
               <span>
                 <IconButton
@@ -1963,6 +2015,7 @@ export function CommentRow({
             onChange={(e) => setEditBody(e.target.value)}
             multiline
             minRows={2}
+            maxRows={RAIL_FIELD_MAX_ROWS}
             fullWidth
             size="small"
             autoFocus
@@ -2016,6 +2069,7 @@ export function CommentRow({
             placeholder="返信を入力"
             multiline
             minRows={2}
+            maxRows={RAIL_FIELD_MAX_ROWS}
             fullWidth
             size="small"
             autoFocus
@@ -2240,6 +2294,7 @@ function ReplyRow({
             onChange={(e) => setEditBody(e.target.value)}
             multiline
             minRows={2}
+            maxRows={RAIL_FIELD_MAX_ROWS}
             fullWidth
             size="small"
             autoFocus
@@ -2485,6 +2540,7 @@ export function CommentDetailDialog({
               placeholder="返信を入力"
               multiline
               minRows={2}
+              maxRows={RAIL_FIELD_MAX_ROWS}
               fullWidth
               size="small"
               inputProps={{ "data-testid": "comment-detail-reply-input" }}
