@@ -1004,6 +1004,46 @@ interface CardProps {
  *  that #304 removed without relocating — restored here instead of in a
  *  popover (#304 deliberately removed CommentThreadPopover; operations live
  *  in the card now). */
+/** The nearest ancestor that scrolls its content vertically, if any. */
+function scrollParent(el: HTMLElement): HTMLElement | null {
+  for (let p = el.parentElement; p; p = p.parentElement) {
+    const { overflowY } = getComputedStyle(p);
+    if ((overflowY === "auto" || overflowY === "scroll") && p.scrollHeight > p.clientHeight) {
+      return p;
+    }
+  }
+  return null;
+}
+
+/** #364: opening a card scrolls its scroller to the latest reply — that is
+ *  what the reader opened the thread to see. The reply's top lands just under
+ *  the card's sticky header row, so a long reply reads from its start. Runs
+ *  once per opening (not on every new reply), a frame late so the rail has
+ *  placed and clamped the now-taller card first. */
+function useRevealLatestReply(
+  cardRef: MutableRefObject<HTMLDivElement | null>,
+  selected: boolean
+) {
+  useEffect(() => {
+    if (!selected) return;
+    const raf = requestAnimationFrame(() => {
+      const card = cardRef.current;
+      if (!card) return;
+      const all = card.querySelectorAll<HTMLElement>('[data-testid="comment-reply"]');
+      const latest = all[all.length - 1];
+      const scroller = latest && scrollParent(card);
+      if (!latest || !scroller) return;
+      const header = card.firstElementChild as HTMLElement | null;
+      const offset =
+        latest.getBoundingClientRect().top -
+        scroller.getBoundingClientRect().top -
+        (header?.offsetHeight ?? 0);
+      scroller.scrollTop += offset;
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [selected, cardRef]);
+}
+
 function CommentCard({
   comment: c,
   selected,
@@ -1032,6 +1072,8 @@ function CommentCard({
   // reappears when the card remounts (scroll, mode switch), and autoFocus there
   // would pull focus out of the editor mid-sentence into this field.
   const [focusForm, setFocusForm] = useState(false);
+  const cardRef = useRef<HTMLDivElement | null>(null);
+  useRevealLatestReply(cardRef, selected);
 
   const submitReply = () => {
     const body = replyBody.trim();
@@ -1057,6 +1099,7 @@ function CommentCard({
 
   return (
     <Box
+      ref={cardRef}
       role="button"
       tabIndex={0}
       data-testid="comment-item"
