@@ -37,6 +37,8 @@ import LinkIcon from "@mui/icons-material/Link";
 import ViewAgendaIcon from "@mui/icons-material/ViewAgenda";
 import ViewListIcon from "@mui/icons-material/ViewList";
 import ChatBubbleOutlineIcon from "@mui/icons-material/ChatBubbleOutline";
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
+import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import type { SxProps, Theme } from "@mui/material/styles";
 import type { SystemStyleObject } from "@mui/system";
 import type { CommentJSON, CommentReply } from "@/api";
@@ -384,6 +386,8 @@ interface Props {
   /** Open an anchored comment: the editor scrolls to it and opens its thread
    *  beside the text (#253). Reading and replying happen there, not here. */
   onSelect: (id: string) => void;
+  /** #364: close the open card (the card's own ∧ button). */
+  onDeselect?: () => void;
   /** The comment whose thread is currently open, if it is one of these. */
   selectedId?: string | null;
   /** Viewport top (px) of each anchored comment's first decoration, keyed by
@@ -506,6 +510,7 @@ export function CommentSidePane({
   onDeleteReply,
   onJump,
   onSelect,
+  onDeselect,
   selectedId,
   anchorTops = {},
   docBox = null,
@@ -894,6 +899,7 @@ export function CommentSidePane({
             comments={anchored}
             selectedId={selectedId ?? null}
             onSelect={onSelect}
+            onDeselect={onDeselect}
             onCopyLink={handleCopyLink}
             canCopyLink={canCopyLink}
             onDelete={handleDelete}
@@ -914,6 +920,7 @@ export function CommentSidePane({
             revealRef={railRevealRef}
             selectedId={selectedId ?? null}
             onSelect={onSelect}
+            onDeselect={onDeselect}
             onCopyLink={handleCopyLink}
             canCopyLink={canCopyLink}
             onDelete={handleDelete}
@@ -978,6 +985,7 @@ interface CardProps {
   comment: CommentJSON;
   selected: boolean;
   onSelect: (id: string) => void;
+  onDeselect?: () => void;
   onCopyLink: (id: string) => void;
   canCopyLink?: boolean;
   onDelete: (id: string) => void;
@@ -1000,6 +1008,7 @@ function CommentCard({
   comment: c,
   selected,
   onSelect,
+  onDeselect,
   onCopyLink,
   canCopyLink = true,
   onDelete,
@@ -1086,6 +1095,32 @@ function CommentCard({
           stickyRowSx("top", selected),
         ]}
       >
+        {/* #364: the card's open state, made explicit. Selecting a card was the
+            only way to open it and there was no way back short of picking
+            another one; ∨ opens, ∧ closes. */}
+        <Tooltip title={selected ? "閉じる" : "開く"}>
+          <span>
+            <IconButton
+              size="small"
+              disabled={selected && !onDeselect}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (selected) onDeselect?.();
+                else onSelect(c.id);
+              }}
+              aria-label={selected ? "close comment" : "open comment"}
+              aria-expanded={selected}
+              data-testid="comment-toggle"
+              sx={{ p: 0.25, ml: -0.75 }}
+            >
+              {selected ? (
+                <ExpandLessIcon sx={{ fontSize: CARD_ICON_SIZE + 2 }} />
+              ) : (
+                <ExpandMoreIcon sx={{ fontSize: CARD_ICON_SIZE + 2 }} />
+              )}
+            </IconButton>
+          </span>
+        </Tooltip>
         <CommentId id={c.id} />
         {/* #364: the badge alone (name on hover). The date and the context
             line live in the detail dialog only, to keep every card low. */}
@@ -1474,6 +1509,7 @@ interface AlignedRailProps {
   onOverhangChange?: (px: number) => void;
   selectedId: string | null;
   onSelect: (id: string) => void;
+  onDeselect?: () => void;
   onCopyLink: (id: string) => void;
   canCopyLink?: boolean;
   onDelete: (id: string) => void;
@@ -1498,6 +1534,7 @@ function AlignedCommentRail({
   onOverhangChange,
   selectedId,
   onSelect,
+  onDeselect,
   onCopyLink,
   canCopyLink = true,
   onDelete,
@@ -1719,6 +1756,7 @@ function AlignedCommentRail({
             hidden={hidden}
             selected={c.id === selectedId}
             onSelect={onSelect}
+            onDeselect={onDeselect}
             onCopyLink={onCopyLink}
             canCopyLink={canCopyLink}
             onDelete={onDelete}

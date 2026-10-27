@@ -987,6 +987,28 @@ describe("CommentSidePane rail card selection (#308)", () => {
     expect(item.textContent).not.toContain("2026-05-2");
   });
 
+  it("2e. the ∨ / ∧ toggle opens a closed card and closes the open one (#364)", async () => {
+    const user = userEvent.setup();
+    const onDeselect = vi.fn();
+    const h = renderPane({
+      comments: [comment("c1"), comment("c2")],
+      selectedId: "c1",
+      onDeselect,
+    });
+    const [open, closed] = screen.getAllByTestId("comment-item");
+    const openToggle = within(open).getByTestId("comment-toggle");
+    const closedToggle = within(closed).getByTestId("comment-toggle");
+    expect(openToggle).toHaveAttribute("aria-expanded", "true");
+    expect(closedToggle).toHaveAttribute("aria-expanded", "false");
+
+    await user.click(openToggle);
+    expect(onDeselect).toHaveBeenCalledTimes(1);
+    expect(h.onSelect).not.toHaveBeenCalled();
+
+    await user.click(closedToggle);
+    expect(h.onSelect).toHaveBeenCalledWith("c2");
+  });
+
   it("2b. with two or fewer replies the preview shows them all and no rest count (#364)", () => {
     renderPane({
       comments: [
