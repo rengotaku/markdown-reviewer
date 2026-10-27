@@ -92,6 +92,11 @@ const RAIL_FIELD_MAX_ROWS = 12;
 /** #364: every card action sits in the header row, so the icons are kept
  *  small enough that six of them fit beside the id and badges. */
 const CARD_ICON_SIZE = 14;
+/** #364: the 14px icons are hard to aim at; the one under the pointer turns
+ *  the primary colour so it is clear which action a click will take. */
+const ACTION_HOVER_SX = {
+  "& .MuiIconButton-root:not(.Mui-disabled):hover": { color: "primary.main" },
+} as const;
 
 /** #364: a non-selected card previews this many of its latest replies. */
 const REPLY_PREVIEW_COUNT = 2;
@@ -1204,7 +1209,7 @@ function CommentCard({
             data-testid="comment-new-ai-replies"
           />
         )}
-        <Box sx={{ display: "flex", alignItems: "center", flexShrink: 0 }}>
+        <Box sx={{ display: "flex", alignItems: "center", flexShrink: 0, ...ACTION_HOVER_SX }}>
           {/* #364: reply / resolve / detail sit in the header on every card, so
             a non-selected card can be acted on without opening it first and
             the selected card no longer needs a row of its own for them. */}
@@ -2381,6 +2386,7 @@ function ThreadEntryHeader({
         borderRadius: 1,
         bgcolor: "action.hover",
         "& > span": { display: "inline-flex" },
+        ...ACTION_HOVER_SX,
       }}
     >
       {/* #364: the author is the badge alone (name on hover), and the badge's
