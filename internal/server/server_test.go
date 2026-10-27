@@ -20,6 +20,9 @@ func TestRun_ShutsDownOnCtxCancel(t *testing.T) {
 	t.Setenv("PORT", "0")
 	t.Setenv("DATABASE_DSN", ":memory:")
 	t.Setenv("SHUTDOWN_TIMEOUT", "2s")
+	// Run persists agent registrations under the reviewer storage root (#362);
+	// keep that out of the real user config dir.
+	t.Setenv("REVIEWER_CONFIG_DIR", t.TempDir())
 
 	ctx, cancel := context.WithCancel(context.Background())
 
