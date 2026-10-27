@@ -967,6 +967,26 @@ describe("CommentSidePane rail card selection (#308)", () => {
     expect(within(item).getByRole("img", { name: "ai" })).toBeInTheDocument();
   });
 
+  it("2d. a selected card's comment sits under the same bar as its replies, with no dates in the pane (#364)", () => {
+    renderPane({
+      comments: [
+        comment("c1", {
+          author: "kishira",
+          date: "2026-05-20T10:00:00+09:00",
+          replies: [{ author: "ai", date: "2026-05-21T10:00:00+09:00", body: "reply body" }],
+        }),
+      ],
+      selectedId: "c1",
+    });
+    const item = screen.getByTestId("comment-item");
+    const main = within(item).getByTestId("comment-main-header");
+    expect(main).toHaveTextContent("kishira");
+    expect(within(main).getByTestId("comment-edit")).toBeInTheDocument();
+    expect(within(main).getByTestId("comment-delete")).toBeInTheDocument();
+    expect(within(item).getByTestId("comment-reply-header")).toHaveTextContent("ai");
+    expect(item.textContent).not.toContain("2026-05-2");
+  });
+
   it("2b. with two or fewer replies the preview shows them all and no rest count (#364)", () => {
     renderPane({
       comments: [

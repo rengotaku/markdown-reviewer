@@ -47,7 +47,7 @@ import { buildCommentDeepLink } from "@/utils/deeplink";
 import { useToast } from "@/hooks/useToast";
 import { markdownBodySx } from "./markdownBodySx";
 import { contextLabel } from "@/utils/commentContext";
-import { isAiAuthored } from "@/utils/commentPresentation";
+import { authorColor, isAiAuthored } from "@/utils/commentPresentation";
 import { CommentAuthor } from "./CommentAuthor";
 import { CommentId } from "./CommentId";
 import {
@@ -1179,54 +1179,6 @@ function CommentCard({
               <OpenInFullIcon sx={{ fontSize: CARD_ICON_SIZE }} />
             </IconButton>
           </Tooltip>
-          {selected && !editOpen && (
-            <>
-              <Tooltip
-                title={
-                  aiOwned
-                    ? "AI のコメントは編集できません"
-                    : resolved
-                      ? "解決済みのため編集できません"
-                      : "コメントを編集"
-                }
-              >
-                <span>
-                  <IconButton
-                    size="small"
-                    disabled={resolved || aiOwned}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      startEdit();
-                    }}
-                    aria-label="edit comment"
-                    data-testid="comment-edit"
-                    sx={{ p: 0.25 }}
-                  >
-                    <EditOutlinedIcon sx={{ fontSize: CARD_ICON_SIZE }} />
-                  </IconButton>
-                </span>
-              </Tooltip>
-              <Tooltip
-                title={aiOwned ? "AI のコメントは削除できません" : "コメントを削除"}
-              >
-                <span>
-                  <IconButton
-                    size="small"
-                    disabled={aiOwned}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onDelete(c.id);
-                    }}
-                    aria-label="delete comment"
-                    data-testid="comment-delete"
-                    sx={{ p: 0.25 }}
-                  >
-                    <DeleteOutlineIcon sx={{ fontSize: CARD_ICON_SIZE }} />
-                  </IconButton>
-                </span>
-              </Tooltip>
-            </>
-          )}
           <Tooltip
             title={
               canCopyLink
@@ -1253,6 +1205,62 @@ function CommentCard({
           </Tooltip>
         </Box>
       </Box>
+
+      {/* #364: the selected card's own comment gets the same bar as its
+          replies (author, edit / delete on the right), so the first
+          entry of the thread reads and acts like the ones under it. */}
+      {selected && (
+        <ThreadEntryHeader author={c.author} testid="comment-main-header">
+          {!editOpen && (
+            <>
+              <Tooltip
+                title={
+                  aiOwned
+                    ? "AI のコメントは編集できません"
+                    : resolved
+                      ? "解決済みのため編集できません"
+                      : "コメントを編集"
+                }
+              >
+                <span>
+                  <IconButton
+                    size="small"
+                    disabled={resolved || aiOwned}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      startEdit();
+                    }}
+                    aria-label="edit comment"
+                    data-testid="comment-edit"
+                    sx={{ p: 0.25 }}
+                  >
+                    <EditOutlinedIcon sx={{ fontSize: 15 }} />
+                  </IconButton>
+                </span>
+              </Tooltip>
+              <Tooltip
+                title={aiOwned ? "AI のコメントは削除できません" : "コメントを削除"}
+              >
+                <span>
+                  <IconButton
+                    size="small"
+                    disabled={aiOwned}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onDelete(c.id);
+                    }}
+                    aria-label="delete comment"
+                    data-testid="comment-delete"
+                    sx={{ p: 0.25 }}
+                  >
+                    <DeleteOutlineIcon sx={{ fontSize: 15 }} />
+                  </IconButton>
+                </span>
+              </Tooltip>
+            </>
+          )}
+        </ThreadEntryHeader>
+      )}
 
       {selected && editOpen && !resolved ? (
         <Box sx={{ mt: 0.5 }} onClick={(e) => e.stopPropagation()}>
@@ -1302,7 +1310,7 @@ function CommentCard({
       {selected ? (
         <>
           {replies > 0 && c.replies && (
-            <Box sx={{ mt: 1, pl: 1, borderLeft: "2px solid", borderColor: "divider" }}>
+            <Box sx={{ mt: 1 }}>
               {c.replies.map((r, i) => (
                 <ReplyRow
                   key={i}
@@ -1388,7 +1396,7 @@ function ReplyPreview({ replies }: { replies: ReadonlyArray<CommentReply> }) {
   return (
     <Box
       data-testid="comment-reply-preview"
-      sx={{ mt: 0.75, pl: 1, borderLeft: "2px solid", borderColor: "divider" }}
+      sx={{ mt: 0.75 }}
     >
       {rest > 0 && (
         <Typography
@@ -2259,6 +2267,62 @@ interface ReplyRowProps {
 
 /** One threaded reply with its own inline edit form + edit/delete toolbar, so
  *  each reply is operable individually (not just the top-level comment). */
+/** The bar above one entry of a thread: author, date, and that entry's own
+ *  actions on the right. Replies have always had it; #364 gives the selected
+ *  card's comment the same bar so the thread's first entry matches the rest.
+ *  The date is left out in the narrow side pane (it wraps there) and shown in
+ *  the detail dialog. */
+function ThreadEntryHeader({
+  author,
+  date,
+  testid,
+  children,
+}: {
+  author?: string;
+  date?: string;
+  testid: string;
+  children?: React.ReactNode;
+}) {
+  return (
+    <Box
+      data-testid={testid}
+      sx={{
+        display: "flex",
+        alignItems: "center",
+        gap: 0.75,
+        px: 1,
+        py: 0.5,
+        mb: 0.25,
+        borderRadius: 1,
+        bgcolor: "action.hover",
+      }}
+    >
+      <Box
+        aria-hidden
+        sx={{
+          width: 3,
+          alignSelf: "stretch",
+          borderRadius: 1,
+          // #364: the author's badge colour (blue reviewer, red AI), so whose
+          // turn it is reads from the stripe alone.
+          bgcolor: authorColor(author),
+          flexShrink: 0,
+        }}
+      />
+      <Typography variant="caption" sx={{ fontWeight: 600, color: "text.primary" }}>
+        {author || "?"}
+      </Typography>
+      {date && (
+        <Typography variant="caption" color="text.secondary">
+          · {date}
+        </Typography>
+      )}
+      <Box sx={{ flexGrow: 1 }} />
+      {children}
+    </Box>
+  );
+}
+
 function ReplyRow({
   reply: r,
   index,
@@ -2296,38 +2360,11 @@ function ReplyRow({
 
   return (
     <Box sx={{ mb: 0.5 }} data-testid={outerTestid}>
-      <Box
-        data-testid={headerTestid}
-        sx={{
-          display: "flex",
-          alignItems: "center",
-          gap: 0.75,
-          px: 1,
-          py: 0.5,
-          mb: 0.25,
-          borderRadius: 1,
-          bgcolor: "action.hover",
-        }}
+      <ThreadEntryHeader
+        author={r.author}
+        date={outerTestid === "comment-reply" ? undefined : r.date}
+        testid={headerTestid}
       >
-        <Box
-          aria-hidden
-          sx={{
-            width: 3,
-            alignSelf: "stretch",
-            borderRadius: 1,
-            bgcolor: "primary.main",
-            flexShrink: 0,
-          }}
-        />
-        <Typography variant="caption" sx={{ fontWeight: 600, color: "text.primary" }}>
-          {r.author || "?"}
-        </Typography>
-        {r.date && (
-          <Typography variant="caption" color="text.secondary">
-            · {r.date}
-          </Typography>
-        )}
-        <Box sx={{ flexGrow: 1 }} />
         {!editOpen && (
           <>
             <Tooltip
@@ -2376,7 +2413,7 @@ function ReplyRow({
             </Tooltip>
           </>
         )}
-      </Box>
+      </ThreadEntryHeader>
 
       {editOpen && !resolved ? (
         <Box>

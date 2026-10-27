@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  authorHue,
+  authorColor,
   authorInitials,
   isAiAuthored,
   relativeDate,
@@ -21,12 +21,12 @@ describe("commentPresentation", () => {
     expect(authorInitials(undefined)).toBe("?");
   });
 
-  it("gives one author one hue, and different authors different ones", () => {
-    expect(authorHue("alice")).toBe(authorHue("alice"));
-    expect(authorHue("alice")).not.toBe(authorHue("bob"));
-    expect(authorHue("alice")).toBeGreaterThanOrEqual(0);
-    expect(authorHue("alice")).toBeLessThan(360);
+  it("colours the AI red and any reviewer blue", () => {
+    expect(authorColor("ai")).toBe("error.main");
+    expect(authorColor("alice")).toBe("primary.main");
+    expect(authorColor(undefined)).toBe("primary.main");
   });
+
 
   it("reads a date as time elapsed, stopping at days", () => {
     const now = new Date(2026, 8, 2); // 2026-09-02

@@ -15,13 +15,11 @@ export function authorInitials(author?: string): string {
   return isAiAuthored(name) ? "AI" : "R";
 }
 
-/** A stable hue per author, so the same person keeps the same badge colour
- *  across sessions without anyone configuring one. */
-export function authorHue(author?: string): number {
-  const name = (author ?? "").trim();
-  let h = 0;
-  for (const ch of name) h = (h * 31 + ch.codePointAt(0)!) % 360;
-  return h;
+/** #364: the one colour that stands for an author, shared by the avatar badge
+ *  and the stripe on that author's thread entries: red for the AI, blue for
+ *  the reviewer (MUI palette keys). */
+export function authorColor(author?: string): "error.main" | "primary.main" {
+  return isAiAuthored(author) ? "error.main" : "primary.main";
 }
 
 /**
