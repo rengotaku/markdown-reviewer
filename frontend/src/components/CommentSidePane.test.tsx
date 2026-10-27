@@ -980,10 +980,12 @@ describe("CommentSidePane rail card selection (#308)", () => {
     });
     const item = screen.getByTestId("comment-item");
     const main = within(item).getByTestId("comment-main-header");
-    expect(main).toHaveTextContent("kishira");
+    expect(within(main).getByRole("img", { name: "kishira" })).toBeInTheDocument();
     expect(within(main).getByTestId("comment-edit")).toBeInTheDocument();
     expect(within(main).getByTestId("comment-delete")).toBeInTheDocument();
-    expect(within(item).getByTestId("comment-reply-header")).toHaveTextContent("ai");
+    expect(
+      within(within(item).getByTestId("comment-reply-header")).getByRole("img", { name: "ai" })
+    ).toBeInTheDocument();
     expect(item.textContent).not.toContain("2026-05-2");
   });
 

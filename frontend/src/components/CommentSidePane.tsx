@@ -49,7 +49,7 @@ import { buildCommentDeepLink } from "@/utils/deeplink";
 import { useToast } from "@/hooks/useToast";
 import { markdownBodySx } from "./markdownBodySx";
 import { contextLabel } from "@/utils/commentContext";
-import { authorColor, isAiAuthored } from "@/utils/commentPresentation";
+import { isAiAuthored } from "@/utils/commentPresentation";
 import { CommentAuthor } from "./CommentAuthor";
 import { CommentId } from "./CommentId";
 import {
@@ -2348,7 +2348,7 @@ interface ReplyRowProps {
 
 /** One threaded reply with its own inline edit form + edit/delete toolbar, so
  *  each reply is operable individually (not just the top-level comment). */
-/** The bar above one entry of a thread: author, date, and that entry's own
+/** The bar above one entry of a thread: author badge, date, and that entry's own
  *  actions on the right. Replies have always had it; #364 gives the selected
  *  card's comment the same bar so the thread's first entry matches the rest.
  *  The date is left out in the narrow side pane (it wraps there) and shown in
@@ -2378,21 +2378,9 @@ function ThreadEntryHeader({
         bgcolor: "action.hover",
       }}
     >
-      <Box
-        aria-hidden
-        sx={{
-          width: 3,
-          alignSelf: "stretch",
-          borderRadius: 1,
-          // #364: the author's badge colour (blue reviewer, red AI), so whose
-          // turn it is reads from the stripe alone.
-          bgcolor: authorColor(author),
-          flexShrink: 0,
-        }}
-      />
-      <Typography variant="caption" sx={{ fontWeight: 600, color: "text.primary" }}>
-        {author || "?"}
-      </Typography>
+      {/* #364: the author is the badge alone (name on hover), and the badge's
+          colour replaces the stripe that used to lead the bar. */}
+      <CommentAuthor author={author} showName={false} />
       {date && (
         <Typography variant="caption" color="text.secondary">
           · {date}
