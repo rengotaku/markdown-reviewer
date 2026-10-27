@@ -1135,7 +1135,9 @@ function CommentCard({
       <Box
         sx={[
           { display: "flex", alignItems: "center", gap: 1, mb: 0.5 },
-          stickyRowSx("top", selected),
+          // #364: only an open card is tall enough to scroll; a closed one's
+          // pinned row would keep the paper colour while the card hovers.
+          selected && stickyRowSx("top", true),
         ]}
       >
         {/* #364: the card's open state, made explicit. Selecting a card was the
