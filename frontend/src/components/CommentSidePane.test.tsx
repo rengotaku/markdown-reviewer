@@ -953,6 +953,20 @@ describe("CommentSidePane rail card selection (#308)", () => {
     expect(screen.queryByTestId("comment-reply-body")).toBeNull();
   });
 
+  it("2a. a badge-only author stays readable by screen readers (#364)", () => {
+    renderPane({
+      comments: [
+        comment("c1", {
+          author: "kishira",
+          replies: [{ author: "ai", date: "2026-05-21", body: "only reply" }],
+        }),
+      ],
+    });
+    const item = screen.getByTestId("comment-item");
+    expect(within(item).getByRole("img", { name: "kishira" })).toBeInTheDocument();
+    expect(within(item).getByRole("img", { name: "ai" })).toBeInTheDocument();
+  });
+
   it("2b. with two or fewer replies the preview shows them all and no rest count (#364)", () => {
     renderPane({
       comments: [
