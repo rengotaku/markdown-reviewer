@@ -25,49 +25,71 @@ type ownersFile struct {
 }
 
 // Persist keeps `mr open` registrations in path so they survive a server
-// restart (#362). It loads what an earlier run saved, dropping entries whose
-// session is no longer alive, and saves on every later Register. A missing or
-// unreadable file starts empty: the registrations are a convenience and must
-// never stop the server from starting.
+// restart (#362). It loads what an earlier run saved and saves on every later
+// Register. A missing or unreadable file starts empty: the registrations are
+// a convenience and must never stop the server from starting.
+//
+// Entries are dropped only when their session is confirmed gone: the adapter
+// answered within the deadline and the session isn't among its live ones.
+// An entry that could not be checked is kept; routing already ignores a
+// registration whose session isn't live (choose), so keeping it is harmless,
+// while dropping it on a slow or failed probe would lose it for good.
 func (s *Service) Persist(ctx context.Context, path string) {
 	loaded, err := readOwners(path)
 	if err != nil {
 		slog.Warn("agent: ignoring saved session registrations", "path", path, "error", err)
 	}
-	alive := s.liveSessions(ctx)
+	live, checked := s.liveSessions(ctx)
 	s.mu.Lock()
 	s.storePath = path
 	for file, id := range loaded {
-		if _, newer := s.owners[file]; !newer && matchesLive(alive, id) {
-			s.owners[file] = id
+		if _, newer := s.owners[file]; newer {
+			continue
 		}
+		if checked[id.AgentID] && !live.matches(id) {
+			continue
+		}
+		s.owners[file] = id
 	}
 	s.mu.Unlock()
 	s.save()
 }
 
-func liveKey(agentID, sessionID string) string { return agentID + "\x00" + sessionID }
+// liveSet holds every live session, by session and by session+PID: one
+// session ID can be running in more than one process.
+type liveSet map[string]bool
 
-// liveSessions maps each live session to its PID (0 when the adapter does not
-// identify sessions by process). An adapter that cannot be queried
-// contributes nothing, so its saved entries are dropped rather than trusted.
-func (s *Service) liveSessions(ctx context.Context) map[string]int {
-	alive := make(map[string]int)
-	for _, adapter := range s.adapters {
-		sessions, err := adapter.Sessions(ctx)
-		if err != nil {
-			continue
-		}
-		for _, session := range sessions {
-			alive[liveKey(adapter.ID(), session.ID)] = session.PID
-		}
-	}
-	return alive
+func sessionKey(agentID, sessionID string) string { return agentID + "\x00" + sessionID }
+
+func processKey(agentID, sessionID string, pid int) string {
+	return fmt.Sprintf("%s\x00%d", sessionKey(agentID, sessionID), pid)
 }
 
-func matchesLive(alive map[string]int, id Identity) bool {
-	pid, ok := alive[liveKey(id.AgentID, id.SessionID)]
-	return ok && (id.PID == 0 || pid == id.PID)
+func (l liveSet) matches(id Identity) bool {
+	if id.PID == 0 {
+		return l[sessionKey(id.AgentID, id.SessionID)]
+	}
+	return l[processKey(id.AgentID, id.SessionID, id.PID)]
+}
+
+// liveSessions returns the live sessions and which adapters answered. An
+// adapter that errors, or a probe that ran into the deadline (a process
+// check cut short reads as "not alive"), counts as unchecked.
+func (s *Service) liveSessions(ctx context.Context) (liveSet, map[string]bool) {
+	live := make(liveSet)
+	checked := make(map[string]bool)
+	for _, adapter := range s.adapters {
+		sessions, err := adapter.Sessions(ctx)
+		if err != nil || ctx.Err() != nil {
+			continue
+		}
+		checked[adapter.ID()] = true
+		for _, session := range sessions {
+			live[sessionKey(adapter.ID(), session.ID)] = true
+			live[processKey(adapter.ID(), session.ID, session.PID)] = true
+		}
+	}
+	return live, checked
 }
 
 func readOwners(path string) (map[string]Identity, error) {

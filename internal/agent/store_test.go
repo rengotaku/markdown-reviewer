@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -88,4 +89,58 @@ func TestPersistKeepsRegistrationsMadeBeforeLoading(t *testing.T) {
 	require.True(t, service.Register(context.Background(), "/r/a.md", Identity{AgentID: "a", SessionID: "new"}))
 	service.Persist(context.Background(), path)
 	require.Equal(t, "new", service.Status(context.Background(), "/r/a.md").SessionName)
+}
+
+func TestPersistKeepsEntriesItCouldNotCheck(t *testing.T) {
+	for _, tc := range []struct {
+		ctx    func() context.Context
+		name   string
+		broken bool
+	}{
+		{name: "adapter error", ctx: context.Background, broken: true},
+		{name: "deadline passed", ctx: func() context.Context {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			return ctx
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "owners.json")
+			adapter := &fakeAdapter{id: "a", sessions: []Session{{ID: "s", Name: "s", Cwd: "/x", PID: 4, Ready: true}}}
+			first := New(adapter)
+			first.Persist(context.Background(), path)
+			require.True(t, first.Register(context.Background(), "/r/a.md", Identity{AgentID: "a", SessionID: "s", PID: 4}))
+
+			if tc.broken {
+				adapter.discoverErr = errors.New("probe failed")
+			}
+			restarted := New(adapter)
+			restarted.Persist(tc.ctx(), path)
+			adapter.discoverErr = nil
+			require.Equal(t, "s", restarted.Status(context.Background(), "/r/a.md").SessionName)
+
+			var saved ownersFile
+			raw, err := os.ReadFile(path)
+			require.NoError(t, err)
+			require.NoError(t, json.Unmarshal(raw, &saved))
+			require.Contains(t, saved.Owners, "/r/a.md")
+		})
+	}
+}
+
+func TestPersistMatchesEachProcessOfASession(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "owners.json")
+	adapter := &fakeAdapter{id: "a", sessions: []Session{
+		{ID: "s", Name: "first", Cwd: "/x", PID: 1, Ready: true},
+		{ID: "s", Name: "second", Cwd: "/x", PID: 2, Ready: true},
+	}}
+	first := New(adapter)
+	first.Persist(context.Background(), path)
+	require.True(t, first.Register(context.Background(), "/r/one.md", Identity{AgentID: "a", SessionID: "s", PID: 1}))
+	require.True(t, first.Register(context.Background(), "/r/two.md", Identity{AgentID: "a", SessionID: "s", PID: 2}))
+
+	restarted := New(adapter)
+	restarted.Persist(context.Background(), path)
+	require.Equal(t, "first", restarted.Status(context.Background(), "/r/one.md").SessionName)
+	require.Equal(t, "second", restarted.Status(context.Background(), "/r/two.md").SessionName)
 }
