@@ -13,10 +13,10 @@ describe("commentPresentation", () => {
     expect(isAiAuthored(undefined)).toBe(false);
   });
 
-  it("uses AI for the AI and a first character for people", () => {
+  it("uses AI for the AI and R for any reviewer", () => {
     expect(authorInitials("ai")).toBe("AI");
-    expect(authorInitials("alice")).toBe("A");
-    expect(authorInitials("岸良")).toBe("岸");
+    expect(authorInitials("alice")).toBe("R");
+    expect(authorInitials("岸良")).toBe("R");
     expect(authorInitials("")).toBe("?");
     expect(authorInitials(undefined)).toBe("?");
   });

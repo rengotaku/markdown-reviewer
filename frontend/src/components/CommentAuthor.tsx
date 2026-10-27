@@ -24,6 +24,7 @@ export function CommentAuthor({ author, date, showName = true }: Props) {
     <Box sx={{ display: "flex", alignItems: "center", gap: 0.75, minWidth: 0 }}>
       <Box
         aria-hidden
+        title={author || undefined}
         data-testid="comment-author-badge"
         data-author={author ?? ""}
         sx={{

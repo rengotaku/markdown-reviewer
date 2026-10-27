@@ -87,6 +87,13 @@ const BODY_PREVIEW_LIMIT = 200;
  *  many rows, so a pasted log can't push their submit buttons out of view. */
 const RAIL_FIELD_MAX_ROWS = 12;
 
+/** #364: every card action sits in the header row, so the icons are kept
+ *  small enough that six of them fit beside the id and badges. */
+const CARD_ICON_SIZE = 14;
+
+/** #364: a non-selected card previews this many of its latest replies. */
+const REPLY_PREVIEW_COUNT = 2;
+
 /** CSS-only height clamp for a collapsed long body: unlike slicing the
  *  Markdown source (which breaks mid-syntax — a table or fence cut in half),
  *  the full source is always rendered and only the *visual* height is capped,
@@ -1003,7 +1010,6 @@ function CommentCard({
   onDeleteReply,
   onOpenDetail,
 }: CardProps) {
-  const ctx = contextLabel(c);
   const badge = SCOPE_BADGE[c.scope];
   const replies = c.replies?.length ?? 0;
   const resolved = c.status === "resolved";
@@ -1081,7 +1087,9 @@ function CommentCard({
         ]}
       >
         <CommentId id={c.id} />
-        <CommentAuthor author={c.author} date={c.date} />
+        {/* #364: the badge alone (name on hover). The date and the context
+            line live in the detail dialog only, to keep every card low. */}
+        <CommentAuthor author={c.author} showName={false} />
         <Box sx={{ flexGrow: 1 }} />
         {badge && (
           <Chip
@@ -1116,94 +1124,135 @@ function CommentCard({
             data-testid="comment-new-ai-replies"
           />
         )}
-        {selected && !editOpen && (
-          <>
-            <Tooltip
-              title={
-                aiOwned
-                  ? "AI のコメントは編集できません"
-                  : resolved
-                    ? "解決済みのため編集できません"
-                    : "コメントを編集"
-              }
-            >
-              <span>
-                <IconButton
-                  size="small"
-                  disabled={resolved || aiOwned}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    startEdit();
-                  }}
-                  aria-label="edit comment"
-                  data-testid="comment-edit"
-                  sx={{ p: 0.25 }}
-                >
-                  <EditOutlinedIcon sx={{ fontSize: 16 }} />
-                </IconButton>
-              </span>
-            </Tooltip>
-            <Tooltip title={aiOwned ? "AI のコメントは削除できません" : "コメントを削除"}>
-              <span>
-                <IconButton
-                  size="small"
-                  disabled={aiOwned}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onDelete(c.id);
-                  }}
-                  aria-label="delete comment"
-                  data-testid="comment-delete"
-                  sx={{ p: 0.25 }}
-                >
-                  <DeleteOutlineIcon sx={{ fontSize: 16 }} />
-                </IconButton>
-              </span>
-            </Tooltip>
-          </>
-        )}
-        <Tooltip
-          title={
-            canCopyLink ? "リンクをコピー" : "ファイルが開かれていないためコピーできません"
-          }
-        >
-          <span>
+        <Box sx={{ display: "flex", alignItems: "center", flexShrink: 0 }}>
+          {/* #364: reply / resolve / detail sit in the header on every card, so
+            a non-selected card can be acted on without opening it first and
+            the selected card no longer needs a row of its own for them. */}
+          <Tooltip title={resolved ? "解決済みのため返信できません" : "返信を追加"}>
+            <span>
+              <IconButton
+                size="small"
+                disabled={resolved}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (!selected) onSelect(c.id);
+                  updateDraft({ replyOpen: selected ? !replyOpen : true });
+                  setFocusForm(true);
+                }}
+                aria-label="reply to comment"
+                data-testid="comment-reply-toggle"
+                sx={{ p: 0.25 }}
+              >
+                <ReplyIcon sx={{ fontSize: CARD_ICON_SIZE }} />
+              </IconButton>
+            </span>
+          </Tooltip>
+          <Tooltip title={resolved ? "未解決に戻す" : "解決済みにする"}>
             <IconButton
               size="small"
-              disabled={!canCopyLink}
-              // The row itself opens the thread; this button must not.
               onClick={(e) => {
                 e.stopPropagation();
-                onCopyLink(c.id);
+                onResolveToggle(c.id, resolved ? "open" : "resolved");
               }}
-              aria-label="copy comment link"
-              data-testid="comment-copy-link"
+              aria-label={resolved ? "reopen comment" : "resolve comment"}
+              data-testid="comment-resolve-toggle"
               sx={{ p: 0.25 }}
             >
-              <LinkIcon sx={{ fontSize: 16 }} />
+              {resolved ? (
+                <ReplayIcon sx={{ fontSize: CARD_ICON_SIZE }} />
+              ) : (
+                <CheckCircleOutlineIcon sx={{ fontSize: CARD_ICON_SIZE }} />
+              )}
             </IconButton>
-          </span>
-        </Tooltip>
+          </Tooltip>
+          <Tooltip title="詳細を中央に開く">
+            <IconButton
+              size="small"
+              onClick={(e) => {
+                e.stopPropagation();
+                onOpenDetail(c.id);
+              }}
+              aria-label="open comment detail"
+              data-testid="comment-open-detail"
+              sx={{ p: 0.25 }}
+            >
+              <OpenInFullIcon sx={{ fontSize: CARD_ICON_SIZE }} />
+            </IconButton>
+          </Tooltip>
+          {selected && !editOpen && (
+            <>
+              <Tooltip
+                title={
+                  aiOwned
+                    ? "AI のコメントは編集できません"
+                    : resolved
+                      ? "解決済みのため編集できません"
+                      : "コメントを編集"
+                }
+              >
+                <span>
+                  <IconButton
+                    size="small"
+                    disabled={resolved || aiOwned}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      startEdit();
+                    }}
+                    aria-label="edit comment"
+                    data-testid="comment-edit"
+                    sx={{ p: 0.25 }}
+                  >
+                    <EditOutlinedIcon sx={{ fontSize: CARD_ICON_SIZE }} />
+                  </IconButton>
+                </span>
+              </Tooltip>
+              <Tooltip
+                title={aiOwned ? "AI のコメントは削除できません" : "コメントを削除"}
+              >
+                <span>
+                  <IconButton
+                    size="small"
+                    disabled={aiOwned}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onDelete(c.id);
+                    }}
+                    aria-label="delete comment"
+                    data-testid="comment-delete"
+                    sx={{ p: 0.25 }}
+                  >
+                    <DeleteOutlineIcon sx={{ fontSize: CARD_ICON_SIZE }} />
+                  </IconButton>
+                </span>
+              </Tooltip>
+            </>
+          )}
+          <Tooltip
+            title={
+              canCopyLink
+                ? "リンクをコピー"
+                : "ファイルが開かれていないためコピーできません"
+            }
+          >
+            <span>
+              <IconButton
+                size="small"
+                disabled={!canCopyLink}
+                // The row itself opens the thread; this button must not.
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onCopyLink(c.id);
+                }}
+                aria-label="copy comment link"
+                data-testid="comment-copy-link"
+                sx={{ p: 0.25 }}
+              >
+                <LinkIcon sx={{ fontSize: CARD_ICON_SIZE }} />
+              </IconButton>
+            </span>
+          </Tooltip>
+        </Box>
       </Box>
-
-      {/* #312: the context row ("対象: ...") only earns its height once a
-          card is selected. A non-selected card is one of possibly many
-          stacked down the rail — #298 places each level with the paragraph
-          it targets, but that only holds while a card stays shorter than
-          the anchor spacing above it. This row was part of what pushed
-          non-selected cards past 95px and beyond real-document anchor gaps
-          (measured 138px, #298's alignment breaking by 123px). It's still
-          one click away: selecting the card brings it back. */}
-      {selected && ctx && (
-        <Typography
-          variant="caption"
-          color="text.secondary"
-          data-testid={`comment-context-${c.id}`}
-          sx={{ display: "block", fontStyle: "italic", wordBreak: "break-word" }}
-        >
-          対象: {ctx}
-        </Typography>
-      )}
 
       {selected && editOpen && !resolved ? (
         <Box sx={{ mt: 0.5 }} onClick={(e) => e.stopPropagation()}>
@@ -1299,68 +1348,9 @@ function CommentCard({
               </Box>
             </Box>
           )}
-
-          <Box
-            sx={[
-              { display: "flex", gap: 0.5, mt: 1, pt: 0.5 },
-              stickyRowSx("bottom", selected),
-            ]}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <Divider sx={{ position: "absolute", top: 0, insetInline: 0 }} />
-            <Tooltip title={resolved ? "解決済みのため返信できません" : "返信を追加"}>
-              <span>
-                <IconButton
-                  size="small"
-                  disabled={resolved}
-                  onClick={() => {
-                    updateDraft({ replyOpen: !replyOpen });
-                    setFocusForm(true);
-                  }}
-                  aria-label="reply to comment"
-                  data-testid="comment-reply-toggle"
-                >
-                  <ReplyIcon fontSize="small" />
-                </IconButton>
-              </span>
-            </Tooltip>
-            <Tooltip title={resolved ? "未解決に戻す" : "解決済みにする"}>
-              <IconButton
-                size="small"
-                onClick={() => onResolveToggle(c.id, resolved ? "open" : "resolved")}
-                aria-label={resolved ? "reopen comment" : "resolve comment"}
-                data-testid="comment-resolve-toggle"
-              >
-                {resolved ? (
-                  <ReplayIcon fontSize="small" />
-                ) : (
-                  <CheckCircleOutlineIcon fontSize="small" />
-                )}
-              </IconButton>
-            </Tooltip>
-            <Tooltip title="詳細を中央に開く">
-              <IconButton
-                size="small"
-                onClick={() => onOpenDetail(c.id)}
-                aria-label="open comment detail"
-                data-testid="comment-open-detail"
-              >
-                <OpenInFullIcon fontSize="small" />
-              </IconButton>
-            </Tooltip>
-          </Box>
         </>
       ) : (
-        replies > 0 && (
-          <Typography
-            variant="caption"
-            color="text.disabled"
-            data-testid="comment-reply-count"
-            sx={{ display: "block", mt: 0.75 }}
-          >
-            返信 {replies} 件
-          </Typography>
-        )
+        replies > 0 && c.replies && <ReplyPreview replies={c.replies} />
       )}
 
       {awaitingAi && (
@@ -1385,6 +1375,52 @@ function CommentCard({
           AI が確認中
         </Typography>
       )}
+    </Box>
+  );
+}
+
+/** #364: a non-selected card shows its latest replies one line each (body
+ *  ellipsised), instead of only a count, so the thread's state reads without
+ *  opening the card. Older replies collapse into "ほか N 件". */
+function ReplyPreview({ replies }: { replies: ReadonlyArray<CommentReply> }) {
+  const shown = replies.slice(-REPLY_PREVIEW_COUNT);
+  const rest = replies.length - shown.length;
+  return (
+    <Box
+      data-testid="comment-reply-preview"
+      sx={{ mt: 0.75, pl: 1, borderLeft: "2px solid", borderColor: "divider" }}
+    >
+      {rest > 0 && (
+        <Typography
+          variant="caption"
+          color="text.disabled"
+          data-testid="comment-reply-rest"
+          sx={{ display: "block" }}
+        >
+          ほか {rest} 件
+        </Typography>
+      )}
+      {shown.map((r, i) => (
+        <Box
+          key={rest + i}
+          data-testid="comment-reply-preview-row"
+          sx={{ display: "flex", alignItems: "center", gap: 0.75, minWidth: 0 }}
+        >
+          <CommentAuthor author={r.author} showName={false} />
+          <Typography
+            variant="caption"
+            color="text.secondary"
+            sx={{
+              minWidth: 0,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {r.body.replace(/\s+/g, " ")}
+          </Typography>
+        </Box>
+      ))}
     </Box>
   );
 }
@@ -2520,6 +2556,7 @@ export function CommentDetailDialog({
           <Typography
             variant="body2"
             color="text.secondary"
+            data-testid={`comment-detail-context-${c.id}`}
             onClick={canJump ? () => onJump(c.id) : undefined}
             sx={{
               fontStyle: "italic",
