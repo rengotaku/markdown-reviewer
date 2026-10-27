@@ -130,7 +130,7 @@ func Run(ctx context.Context) error {
 	}
 
 	h := handler.NewHandler(svc, roots, hub)
-	h.SetAgentSender(agentsetup.NewService())
+	h.SetAgentSender(agentsetup.NewPersistentService())
 	if adhocDirHook != nil {
 		h.SetAdhocDirHook(adhocDirHook)
 	}

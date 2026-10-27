@@ -385,7 +385,9 @@ Response は `PUT /api/files` と同じ形: `{ "path": "...", "content": "...", 
 
 `mr open` が呼ぶ best-effort 登録。本文は `{"agent_id":"claude","pid":123,"session_id":"..."}`。
 公開セッション JSON と実プロセスを照合できた場合のみ `{"registered":true}`。
-ファイルとセッションの対応はサーバのメモリに保持し、再起動時に失われる。
+ファイルとセッションの対応は sidecar と同じ保存先の `agent-owners.json` にも書き、
+サーバ起動時に読み戻す。読み戻す時点で生きていないセッション（PID が変わったものを含む）の対応は捨てる。
+ファイルが無い・壊れている場合は対応なしで起動する。
 追加パスにも登録する。サーバ停止中や旧版でも `mr open` 自体は継続する。
 
 ### `POST /api/agents/send/*path?root=<name>`

@@ -70,10 +70,12 @@ type Sender interface {
 }
 
 type Service struct {
-	owners   map[string]Identity
-	adapters []Adapter
-	mu       sync.Mutex
-	sending  sync.Mutex
+	owners    map[string]Identity
+	storePath string
+	adapters  []Adapter
+	mu        sync.Mutex
+	sending   sync.Mutex
+	saveMu    sync.Mutex
 }
 
 func New(adapters ...Adapter) *Service {
@@ -122,6 +124,7 @@ func (s *Service) Register(ctx context.Context, path string, id Identity) bool {
 			s.mu.Lock()
 			s.owners[canonical(path)] = id
 			s.mu.Unlock()
+			s.save()
 			return true
 		}
 	}
