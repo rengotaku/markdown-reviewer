@@ -6,23 +6,20 @@ export const AI_AUTHOR = "ai";
 
 export const isAiAuthored = (author?: string): boolean => author === AI_AUTHOR;
 
-/** Up to two characters standing in for an avatar. Latin names give their
- *  first letter; CJK names give the first character, which is the part a
- *  reader recognises. */
+/** The text standing in for an avatar: "AI" for the AI and "R" (reviewer)
+ *  for anyone else. #364: mr is used by one person, so telling reviewers apart
+ *  by name isn't worth the width; the name is on the badge's hover instead. */
 export function authorInitials(author?: string): string {
   const name = (author ?? "").trim();
   if (!name) return "?";
-  if (isAiAuthored(name)) return "AI";
-  return [...name][0]?.toUpperCase() ?? "?";
+  return isAiAuthored(name) ? "AI" : "R";
 }
 
-/** A stable hue per author, so the same person keeps the same badge colour
- *  across sessions without anyone configuring one. */
-export function authorHue(author?: string): number {
-  const name = (author ?? "").trim();
-  let h = 0;
-  for (const ch of name) h = (h * 31 + ch.codePointAt(0)!) % 360;
-  return h;
+/** #364: the one colour that stands for an author, shared by the avatar badge
+ *  and the stripe on that author's thread entries: red for the AI, blue for
+ *  the reviewer (MUI palette keys). */
+export function authorColor(author?: string): "error.main" | "primary.main" {
+  return isAiAuthored(author) ? "error.main" : "primary.main";
 }
 
 /**

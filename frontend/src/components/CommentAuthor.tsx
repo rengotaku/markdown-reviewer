@@ -1,9 +1,8 @@
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
 import {
-  authorHue,
+  authorColor,
   authorInitials,
-  isAiAuthored,
   relativeDate,
 } from "@/utils/commentPresentation";
 
@@ -18,28 +17,41 @@ interface Props {
  *  in these threads, so the badge is colour-coded by author rather than being
  *  a neutral avatar: at a glance the reader can tell whose turn it was. */
 export function CommentAuthor({ author, date, showName = true }: Props) {
-  const ai = isAiAuthored(author);
-  const hue = authorHue(author);
   return (
-    <Box sx={{ display: "flex", alignItems: "center", gap: 0.75, minWidth: 0 }}>
+    <Box
+      sx={{
+        display: "flex",
+        alignItems: "center",
+        gap: 0.75,
+        // #364: badge-only, it must not shrink under a neighbour's text.
+        minWidth: showName ? 0 : undefined,
+        flexShrink: showName ? undefined : 0,
+      }}
+    >
+      {/* #364: with the name hidden the badge is the only author signal, so
+          it carries the name for screen readers instead of being hidden. */}
       <Box
-        aria-hidden
+        aria-hidden={showName || undefined}
+        role={showName ? undefined : "img"}
+        aria-label={showName ? undefined : author || "?"}
+        title={author || undefined}
         data-testid="comment-author-badge"
         data-author={author ?? ""}
         sx={{
-          width: 20,
-          height: 20,
+          // #364: badge-only rows put it beside 14px action icons; keep it
+          // about that size so the row stays low.
+          width: showName ? 20 : 16,
+          height: showName ? 20 : 16,
           flexShrink: 0,
           borderRadius: "50%",
           display: "grid",
           placeItems: "center",
-          fontSize: 10,
+          fontSize: showName ? 10 : 8,
           fontWeight: 700,
           lineHeight: 1,
-          // The AI is one fixed identity; people get a hue derived from their
-          // name so two reviewers never share a colour by accident.
-          bgcolor: ai ? "success.light" : `hsl(${hue} 55% 88%)`,
-          color: ai ? "success.dark" : `hsl(${hue} 45% 28%)`,
+          // #364: the same colour as the author's stripe on thread entries.
+          bgcolor: authorColor(author),
+          color: "common.white",
         }}
       >
         {authorInitials(author)}

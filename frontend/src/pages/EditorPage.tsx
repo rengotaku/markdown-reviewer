@@ -3502,6 +3502,7 @@ export function EditorPage() {
           onDeleteReply={handleDeleteReply}
           onJump={handleJumpToComment}
           onSelect={handleSelectComment}
+          onDeselect={() => setRailSelectedId(null)}
           selectedId={railSelectedId}
           anchorTops={anchorTops}
           docBox={docBox}
