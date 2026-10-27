@@ -20,6 +20,9 @@ type Session struct {
 	Instance string
 	PID      int
 	Ready    bool
+	// Background means the turn has ended but a background task is still
+	// running. Only meaningful when Ready is true.
+	Background bool
 }
 
 type Identity struct {
@@ -34,6 +37,14 @@ type Result struct {
 	SessionName string `json:"session_name,omitempty"`
 	AgentID     string `json:"agent_id,omitempty"`
 	Sent        bool   `json:"sent"`
+}
+
+// Status is the recipient's state as shown on screen. State is one of
+// "none", "idle", "busy" or "background".
+type Status struct {
+	State       string `json:"state"`
+	SessionName string `json:"session_name,omitempty"`
+	AgentID     string `json:"agent_id,omitempty"`
 }
 
 var (
@@ -55,6 +66,7 @@ type Adapter interface {
 type Sender interface {
 	Register(context.Context, string, Identity) bool
 	Send(context.Context, string) Result
+	Status(context.Context, string) Status
 }
 
 type Service struct {
@@ -121,13 +133,9 @@ type candidate struct {
 	session Session
 }
 
-func (s *Service) Send(ctx context.Context, path string) Result {
-	result := Result{Command: ReviewCommand(path), Reason: "no_session"}
-	if !s.sending.TryLock() {
-		result.Reason = "busy"
-		return result
-	}
-	defer s.sending.Unlock()
+// choose returns the session Send would deliver to. It returns nil when there
+// is none, including when the registered owner's adapter cannot be queried.
+func (s *Service) choose(ctx context.Context, path string) *candidate {
 	s.mu.Lock()
 	owner, registered := s.owners[canonical(path)]
 	s.mu.Unlock()
@@ -137,7 +145,7 @@ func (s *Service) Send(ctx context.Context, path string) Result {
 		sessions, err := adapter.Sessions(ctx)
 		if err != nil {
 			if registered && adapter.ID() == owner.AgentID {
-				return result
+				return nil
 			}
 			// An unavailable non-owner must not disable other adapters.
 			continue
@@ -154,25 +162,52 @@ func (s *Service) Send(ctx context.Context, path string) Result {
 			}
 		}
 	}
-	if chosen == nil {
-		sort.Slice(candidates, func(i, j int) bool {
-			a, b := candidates[i], candidates[j]
-			ac, bc := canonical(a.session.Cwd), canonical(b.session.Cwd)
-			if len(ac) != len(bc) {
-				return len(ac) > len(bc)
-			}
-			if a.adapter.ID() != b.adapter.ID() {
-				return a.adapter.ID() < b.adapter.ID()
-			}
-			return a.session.ID < b.session.ID
-		})
-		for i := range candidates {
-			if contains(candidates[i].session.Cwd, path) {
-				chosen = &candidates[i]
-				break
-			}
+	if chosen != nil {
+		return chosen
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		a, b := candidates[i], candidates[j]
+		ac, bc := canonical(a.session.Cwd), canonical(b.session.Cwd)
+		if len(ac) != len(bc) {
+			return len(ac) > len(bc)
+		}
+		if a.adapter.ID() != b.adapter.ID() {
+			return a.adapter.ID() < b.adapter.ID()
+		}
+		return a.session.ID < b.session.ID
+	})
+	for i := range candidates {
+		if contains(candidates[i].session.Cwd, path) {
+			return &candidates[i]
 		}
 	}
+	return nil
+}
+
+// Status reports the state of the session Send would choose, without sending.
+func (s *Service) Status(ctx context.Context, path string) Status {
+	chosen := s.choose(ctx, path)
+	if chosen == nil {
+		return Status{State: "none"}
+	}
+	status := Status{State: "idle", AgentID: chosen.adapter.ID(), SessionName: chosen.session.Name}
+	switch {
+	case !chosen.session.Ready:
+		status.State = "busy"
+	case chosen.session.Background:
+		status.State = "background"
+	}
+	return status
+}
+
+func (s *Service) Send(ctx context.Context, path string) Result {
+	result := Result{Command: ReviewCommand(path), Reason: "no_session"}
+	if !s.sending.TryLock() {
+		result.Reason = "busy"
+		return result
+	}
+	defer s.sending.Unlock()
+	chosen := s.choose(ctx, path)
 	if chosen == nil {
 		return result
 	}

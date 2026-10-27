@@ -129,3 +129,56 @@ func TestCommandAndPathBoundary(t *testing.T) {
 	require.False(t, contains("/work/unit", "/work/unit-other/a.md"))
 	require.True(t, contains("/work/unit", "/work/unit/a.md"))
 }
+
+func TestStatusFollowsSendSelection(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		want     string
+		sessions []Session
+	}{
+		{name: "no session", want: "none"},
+		{name: "outside cwd", sessions: []Session{{ID: "s", Cwd: "/other", Ready: true}}, want: "none"},
+		{name: "idle", sessions: []Session{{ID: "s", Name: "n", Cwd: "/work", Ready: true}}, want: "idle"},
+		{name: "busy", sessions: []Session{{ID: "s", Name: "n", Cwd: "/work"}}, want: "busy"},
+		{name: "background", sessions: []Session{{ID: "s", Name: "n", Cwd: "/work", Ready: true, Background: true}}, want: "background"},
+		{name: "deepest wins", sessions: []Session{{ID: "p", Name: "parent", Cwd: "/work", Ready: true}, {ID: "d", Name: "n", Cwd: "/work/unit"}}, want: "busy"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sent := false
+			adapter := &fakeAdapter{id: "a", sessions: tc.sessions, send: func(context.Context, Session, string) error { sent = true; return nil }}
+			status := New(adapter).Status(context.Background(), "/work/unit/a.md")
+			require.Equal(t, tc.want, status.State)
+			if tc.want != "none" {
+				require.Equal(t, "n", status.SessionName)
+				require.Equal(t, "a", status.AgentID)
+			}
+			require.False(t, sent)
+		})
+	}
+}
+
+func TestStatusPrefersRegisteredOwner(t *testing.T) {
+	owner := &fakeAdapter{id: "owner", sessions: []Session{{ID: "s", Name: "owner", Cwd: "/work"}}}
+	other := &fakeAdapter{id: "other", sessions: []Session{{ID: "s", Name: "deep", Cwd: "/work/unit", Ready: true}}}
+	service := New(owner, other)
+	require.True(t, service.Register(context.Background(), "/work/unit/a.md", Identity{AgentID: "owner", SessionID: "s"}))
+	require.Equal(t, Status{State: "busy", SessionName: "owner", AgentID: "owner"}, service.Status(context.Background(), "/work/unit/a.md"))
+	owner.discoverErr = errors.New("unavailable")
+	require.Equal(t, Status{State: "none"}, service.Status(context.Background(), "/work/unit/a.md"))
+}
+
+func TestStatusDoesNotWaitForSend(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	adapter := &fakeAdapter{id: "a", sessions: []Session{{ID: "s", Cwd: "/work", Ready: true}}, send: func(context.Context, Session, string) error {
+		close(started)
+		<-release
+		return nil
+	}}
+	service := New(adapter)
+	done := make(chan Result, 1)
+	go func() { done <- service.Send(context.Background(), "/work/a.md") }()
+	<-started
+	require.Equal(t, "idle", service.Status(context.Background(), "/work/a.md").State)
+	close(release)
+	require.True(t, (<-done).Sent)
+}

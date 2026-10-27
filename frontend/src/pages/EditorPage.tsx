@@ -15,6 +15,7 @@ import Tab from "@mui/material/Tab";
 import Chip from "@mui/material/Chip";
 import CloseIcon from "@mui/icons-material/Close";
 import Tooltip from "@mui/material/Tooltip";
+import Badge from "@mui/material/Badge";
 import Typography from "@mui/material/Typography";
 import SaveIcon from "@mui/icons-material/Save";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
@@ -47,6 +48,9 @@ import { useFileWatcher } from "@/hooks/useFileWatcher";
 import { useDirChangeWatcher } from "@/hooks/useDirChangeWatcher";
 import { useChangedPaths } from "@/hooks/useChangedPaths";
 import { useServerEvents } from "@/hooks/useServerEvents";
+import { useAgentStatus } from "@/hooks/useAgentStatus";
+import { AgentStatusIndicator } from "@/components/AgentStatusIndicator";
+import { pulseSx } from "@/components/pulseSx";
 import { useServerConnection } from "@/hooks/useServerConnection";
 import { useConfirm } from "@/hooks/useConfirm";
 import { selectionMarkdownOf } from "@/components/tiptap/toolbar/selectionCopy";
@@ -393,6 +397,15 @@ export function EditorPage() {
   const activeFileRoot = activeFile?.root;
   const keyOf = (root: string | undefined, path: string) => `${root ?? ""}:${path}`;
   const fileKey = activePath ? keyOf(activeFileRoot, activePath) : "";
+  // #360: whether the AI the send button reaches is still replying.
+  const agentActivity = useAgentStatus(
+    activePath,
+    activeFileRoot,
+    comments,
+    !reviewActive || commentsLoadedForPath === activePath
+  );
+  const agentBusy = agentActivity.status?.state === "busy";
+  const newAgentReplyCount = [...agentActivity.newReplies.values()].reduce((a, b) => a + b, 0);
 
   // The *currently* active tab's key, read fresh from the store rather than
   // the `activeFile` closure above. Used by the sweep effect to guard
@@ -2489,6 +2502,7 @@ export function EditorPage() {
         try {
           const result = await sendReviewCommand(activeFile.path, activeFile.root);
           if (result.sent) {
+            agentActivity.markSent();
             showToast(
               `コメント確認コマンドを送信しました${result.session_name ? `: ${result.session_name}` : ""}`,
               "success"
@@ -3063,6 +3077,30 @@ export function EditorPage() {
                 レビュー中
               </Typography>
             )}
+            {activeFile && (
+              <AgentStatusIndicator
+                status={agentActivity.status}
+                busySince={agentActivity.busySince}
+                newReplyCount={newAgentReplyCount}
+                onShowReplies={() => {
+                  const first = comments.find((c) => agentActivity.newReplies.has(c.id));
+                  agentActivity.acknowledge();
+                  if (!first) return;
+                  handleSelectComment(first.id);
+                  // The button disappears once acknowledged, so hand keyboard
+                  // focus to the card. It may only mount after the rail lays
+                  // out the selection; give it a few frames, then give up.
+                  const selector = `[data-testid="comment-item"][data-comment-id="${CSS.escape(first.id)}"]`;
+                  let frames = 0;
+                  const focusCard = () => {
+                    const card = document.querySelector<HTMLElement>(selector);
+                    if (card) card.focus({ preventScroll: true });
+                    else if (++frames < 10) requestAnimationFrame(focusCard);
+                  };
+                  requestAnimationFrame(focusCard);
+                }}
+              />
+            )}
           </Box>
           {/* No explicit "取り込む" action: a file is ingested transparently the
               first time the user comments on it (see handleIngest / ingestThenOpen).
@@ -3125,7 +3163,17 @@ export function EditorPage() {
                 aria-label="copy review command"
                 data-testid="editor-copy-review-command"
               >
-                <RateReviewOutlinedIcon fontSize="small" />
+                {/* #360: orange while the AI is replying, green once new
+                    replies are in. Overlaid, so the icon row doesn't move. */}
+                <Badge
+                  variant="dot"
+                  color={agentBusy ? "warning" : "success"}
+                  invisible={!agentBusy && newAgentReplyCount === 0}
+                  sx={agentBusy ? { "& .MuiBadge-badge": pulseSx } : undefined}
+                  data-testid="editor-agent-badge"
+                >
+                  <RateReviewOutlinedIcon fontSize="small" />
+                </Badge>
               </IconButton>
             </span>
           </Tooltip>
@@ -3461,6 +3509,8 @@ export function EditorPage() {
           unresolvedIds={unresolvedIds}
           railMode={commentRailMode}
           onRailModeChange={setCommentRailMode}
+          agentReplying={agentBusy && agentActivity.sentByUs}
+          agentNewReplies={agentActivity.newReplies}
         />
       </Box>
 

@@ -405,6 +405,16 @@ Response は `PUT /api/files` と同じ形: `{ "path": "...", "content": "...", 
 認証キーと内部ソケットは読まない。
 ブラウザからの登録・送信は API と同じホストの Origin のみ許可する（開発用のポート違いは可）。
 
+### `GET /api/agents/status/*path?root=<name>`
+
+`send` と同じ選び方で決まる送り先の状態を返す。送信はしない。
+応答は `{"state":"busy","session_name":"...","agent_id":"claude"}`。
+`state` は `none`（送り先なし）/ `idle`（入力待ち）/ `busy`（応答中）/
+`background`（応答は終わり、バックグラウンド処理だけ残っている。送信は可能）。
+`none` のときは `session_name` と `agent_id` を省く。
+エディタはこれを数秒おきに取得し、ヘッダーとコメント欄に応答状況を表示する。
+Origin の制限は登録・送信と同じ。
+
 macOS の iTerm2 AppleScript の `tty` / `write text` を使用する。
 本文は `newline NO` で入力し、0.2秒後に Enter に対応する CR（ASCII 13）を別に送る。
 本文と同じ入力に含む改行が Claude の入力欄内の改行として扱われることを避ける。

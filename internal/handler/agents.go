@@ -48,6 +48,21 @@ func (h *Handler) SendAgent(c *gin.Context) {
 	c.JSON(http.StatusOK, h.agents.Send(ctx, full))
 }
 
+// StatusAgent reports the state of the session a send would go to, so the
+// editor can show whether the AI is still replying. It never sends anything.
+func (h *Handler) StatusAgent(c *gin.Context) {
+	if !allowTerminalOrigin(c) {
+		return
+	}
+	full, _, _, ok := h.resolveRequest(c)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
+	defer cancel()
+	c.JSON(http.StatusOK, h.agents.Status(ctx, full))
+}
+
 // The general API allows CORS, but a terminal handoff must not be triggered
 // from an unrelated website. CLI requests have no Origin; Vite may use a
 // different port on the same host.

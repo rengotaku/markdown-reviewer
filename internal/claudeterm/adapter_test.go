@@ -49,6 +49,7 @@ func TestNormalizeClaudeState(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, sessions, 1)
 			require.Equal(t, status == "idle" || status == "shell", sessions[0].Ready)
+			require.Equal(t, status == "shell", sessions[0].Background)
 			require.Equal(t, "display", sessions[0].Name)
 			require.Equal(t, "start", sessions[0].Instance)
 		})

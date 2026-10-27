@@ -13,6 +13,7 @@ export {
   getRevision,
   createRevision,
   sendReviewCommand,
+  fetchAgentStatus,
   restoreRevision,
   type ConfigResponse,
   type DirEntry as DirEntryApi,
@@ -32,6 +33,8 @@ export {
   type RevisionResponse,
   type CreateRevisionResponse,
   type SendReviewResponse,
+  type AgentState,
+  type AgentStatusResponse,
 } from "./files";
 export {
   listComments,

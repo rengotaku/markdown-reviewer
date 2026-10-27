@@ -82,3 +82,22 @@ func TestAgentFallbackAndPathValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestAgentStatusHandler(t *testing.T) {
+	h, root := setupFilesHandler(t)
+	require.NoError(t, os.WriteFile(filepath.Join(root, "a.md"), []byte("# A"), 0600))
+	adapter := &recordingAdapter{root: root}
+	h.SetAgentSender(agent.New(adapter))
+	response := serve(h, httptest.NewRequest(http.MethodGet, "/api/agents/status/a.md", nil))
+	require.Equal(t, http.StatusOK, response.Code)
+	require.JSONEq(t, `{"state":"idle","agent_id":"test-ai"}`, response.Body.String())
+	require.Empty(t, adapter.text, "status must not send")
+
+	for _, path := range []string{"../a.md", "a.txt", "a.md?root=unknown"} {
+		response = serve(h, httptest.NewRequest(http.MethodGet, "/api/agents/status/"+path, nil))
+		require.Equal(t, http.StatusBadRequest, response.Code)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/agents/status/a.md", nil)
+	request.Header.Set("Origin", "https://unrelated.example")
+	require.Equal(t, http.StatusForbidden, serve(h, request).Code)
+}
