@@ -1312,7 +1312,7 @@ function CommentCard({
                     data-testid="comment-edit"
                     sx={{ p: 0.25 }}
                   >
-                    <EditOutlinedIcon sx={{ fontSize: 15 }} />
+                    <EditOutlinedIcon sx={{ fontSize: CARD_ICON_SIZE }} />
                   </IconButton>
                 </span>
               </Tooltip>
@@ -1331,7 +1331,7 @@ function CommentCard({
                     data-testid="comment-delete"
                     sx={{ p: 0.25 }}
                   >
-                    <DeleteOutlineIcon sx={{ fontSize: 15 }} />
+                    <DeleteOutlineIcon sx={{ fontSize: CARD_ICON_SIZE }} />
                   </IconButton>
                 </span>
               </Tooltip>
@@ -2372,10 +2372,13 @@ function ThreadEntryHeader({
         alignItems: "center",
         gap: 0.75,
         px: 1,
-        py: 0.5,
+        // #364: as low as the card's header row. The Tooltip spans are inline
+        // and would add a line box's height around each 14px icon button.
+        py: 0.125,
         mb: 0.25,
         borderRadius: 1,
         bgcolor: "action.hover",
+        "& > span": { display: "inline-flex" },
       }}
     >
       {/* #364: the author is the badge alone (name on hover), and the badge's
@@ -2454,7 +2457,7 @@ function ReplyRow({
                   data-testid="comment-reply-edit"
                   sx={{ p: 0.25 }}
                 >
-                  <EditOutlinedIcon sx={{ fontSize: 15 }} />
+                  <EditOutlinedIcon sx={{ fontSize: CARD_ICON_SIZE }} />
                 </IconButton>
               </span>
             </Tooltip>
@@ -2476,7 +2479,7 @@ function ReplyRow({
                   data-testid="comment-reply-delete"
                   sx={{ p: 0.25 }}
                 >
-                  <DeleteOutlineIcon sx={{ fontSize: 15 }} />
+                  <DeleteOutlineIcon sx={{ fontSize: CARD_ICON_SIZE }} />
                 </IconButton>
               </span>
             </Tooltip>

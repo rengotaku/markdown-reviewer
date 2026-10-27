@@ -38,13 +38,15 @@ export function CommentAuthor({ author, date, showName = true }: Props) {
         data-testid="comment-author-badge"
         data-author={author ?? ""}
         sx={{
-          width: 20,
-          height: 20,
+          // #364: badge-only rows put it beside 14px action icons; keep it
+          // about that size so the row stays low.
+          width: showName ? 20 : 16,
+          height: showName ? 20 : 16,
           flexShrink: 0,
           borderRadius: "50%",
           display: "grid",
           placeItems: "center",
-          fontSize: 10,
+          fontSize: showName ? 10 : 8,
           fontWeight: 700,
           lineHeight: 1,
           // #364: the same colour as the author's stripe on thread entries.
