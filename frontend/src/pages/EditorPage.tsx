@@ -50,7 +50,7 @@ import { useDirChangeWatcher } from "@/hooks/useDirChangeWatcher";
 import { useChangedPaths } from "@/hooks/useChangedPaths";
 import { useServerEvents } from "@/hooks/useServerEvents";
 import { useAgentStatus } from "@/hooks/useAgentStatus";
-import { unsentCount } from "@/utils/agentActivity";
+import { openCommentIds, unsentCount } from "@/utils/agentActivity";
 import { AgentStatusIndicator } from "@/components/AgentStatusIndicator";
 import { useServerConnection } from "@/hooks/useServerConnection";
 import { useConfirm } from "@/hooks/useConfirm";
@@ -2512,9 +2512,13 @@ export function EditorPage() {
       }
       if (saved) {
         try {
+          // #366: what the AI will read is fixed here, before the round trip.
+          // A comment written while the request is in flight may reach the
+          // AI or not, so it stays "unsent" rather than claim a reply.
+          const handedOver = openCommentIds(comments);
           const result = await sendReviewCommand(activeFile.path, activeFile.root);
           if (result.sent) {
-            agentActivity.markSent();
+            agentActivity.markSent(handedOver);
             showToast(
               `コメント確認コマンドを送信しました${result.session_name ? `: ${result.session_name}` : ""}`,
               "success"
@@ -2787,6 +2791,12 @@ export function EditorPage() {
   // jump target is now resolved from the comment's own anchor(s) via
   const canSave = Boolean(activeFile);
   const isSaving = writeFile.isPending;
+  // The mutation is shared by every open file (closing a dirty tab saves it
+  // while another one shows), so "saving" must be about the file on screen.
+  const savingActive =
+    isSaving &&
+    writeFile.variables?.path === activeFile?.path &&
+    (writeFile.variables?.root ?? activeFile?.root) === activeFile?.root;
 
   return (
     <Box sx={{ display: "flex", height: "100vh", overflow: "hidden" }}>
@@ -3076,7 +3086,7 @@ export function EditorPage() {
                 sx={{ color: "text.secondary", flexShrink: 0, whiteSpace: "nowrap" }}
                 data-testid="editor-save-state"
               >
-                {isSaving ? "保存中" : activeFile.isDirty ? "未保存" : "保存済み"}
+                {savingActive ? "保存中" : activeFile.isDirty ? "未保存" : "保存済み"}
               </Typography>
             )}
             {activeFile && (activeFile.serverCreated || activeFile.serverModified) && (
@@ -3102,54 +3112,56 @@ export function EditorPage() {
                 </IconButton>
               </Tooltip>
             )}
-            {activeFile && (
-              <>
-                <Tooltip title="ファイルの操作">
-                  <IconButton
-                    size="small"
-                    sx={{ flexShrink: 0 }}
-                    onClick={(e) => setFileMenuAnchor(e.currentTarget)}
-                    aria-label="file actions"
-                    aria-haspopup="menu"
-                    data-testid="editor-file-menu"
-                  >
-                    <MoreHorizIcon fontSize="small" />
-                  </IconButton>
-                </Tooltip>
-                <Menu
-                  anchorEl={fileMenuAnchor}
-                  open={fileMenuAnchor !== null}
-                  onClose={() => setFileMenuAnchor(null)}
-                >
-                  <MenuItem
-                    onClick={() => {
-                      setFileMenuAnchor(null);
-                      void handleCopyMarkdown();
-                    }}
-                    data-testid="editor-copy-markdown"
-                  >
-                    <ListItemIcon>
-                      <ContentCopyIcon fontSize="small" />
-                    </ListItemIcon>
-                    <ListItemText>Markdown をコピー</ListItemText>
-                  </MenuItem>
-                  <MenuItem
-                    disabled={!canSave || isSaving}
-                    onClick={() => {
-                      setFileMenuAnchor(null);
-                      void handleSave();
-                    }}
-                    data-testid="editor-save"
-                  >
-                    <ListItemIcon>
-                      <SaveIcon fontSize="small" />
-                    </ListItemIcon>
-                    <ListItemText>今すぐ保存</ListItemText>
-                  </MenuItem>
-                </Menu>
-              </>
-            )}
           </Box>
+          {/* Outside the box above, which clips when the header is narrow:
+              this menu is the only way to copy or save on demand. */}
+          {activeFile && (
+            <>
+              <Tooltip title="ファイルの操作">
+                <IconButton
+                  size="small"
+                  sx={{ flexShrink: 0 }}
+                  onClick={(e) => setFileMenuAnchor(e.currentTarget)}
+                  aria-label="file actions"
+                  aria-haspopup="menu"
+                  data-testid="editor-file-menu"
+                >
+                  <MoreHorizIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+              <Menu
+                anchorEl={fileMenuAnchor}
+                open={fileMenuAnchor !== null}
+                onClose={() => setFileMenuAnchor(null)}
+              >
+                <MenuItem
+                  onClick={() => {
+                    setFileMenuAnchor(null);
+                    void handleCopyMarkdown();
+                  }}
+                  data-testid="editor-copy-markdown"
+                >
+                  <ListItemIcon>
+                    <ContentCopyIcon fontSize="small" />
+                  </ListItemIcon>
+                  <ListItemText>Markdown をコピー</ListItemText>
+                </MenuItem>
+                <MenuItem
+                  disabled={!canSave || isSaving}
+                  onClick={() => {
+                    setFileMenuAnchor(null);
+                    void handleSave();
+                  }}
+                  data-testid="editor-save"
+                >
+                  <ListItemIcon>
+                    <SaveIcon fontSize="small" />
+                  </ListItemIcon>
+                  <ListItemText>今すぐ保存</ListItemText>
+                </MenuItem>
+              </Menu>
+            </>
+          )}
           {/* No explicit "取り込む" action: a file is ingested transparently the
               first time the user comments on it (see handleIngest / ingestThenOpen).
               Ingesting is internal bookkeeping the user shouldn't have to think about. */}

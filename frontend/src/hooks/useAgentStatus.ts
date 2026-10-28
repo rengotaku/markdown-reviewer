@@ -23,7 +23,8 @@ export interface AgentActivity {
   newReplies: ReadonlyMap<string, number>;
   /** Open comment ids at this editor's last send; null before the first. */
   sentIds: ReadonlySet<string> | null;
-  markSent: () => void;
+  /** `sentIds`: the open comments fixed just before the request went out. */
+  markSent: (sentIds: ReadonlySet<string>) => void;
   /** The reader has seen the new replies; stop marking them. */
   acknowledge: () => void;
 }
@@ -91,9 +92,14 @@ export function useAgentStatus(
     [baseline, comments]
   );
 
-  const markSent = useCallback(() => {
-    setTracking((prev) => applySent(prev, key, commentsRef.current, Date.now()));
-  }, [key]);
+  const markSent = useCallback(
+    (sentIds: ReadonlySet<string>) => {
+      setTracking((prev) =>
+        applySent(prev, key, commentsRef.current, Date.now(), sentIds)
+      );
+    },
+    [key]
+  );
   const acknowledge = useCallback(() => {
     setTracking((prev) =>
       prev.key === key && prev.baseline ? { ...prev, baseline: null } : prev

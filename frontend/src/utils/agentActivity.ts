@@ -121,7 +121,9 @@ export function applySent(
   prev: AgentTracking,
   key: string,
   comments: ReadonlyArray<CommentJSON>,
-  now: number
+  now: number,
+  /** Open comments fixed before the request; defaults to those in `comments`. */
+  sentIds: ReadonlySet<string> = openCommentIds(comments)
 ): AgentTracking {
   // The send resolves after a network round trip. If another file is active
   // by then, this send no longer describes what is on screen.
@@ -133,7 +135,7 @@ export function applySent(
     busySince: now,
     sentByUs: true,
     baseline: replyCounts(comments),
-    sentIds: openCommentIds(comments),
+    sentIds,
   };
 }
 

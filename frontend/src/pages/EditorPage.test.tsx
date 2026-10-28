@@ -496,6 +496,71 @@ describe("EditorPage", () => {
     expect(screen.getByTestId("editor-agent-sent-count")).toHaveTextContent("送信 2 件");
   });
 
+  it("keeps a comment written while the send is in flight unsent (#366)", async () => {
+    const { http, HttpResponse } = await import("msw");
+    const { server } = await import("@/test/mocks/server");
+    const open = (id: string): CommentJSON => ({
+      id,
+      scope: "global",
+      author: "kishira",
+      body: id,
+      status: "open",
+      context: null,
+      orphan: false,
+    });
+    let comments: CommentJSON[] = [open("c1"), open("c2")];
+    let releaseSend = () => {};
+    const sendHeld = new Promise<void>((resolve) => {
+      releaseSend = resolve;
+    });
+    server.use(
+      http.get("http://localhost:8080/api/stat/*", () =>
+        HttpResponse.json({
+          path: "README.md",
+          root: "mock-root",
+          modified: "2026-05-20T00:00:00Z",
+          created: "2026-05-19T00:00:00Z",
+          state: "review",
+          hasOpenComments: true,
+        })
+      ),
+      http.get("http://localhost:8080/api/comments/*", () =>
+        HttpResponse.json({
+          file: "README.md",
+          root: "mock-root",
+          summary: { total: comments.length, by_scope: {}, by_status: {} },
+          comments,
+        })
+      ),
+      http.post("http://localhost:8080/api/revisions/*", () =>
+        HttpResponse.json({ created: false })
+      ),
+      http.post("http://localhost:8080/api/agents/send/*", async () => {
+        await sendHeld;
+        return HttpResponse.json({ sent: true, session_name: "unit" });
+      })
+    );
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(await screen.findByTestId("sidebar-file-README.md"));
+    await waitFor(() =>
+      expect(screen.getByTestId("comment-filter-all")).toHaveTextContent("すべて 2")
+    );
+
+    await user.click(screen.getByTestId("editor-copy-review-command"));
+    comments = [...comments, open("c3")];
+    await user.click(screen.getByTestId("comment-pane-refresh"));
+    await waitFor(() =>
+      expect(screen.getByTestId("comment-filter-all")).toHaveTextContent("すべて 3")
+    );
+    releaseSend();
+
+    await waitFor(() =>
+      expect(screen.getByTestId("editor-agent-sent-count")).toHaveTextContent("送信 2 件")
+    );
+    expect(screen.getByTestId("editor-unsent-count")).toHaveTextContent("未送信 1");
+  });
+
   it.each([403, 404, 500])(
     "copies without retrying when direct send returns HTTP %s",
     async (status) => {

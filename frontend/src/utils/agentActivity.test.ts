@@ -173,6 +173,12 @@ describe("sent comments (#366)", () => {
     expect([...(sent.sentIds ?? [])]).toEqual(["c1"]);
   });
 
+  it("keeps the set fixed before the request, not the list at the response", () => {
+    const later = [comment("c1", []), comment("c2", [])];
+    const sent = applySent(emptyTracking(key), key, later, 1000, new Set(["c1"]));
+    expect([...(sent.sentIds ?? [])]).toEqual(["c1"]);
+  });
+
   it("keeps the sent set when the busy period ends", () => {
     const sent = applySent(emptyTracking(key), key, [comment("c1", [])], 1000);
     const idle = applyStatus(
