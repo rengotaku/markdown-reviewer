@@ -337,7 +337,7 @@ func reanchorOne(
 // or the candidate still fails to resolve to newIdx; the caller falls back
 // to rebuildAt in that case.
 func rebuildPreservingSnippet(a Anchor, newCanonical string, newLines []string, newStacks [][]string, newIdx int) (Anchor, bool) {
-	if !strings.Contains(stripInlineMarkup(newLines[newIdx]), a.Snippet) {
+	if !strings.Contains(renderedLine(newLines[newIdx], codeLines(newLines)[newIdx]), a.Snippet) {
 		return a, false
 	}
 	headingPath := a.HeadingPath
@@ -365,7 +365,7 @@ func rebuildPreservingSnippet(a Anchor, newCanonical string, newLines []string, 
 // rebuilt anchor still fails to resolve to the intended line; the caller
 // decides what to do with the original anchor in that case.
 func rebuildAt(a Anchor, newCanonical string, newLines []string, newStacks [][]string, newIdx int) (Anchor, bool) {
-	newSnippet := stripInlineMarkup(newLines[newIdx])
+	newSnippet := renderedLine(newLines[newIdx], codeLines(newLines)[newIdx])
 	if strings.TrimSpace(newSnippet) == "" {
 		return a, false
 	}
@@ -407,9 +407,10 @@ func findLineByFingerprint(newLines []string, fingerprint string) (int, bool) {
 // stack suffix-matches headingPath. The occurrence is the number of matching
 // lines strictly before targetIdx.
 func occurrenceAtLine(lines []string, stacks [][]string, targetIdx int, snippet string, headingPath []string) int {
+	code := codeLines(lines)
 	occ := 0
 	for i := 0; i < targetIdx && i < len(lines); i++ {
-		if !strings.Contains(stripInlineMarkup(lines[i]), snippet) {
+		if !strings.Contains(renderedLine(lines[i], code[i]), snippet) {
 			continue
 		}
 		if len(headingPath) > 0 && !headingSuffixMatch(stacks[i], headingPath) {

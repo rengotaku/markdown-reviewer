@@ -520,3 +520,77 @@ func TestStripInlineMarkup(t *testing.T) {
 		}
 	}
 }
+
+func TestStripInlineMarkupUnescaped(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{`precheck の各行に \[新\] / \[旧\] を付ける`, "precheck の各行に [新] / [旧] を付ける"},
+		{`\*not em\* and \_not em\_`, "*not em* and _not em_"},
+		{`a \# b \> c \| d \~ e \- f \. g`, "a # b > c | d ~ e - f . g"},
+		{`back\\slash`, `back\slash`},
+		{`\a stays`, `\a stays`},
+		{"`\\[x\\]` literal", `\[x\] literal`},
+		{"\\`not code\\` **bold**", "`not code` bold"},
+		{`\[label\](url)`, "[label](url)"},
+		{"plain **bold**", "plain bold"},
+	}
+	for _, c := range cases {
+		if got := stripInlineMarkupUnescaped(c.in); got != c.want {
+			t.Errorf("stripInlineMarkupUnescaped(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+	// stripInlineMarkup itself keeps escapes, so fingerprints stay stable.
+	if got := stripInlineMarkup(`\[x\]`); got != `\[x\]` {
+		t.Errorf("stripInlineMarkup must keep escapes, got %q", got)
+	}
+}
+
+// TestResolveAnchor_BackslashEscapes (#370): the editor saves `[新]` as
+// `\[新\]`, while the snippet/heading_path are authored from rendered text.
+func TestResolveAnchor_BackslashEscapes(t *testing.T) {
+	content := "# Title\n\n## 一覧 \\[新\\]\n\n| a | precheck の各行に \\[新\\] / \\[旧\\] を付ける |\n\n```sh\necho \"x\" \\[y\\]\n```\n"
+
+	lr, ok := ResolveAnchor(content, Anchor{
+		Snippet:     "precheck の各行に [新] / [旧] を付ける",
+		HeadingPath: []string{"# Title", "## 一覧 [新]"},
+	})
+	if !ok || lr[0] != 5 {
+		t.Fatalf("escaped prose: want line 5, got %v ok=%v", lr, ok)
+	}
+
+	// Inside a fenced code block the backslash is literal in the editor too.
+	lr, ok = ResolveAnchor(content, Anchor{Snippet: `echo "x" \[y\]`})
+	if !ok || lr[0] != 8 {
+		t.Fatalf("code block literal: want line 8, got %v ok=%v", lr, ok)
+	}
+
+	// Display fallback (heading_path changed) also sees through escapes.
+	a, lr, ok := ResolveAnchorForDisplay(content, Anchor{
+		Snippet:     "precheck の各行に [新] / [旧] を付ける",
+		HeadingPath: []string{"## 存在しない見出し"},
+	})
+	if !ok || lr[0] != 5 {
+		t.Fatalf("display fallback: want line 5, got %v ok=%v anchor=%+v", lr, ok, a)
+	}
+}
+
+// TestResolveAnchor_EscapedCodeDoesNotShadowProse (#370): an escape inside a
+// fence is literal, so the fenced `a \[x\]` must not count as an occurrence of
+// the prose `a [x]` that follows it (the frontend does not count it either).
+func TestResolveAnchor_EscapedCodeDoesNotShadowProse(t *testing.T) {
+	content := "# T\n\n```text\na \\[x\\]\n```\n\na [x]\n\n    b \\[y\\]\n"
+
+	lr, ok := ResolveAnchor(content, Anchor{Snippet: "a [x]", HeadingPath: []string{"# T"}})
+	if !ok || lr[0] != 7 {
+		t.Fatalf("prose: want line 7, got %v ok=%v", lr, ok)
+	}
+	if _, ok := ResolveAnchor(content, Anchor{Snippet: "a [x]", Occurrence: 1}); ok {
+		t.Fatal("the fenced line must not be a second occurrence")
+	}
+	// Indented code keeps the backslash too.
+	if _, ok := ResolveAnchor(content, Anchor{Snippet: "b [y]"}); ok {
+		t.Fatal("indented code must not match the unescaped snippet")
+	}
+	if lr, ok := ResolveAnchor(content, Anchor{Snippet: `b \[y\]`}); !ok || lr[0] != 9 {
+		t.Fatalf("indented code literal: want line 9, got %v ok=%v", lr, ok)
+	}
+}
