@@ -10,12 +10,13 @@ import Paper from "@mui/material/Paper";
 import Button from "@mui/material/Button";
 import Menu from "@mui/material/Menu";
 import MenuItem from "@mui/material/MenuItem";
+import ListItemIcon from "@mui/material/ListItemIcon";
+import ListItemText from "@mui/material/ListItemText";
 import Tabs from "@mui/material/Tabs";
 import Tab from "@mui/material/Tab";
 import Chip from "@mui/material/Chip";
 import CloseIcon from "@mui/icons-material/Close";
 import Tooltip from "@mui/material/Tooltip";
-import Badge from "@mui/material/Badge";
 import Typography from "@mui/material/Typography";
 import SaveIcon from "@mui/icons-material/Save";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
@@ -24,11 +25,11 @@ import MenuOpenIcon from "@mui/icons-material/MenuOpen";
 import MenuIcon from "@mui/icons-material/Menu";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import CommentIcon from "@mui/icons-material/Comment";
-import FormatAlignCenterIcon from "@mui/icons-material/FormatAlignCenter";
-import FormatListNumberedIcon from "@mui/icons-material/FormatListNumbered";
-import UnfoldMoreIcon from "@mui/icons-material/UnfoldMore";
 import CompareArrowsIcon from "@mui/icons-material/CompareArrows";
 import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
+import MoreHorizIcon from "@mui/icons-material/MoreHoriz";
+import ArrowDropDownIcon from "@mui/icons-material/ArrowDropDown";
+import CheckIcon from "@mui/icons-material/Check";
 import { TiptapEditor } from "@/components/tiptap/TiptapEditor";
 import {
   Sidebar,
@@ -49,8 +50,8 @@ import { useDirChangeWatcher } from "@/hooks/useDirChangeWatcher";
 import { useChangedPaths } from "@/hooks/useChangedPaths";
 import { useServerEvents } from "@/hooks/useServerEvents";
 import { useAgentStatus } from "@/hooks/useAgentStatus";
+import { openCommentIds, unsentCount } from "@/utils/agentActivity";
 import { AgentStatusIndicator } from "@/components/AgentStatusIndicator";
-import { pulseSx } from "@/components/pulseSx";
 import { useServerConnection } from "@/hooks/useServerConnection";
 import { useConfirm } from "@/hooks/useConfirm";
 import { selectionMarkdownOf } from "@/components/tiptap/toolbar/selectionCopy";
@@ -105,10 +106,7 @@ import {
 } from "@/components/tiptap/extensions/CommentHighlight";
 import { popoverFrame } from "@/utils/popoverFrame";
 import { scrollTableIntoView } from "@/utils/scrollTableIntoView";
-import type {
-  ComposerMode,
-  ComposerSubmit,
-} from "@/components/CommentComposerPopover";
+import type { ComposerMode, ComposerSubmit } from "@/components/CommentComposerPopover";
 import { BAR_HEIGHT, TAB_CONTENT_HEIGHT } from "@/theme/dimensions";
 
 function basename(path: string): string {
@@ -153,7 +151,10 @@ function buildTargetSnippet(raw: string): string {
 /** Shallow key/value equality for the anchorTops map (#298): avoids a state
  *  update — and the render + effect cascade it triggers — when a recompute
  *  produced the same positions as last time. */
-function shallowEqualRecord(a: Record<string, number>, b: Record<string, number>): boolean {
+function shallowEqualRecord(
+  a: Record<string, number>,
+  b: Record<string, number>
+): boolean {
   const aKeys = Object.keys(a);
   const bKeys = Object.keys(b);
   if (aKeys.length !== bKeys.length) return false;
@@ -185,7 +186,10 @@ function findScrollableAncestor(el: HTMLElement | null): HTMLElement | null {
   while (node) {
     const style = window.getComputedStyle(node);
     const overflowY = style.overflowY;
-    if ((overflowY === "auto" || overflowY === "scroll") && node.scrollHeight > node.clientHeight) {
+    if (
+      (overflowY === "auto" || overflowY === "scroll") &&
+      node.scrollHeight > node.clientHeight
+    ) {
       return node;
     }
     node = node.parentElement;
@@ -210,8 +214,7 @@ export function EditorPage() {
   // The ad-hoc root (#240) holds exactly one file, so there is no tree to
   // browse: the sidebar stays collapsed and its hover/open affordances are
   // switched off rather than opening an empty panel.
-  const isEphemeralRoot =
-    roots.find((r) => r.name === activeRoot)?.ephemeral === true;
+  const isEphemeralRoot = roots.find((r) => r.name === activeRoot)?.ephemeral === true;
 
   // #219: `isSidebarOpen` now only tracks the transient hover overlay (see
   // useUIStore.ts). Whether the sidebar is visible at all is `isSidebarShown`
@@ -389,9 +392,6 @@ export function EditorPage() {
   const [commentsLoadedForPath, setCommentsLoadedForPath] = useState<string | null>(null);
   const [commentsRefresh, setCommentsRefresh] = useState(0);
   const reviewActive = reviewState === "review";
-  // Once every comment is resolved there's no open review work left, so the
-  // "review 中" indicator is hidden. Diff/history stay available.
-  const hasOpenComments = comments.some((c) => c.status === "open");
 
   const activePath = activeFile?.path;
   const activeFileRoot = activeFile?.root;
@@ -405,7 +405,13 @@ export function EditorPage() {
     !reviewActive || commentsLoadedForPath === activePath
   );
   const agentBusy = agentActivity.status?.state === "busy";
-  const newAgentReplyCount = [...agentActivity.newReplies.values()].reduce((a, b) => a + b, 0);
+  const newAgentReplyCount = [...agentActivity.newReplies.values()].reduce(
+    (a, b) => a + b,
+    0
+  );
+  const unsentToAi = unsentCount(agentActivity.sentIds, comments);
+  const [fileMenuAnchor, setFileMenuAnchor] = useState<HTMLElement | null>(null);
+  const [viewMenuAnchor, setViewMenuAnchor] = useState<HTMLElement | null>(null);
 
   // The *currently* active tab's key, read fresh from the store rather than
   // the `activeFile` closure above. Used by the sweep effect to guard
@@ -475,59 +481,61 @@ export function EditorPage() {
    * tab's dirty marker already reports the state. The only thing it speaks up
    * about is a write it refused or failed.
    */
-  const autosave = useCallback(async (fileId: string): Promise<boolean> => {
-    const file = useOpenFiles.getState().files.find((f) => f.id === fileId);
-    if (!file) return false;
-    if (!file.isDirty) return true;
-    // Fail-closed backstop (#293), independent of the onUpdate gate that
-    // sets `isDirty` in the first place: never write a buffer to disk that
-    // the user never actually typed/pasted/toolbar-edited into, even if
-    // some other bug left it dirty. Nothing was lost — the buffer just
-    // never diverged from the user's intent — so this is reported as
-    // "already clean" rather than a failure.
-    if (!file.userEdited) return true;
-    if (autosaveInFlight.current.has(fileId)) return false;
-    // An un-reconciled external change means there is no baseline we can
-    // honestly claim to be building on. Overwriting it is a decision, so leave
-    // it to the explicit save (which prompts) and keep the buffer dirty.
-    if (file.ignoredExternal) return false;
-    const content = file.markdown;
-    autosaveInFlight.current.add(fileId);
-    try {
-      const res = await writeFile.mutateAsync({
-        path: file.path,
-        content,
-        root: file.root,
-        ifMatch: file.serverSha,
-      });
-      // `content`, not the current buffer: the user may have typed on while
-      // this request was out, and those keystrokes are not on disk yet.
-      markFileSaved(file.id, content, res.modified, res.created, res.sha);
-      // This write is our own; don't let the tree watcher report its echo as
-      // an external change (see handleSave).
-      clearChanged(file.root, file.path);
-      registerSelfWrite(file.root, file.path, res.modified);
-      return true;
-    } catch (err) {
-      if (err instanceof HTTPError && err.response.status === 412) {
-        // No modal mid-typing: say what happened and let the user decide via
-        // the save button (which prompts for the overwrite).
+  const autosave = useCallback(
+    async (fileId: string): Promise<boolean> => {
+      const file = useOpenFiles.getState().files.find((f) => f.id === fileId);
+      if (!file) return false;
+      if (!file.isDirty) return true;
+      // Fail-closed backstop (#293), independent of the onUpdate gate that
+      // sets `isDirty` in the first place: never write a buffer to disk that
+      // the user never actually typed/pasted/toolbar-edited into, even if
+      // some other bug left it dirty. Nothing was lost — the buffer just
+      // never diverged from the user's intent — so this is reported as
+      // "already clean" rather than a failure.
+      if (!file.userEdited) return true;
+      if (autosaveInFlight.current.has(fileId)) return false;
+      // An un-reconciled external change means there is no baseline we can
+      // honestly claim to be building on. Overwriting it is a decision, so leave
+      // it to the explicit save (which prompts) and keep the buffer dirty.
+      if (file.ignoredExternal) return false;
+      const content = file.markdown;
+      autosaveInFlight.current.add(fileId);
+      try {
+        const res = await writeFile.mutateAsync({
+          path: file.path,
+          content,
+          root: file.root,
+          ifMatch: file.serverSha,
+        });
+        // `content`, not the current buffer: the user may have typed on while
+        // this request was out, and those keystrokes are not on disk yet.
+        markFileSaved(file.id, content, res.modified, res.created, res.sha);
+        // This write is our own; don't let the tree watcher report its echo as
+        // an external change (see handleSave).
+        clearChanged(file.root, file.path);
+        registerSelfWrite(file.root, file.path, res.modified);
+        return true;
+      } catch (err) {
+        if (err instanceof HTTPError && err.response.status === 412) {
+          // No modal mid-typing: say what happened and let the user decide via
+          // the save button (which prompts for the overwrite).
+          showToast(
+            `「${file.name}」はエディタ外で変更されているため自動保存を中止しました。保存ボタンで上書きできます`,
+            "warning"
+          );
+          return false;
+        }
         showToast(
-          `「${file.name}」はエディタ外で変更されているため自動保存を中止しました。保存ボタンで上書きできます`,
-          "warning"
+          `自動保存に失敗しました: ${(err as Error).message ?? "unknown error"}`,
+          "error"
         );
         return false;
+      } finally {
+        autosaveInFlight.current.delete(fileId);
       }
-      showToast(
-        `自動保存に失敗しました: ${(err as Error).message ?? "unknown error"}`,
-        "error"
-      );
-      return false;
-    } finally {
-      autosaveInFlight.current.delete(fileId);
-    }
-  }, [writeFile, markFileSaved, clearChanged, registerSelfWrite, showToast]);
-
+    },
+    [writeFile, markFileSaved, clearChanged, registerSelfWrite, showToast]
+  );
 
   const closeFile = (id: string) => {
     // Flush before closing (#265) so a tab closed within the debounce
@@ -557,7 +565,9 @@ export function EditorPage() {
     const target = useOpenFiles.getState().files.find((f) => f.id === id);
     const closed = (() => {
       if (!target) return [];
-      const sameRoot = useOpenFiles.getState().files.filter((f) => f.root === target.root);
+      const sameRoot = useOpenFiles
+        .getState()
+        .files.filter((f) => f.root === target.root);
       const index = sameRoot.findIndex((f) => f.id === id);
       return index === -1 ? [] : sameRoot.slice(index + 1);
     })();
@@ -1143,10 +1153,7 @@ export function EditorPage() {
       useEditorInstance.getState().flushPendingMarkdown();
       const saved = await autosave(fileId);
       if (!saved) {
-        showToast(
-          "未保存の変更を保存できなかったため、復元を中止しました",
-          "error"
-        );
+        showToast("未保存の変更を保存できなかったため、復元を中止しました", "error");
         return;
       }
 
@@ -1506,10 +1513,7 @@ export function EditorPage() {
     | { kind: "measured"; top: number }
     | { kind: "unmeasurable" }
     | { kind: "unresolvable" };
-  const measureAnchor = (
-    c: CommentJSON,
-    blocks: AnchorBlock[]
-  ): AnchorMeasurement => {
+  const measureAnchor = (c: CommentJSON, blocks: AnchorBlock[]): AnchorMeasurement => {
     if (!editor || editor.isDestroyed) return { kind: "unmeasurable" };
     const first = firstAnchorPosInBlocks(blocks, c);
     if (first === null) return { kind: "unresolvable" };
@@ -1585,7 +1589,9 @@ export function EditorPage() {
     let blocks: AnchorBlock[] | null = null;
     for (const c of comments) {
       if (c.scope === "global" || c.orphan) continue;
-      const el = root.querySelector<HTMLElement>(`[data-comment-id="${CSS.escape(c.id)}"]`);
+      const el = root.querySelector<HTMLElement>(
+        `[data-comment-id="${CSS.escape(c.id)}"]`
+      );
       if (el) {
         next[c.id] = el.getBoundingClientRect().top;
         continue;
@@ -1741,8 +1747,7 @@ export function EditorPage() {
         pos = null; // no layout (jsdom) — fall back to the DOM below
       }
       const { from, to, empty } = editor.state.selection;
-      const canAdd =
-        !empty && from !== to && !!pos && pos.pos >= from && pos.pos <= to;
+      const canAdd = !empty && from !== to && !!pos && pos.pos >= from && pos.pos <= to;
       if (!canAdd) return null;
       return {
         canAdd,
@@ -2278,7 +2283,10 @@ export function EditorPage() {
     const { id, frames } = pendingReveal;
     const target = comments.find((c) => c.id === id);
     const waitsForRail =
-      commentRailMode !== "list" && !!target && target.scope !== "global" && !target.orphan;
+      commentRailMode !== "list" &&
+      !!target &&
+      target.scope !== "global" &&
+      !target.orphan;
     // No aligned rail mounted (it registers itself on mount, before this
     // runs), or one that cannot place the card at all, means there is nothing
     // to wait for.
@@ -2286,7 +2294,12 @@ export function EditorPage() {
     const answer = reveal === null ? null : reveal(id);
     // Otherwise two frames at least: one for the selection's render, one for
     // the card measurements it triggers to feed back into the layout.
-    if (waitsForRail && answer !== null && (frames < 2 || answer === undefined) && frames < 30) {
+    if (
+      waitsForRail &&
+      answer !== null &&
+      (frames < 2 || answer === undefined) &&
+      frames < 30
+    ) {
       const raf = requestAnimationFrame(() =>
         setPendingReveal((p) => (p && p.id === id ? { ...p, frames: p.frames + 1 } : p))
       );
@@ -2362,7 +2375,6 @@ export function EditorPage() {
     }, AUTOSAVE_IDLE_MS);
     return () => window.clearTimeout(timer);
   }, [activeFileIdForSave, activeFileDirty, activeFileMarkdown, autosave]);
-
 
   const handleSave = async () => {
     if (!activeFile) return;
@@ -2500,9 +2512,13 @@ export function EditorPage() {
       }
       if (saved) {
         try {
+          // #366: what the AI will read is fixed here, before the round trip.
+          // A comment written while the request is in flight may reach the
+          // AI or not, so it stays "unsent" rather than claim a reply.
+          const handedOver = openCommentIds(comments);
           const result = await sendReviewCommand(activeFile.path, activeFile.root);
           if (result.sent) {
-            agentActivity.markSent();
+            agentActivity.markSent(handedOver);
             showToast(
               `コメント確認コマンドを送信しました${result.session_name ? `: ${result.session_name}` : ""}`,
               "success"
@@ -2544,10 +2560,7 @@ export function EditorPage() {
       "error"
     );
 
-  const openComposer = (
-    next: NonNullable<typeof composer>,
-    initialDraft = ""
-  ) => {
+  const openComposer = (next: NonNullable<typeof composer>, initialDraft = "") => {
     hoverKey.current = null;
     setHoverTarget(null);
     composerDraftRef.current = initialDraft;
@@ -2680,7 +2693,14 @@ export function EditorPage() {
         // yet. The anchor comes from the live doc, so it resolves once saved.
         await createComment(
           path,
-          { scope: "inline", body, author, date, anchor: anchors[0], anchors: anchors.slice(1) },
+          {
+            scope: "inline",
+            body,
+            author,
+            date,
+            anchor: anchors[0],
+            anchors: anchors.slice(1),
+          },
           root,
           true
         );
@@ -2771,6 +2791,12 @@ export function EditorPage() {
   // jump target is now resolved from the comment's own anchor(s) via
   const canSave = Boolean(activeFile);
   const isSaving = writeFile.isPending;
+  // The mutation is shared by every open file (closing a dirty tab saves it
+  // while another one shows), so "saving" must be about the file on screen.
+  const savingActive =
+    isSaving &&
+    writeFile.variables?.path === activeFile?.path &&
+    (writeFile.variables?.root ?? activeFile?.root) === activeFile?.root;
 
   return (
     <Box sx={{ display: "flex", height: "100vh", overflow: "hidden" }}>
@@ -2871,7 +2897,11 @@ export function EditorPage() {
             {/* #219: この 1 個のボタンがピン留めのトグル。マウスホバーだけ
                 がサイドバーへの唯一の導線にならないよう、開いている間は
                 常にここからクリックでピン留めの on/off ができる。 */}
-            <Tooltip title={sidebarPinned ? "サイドバーのピン留めを解除" : "サイドバーをピン留め"}>
+            <Tooltip
+              title={
+                sidebarPinned ? "サイドバーのピン留めを解除" : "サイドバーをピン留め"
+              }
+            >
               <IconButton
                 size="small"
                 onClick={handleTogglePin}
@@ -2932,6 +2962,10 @@ export function EditorPage() {
             height: BAR_HEIGHT,
             flexShrink: 0,
             boxSizing: "border-box",
+            // #366: the send button drops its label when the header itself
+            // is narrow, which the viewport width alone can't tell (the
+            // sidebar and comment pane take their own share).
+            containerType: "inline-size",
           }}
         >
           {/* #219: persistent keyboard/click entry point back into the
@@ -3043,6 +3077,18 @@ export function EditorPage() {
                 </Typography>
               </Tooltip>
             )}
+            {/* #366: autosave (#280) made the save button rarely needed, so the
+                header says where saving stands instead; saving on demand
+                moved into the file menu. */}
+            {activeFile && (
+              <Typography
+                variant="caption"
+                sx={{ color: "text.secondary", flexShrink: 0, whiteSpace: "nowrap" }}
+                data-testid="editor-save-state"
+              >
+                {savingActive ? "保存中" : activeFile.isDirty ? "未保存" : "保存済み"}
+              </Typography>
+            )}
             {activeFile && (activeFile.serverCreated || activeFile.serverModified) && (
               <Tooltip
                 title={
@@ -3050,9 +3096,7 @@ export function EditorPage() {
                     {activeFile.serverCreated && (
                       <>作成: {formatLocalTimestamp(activeFile.serverCreated)}</>
                     )}
-                    {activeFile.serverCreated && activeFile.serverModified && (
-                      <br />
-                    )}
+                    {activeFile.serverCreated && activeFile.serverModified && <br />}
                     {activeFile.serverModified && (
                       <>更新: {formatLocalTimestamp(activeFile.serverModified)}</>
                     )}
@@ -3068,40 +3112,56 @@ export function EditorPage() {
                 </IconButton>
               </Tooltip>
             )}
-            {activeFile && reviewState === "review" && hasOpenComments && (
-              <Typography
-                variant="caption"
-                sx={{ color: "success.main", flexShrink: 0, whiteSpace: "nowrap" }}
-                data-testid="editor-review-indicator"
-              >
-                レビュー中
-              </Typography>
-            )}
-            {activeFile && (
-              <AgentStatusIndicator
-                status={agentActivity.status}
-                busySince={agentActivity.busySince}
-                newReplyCount={newAgentReplyCount}
-                onShowReplies={() => {
-                  const first = comments.find((c) => agentActivity.newReplies.has(c.id));
-                  agentActivity.acknowledge();
-                  if (!first) return;
-                  handleSelectComment(first.id);
-                  // The button disappears once acknowledged, so hand keyboard
-                  // focus to the card. It may only mount after the rail lays
-                  // out the selection; give it a few frames, then give up.
-                  const selector = `[data-testid="comment-item"][data-comment-id="${CSS.escape(first.id)}"]`;
-                  let frames = 0;
-                  const focusCard = () => {
-                    const card = document.querySelector<HTMLElement>(selector);
-                    if (card) card.focus({ preventScroll: true });
-                    else if (++frames < 10) requestAnimationFrame(focusCard);
-                  };
-                  requestAnimationFrame(focusCard);
-                }}
-              />
-            )}
           </Box>
+          {/* Outside the box above, which clips when the header is narrow:
+              this menu is the only way to copy or save on demand. */}
+          {activeFile && (
+            <>
+              <Tooltip title="ファイルの操作">
+                <IconButton
+                  size="small"
+                  sx={{ flexShrink: 0 }}
+                  onClick={(e) => setFileMenuAnchor(e.currentTarget)}
+                  aria-label="file actions"
+                  aria-haspopup="menu"
+                  data-testid="editor-file-menu"
+                >
+                  <MoreHorizIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+              <Menu
+                anchorEl={fileMenuAnchor}
+                open={fileMenuAnchor !== null}
+                onClose={() => setFileMenuAnchor(null)}
+              >
+                <MenuItem
+                  onClick={() => {
+                    setFileMenuAnchor(null);
+                    void handleCopyMarkdown();
+                  }}
+                  data-testid="editor-copy-markdown"
+                >
+                  <ListItemIcon>
+                    <ContentCopyIcon fontSize="small" />
+                  </ListItemIcon>
+                  <ListItemText>Markdown をコピー</ListItemText>
+                </MenuItem>
+                <MenuItem
+                  disabled={!canSave || isSaving}
+                  onClick={() => {
+                    setFileMenuAnchor(null);
+                    void handleSave();
+                  }}
+                  data-testid="editor-save"
+                >
+                  <ListItemIcon>
+                    <SaveIcon fontSize="small" />
+                  </ListItemIcon>
+                  <ListItemText>今すぐ保存</ListItemText>
+                </MenuItem>
+              </Menu>
+            </>
+          )}
           {/* No explicit "取り込む" action: a file is ingested transparently the
               first time the user comments on it (see handleIngest / ingestThenOpen).
               Ingesting is internal bookkeeping the user shouldn't have to think about. */}
@@ -3129,80 +3189,134 @@ export function EditorPage() {
               </IconButton>
             </span>
           </Tooltip>
-          <Tooltip title={centered ? "全幅表示に切替" : "中央寄せに切替"}>
-            <IconButton
-              size="small"
+          <Button
+            size="small"
+            variant="outlined"
+            color="inherit"
+            endIcon={<ArrowDropDownIcon />}
+            onClick={(e) => setViewMenuAnchor(e.currentTarget)}
+            aria-haspopup="menu"
+            data-testid="editor-view-menu"
+            sx={{
+              flexShrink: 0,
+              minWidth: 0,
+              py: 0,
+              color: "text.secondary",
+              borderColor: "divider",
+            }}
+          >
+            表示
+          </Button>
+          <Menu
+            anchorEl={viewMenuAnchor}
+            open={viewMenuAnchor !== null}
+            onClose={() => setViewMenuAnchor(null)}
+            anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
+            transformOrigin={{ vertical: "top", horizontal: "right" }}
+          >
+            <MenuItem
               onClick={toggleCentered}
-              aria-label="toggle width"
+              role="menuitemcheckbox"
+              aria-checked={centered}
               data-testid="editor-toggle-width"
             >
-              {centered ? (
-                <UnfoldMoreIcon fontSize="small" sx={{ transform: "rotate(90deg)" }} />
-              ) : (
-                <FormatAlignCenterIcon fontSize="small" />
-              )}
-            </IconButton>
-          </Tooltip>
-          <Tooltip title={showLineNumbers ? "行番号を非表示" : "行番号を表示"}>
-            <IconButton
-              size="small"
+              <ListItemIcon>{centered && <CheckIcon fontSize="small" />}</ListItemIcon>
+              <ListItemText>中央寄せ</ListItemText>
+            </MenuItem>
+            <MenuItem
               onClick={toggleLineNumbers}
-              aria-label="toggle line numbers"
-              color={showLineNumbers ? "primary" : "default"}
+              role="menuitemcheckbox"
+              aria-checked={showLineNumbers}
               data-testid="editor-toggle-line-numbers"
             >
-              <FormatListNumberedIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-          <Tooltip title="AI にコメント確認コマンドを送信（送信できない場合はコピー）">
-            <span>
-              <IconButton
-                size="small"
-                onClick={handleCopyReviewCommand}
-                disabled={!activeFile}
-                aria-label="copy review command"
-                data-testid="editor-copy-review-command"
-              >
-                {/* #360: orange while the AI is replying, green once new
-                    replies are in. Overlaid, so the icon row doesn't move. */}
-                <Badge
-                  variant="dot"
-                  color={agentBusy ? "warning" : "success"}
-                  invisible={!agentBusy && newAgentReplyCount === 0}
-                  sx={agentBusy ? { "& .MuiBadge-badge": pulseSx } : undefined}
-                  data-testid="editor-agent-badge"
+              <ListItemIcon>
+                {showLineNumbers && <CheckIcon fontSize="small" />}
+              </ListItemIcon>
+              <ListItemText>行番号</ListItemText>
+            </MenuItem>
+          </Menu>
+          {/* #366: the send button and what became of the send sit together,
+              so the result shows where the click was made. */}
+          <Box sx={{ display: "flex", alignItems: "center", flexShrink: 0 }}>
+            <Tooltip title="AI にコメント確認コマンドを送信（送信できない場合はコピー）">
+              <Box component="span" sx={{ display: "inline-flex", flexShrink: 0 }}>
+                <Button
+                  size="small"
+                  variant="contained"
+                  disableElevation
+                  startIcon={<RateReviewOutlinedIcon fontSize="small" />}
+                  onClick={handleCopyReviewCommand}
+                  disabled={!activeFile}
+                  aria-label="copy review command"
+                  data-testid="editor-copy-review-command"
+                  sx={{ py: 0.25, whiteSpace: "nowrap" }}
                 >
-                  <RateReviewOutlinedIcon fontSize="small" />
-                </Badge>
-              </IconButton>
-            </span>
-          </Tooltip>
-          <Tooltip title="表示中の素の Markdown をクリップボードにコピー">
-            <span>
-              <IconButton
-                size="small"
-                onClick={handleCopyMarkdown}
-                disabled={!activeFile}
-                aria-label="copy raw markdown"
-                data-testid="editor-copy-markdown"
-              >
-                <ContentCopyIcon fontSize="small" />
-              </IconButton>
-            </span>
-          </Tooltip>
-          <Tooltip title={isSaving ? "保存中..." : "保存"}>
-            <span>
-              <IconButton
-                size="small"
-                onClick={handleSave}
-                disabled={!canSave || isSaving}
-                aria-label="save"
-                data-testid="editor-save"
-              >
-                <SaveIcon fontSize="small" />
-              </IconButton>
-            </span>
-          </Tooltip>
+                  <Box
+                    component="span"
+                    sx={{ "@container (max-width: 600px)": { display: "none" } }}
+                  >
+                    AI へ送信
+                  </Box>
+                  {unsentToAi !== null && unsentToAi > 0 && (
+                    <Box
+                      component="span"
+                      data-testid="editor-unsent-count"
+                      sx={{
+                        ml: 0.75,
+                        px: 0.75,
+                        borderRadius: 1,
+                        bgcolor: "background.paper",
+                        color: "primary.main",
+                        fontSize: "0.7rem",
+                        lineHeight: 1.6,
+                      }}
+                    >
+                      未送信 {unsentToAi}
+                    </Box>
+                  )}
+                </Button>
+              </Box>
+            </Tooltip>
+          </Box>
+          {/* Only the status shrinks: a narrow header clips it instead of
+              running into the comment pane, and the send button stays whole. */}
+          <Box
+            sx={{
+              display: "flex",
+              alignItems: "center",
+              flexShrink: 1,
+              minWidth: 0,
+              overflow: "hidden",
+            }}
+          >
+            {activeFile && (
+              <AgentStatusIndicator
+                status={agentActivity.status}
+                busySince={agentActivity.busySince}
+                sentCount={
+                  agentActivity.sentByUs ? (agentActivity.sentIds?.size ?? null) : null
+                }
+                newReplyCount={newAgentReplyCount}
+                onShowReplies={() => {
+                  const first = comments.find((c) => agentActivity.newReplies.has(c.id));
+                  agentActivity.acknowledge();
+                  if (!first) return;
+                  handleSelectComment(first.id);
+                  // The button disappears once acknowledged, so hand keyboard
+                  // focus to the card. It may only mount after the rail lays
+                  // out the selection; give it a few frames, then give up.
+                  const selector = `[data-testid="comment-item"][data-comment-id="${CSS.escape(first.id)}"]`;
+                  let frames = 0;
+                  const focusCard = () => {
+                    const card = document.querySelector<HTMLElement>(selector);
+                    if (card) card.focus({ preventScroll: true });
+                    else if (++frames < 10) requestAnimationFrame(focusCard);
+                  };
+                  requestAnimationFrame(focusCard);
+                }}
+              />
+            )}
+          </Box>
           {/* #119 case 4: shown only after the SSE channel has connected at
               least once and then dropped, so a poll-based fallback is
               actually in play — never flashes on initial mount / in
@@ -3315,8 +3429,7 @@ export function EditorPage() {
                   ...(isSibling && {
                     // Inset frame so the colored border doesn't shift layout
                     // or fight the existing 1px right/bottom borders.
-                    boxShadow: (theme) =>
-                      `inset 0 0 0 2px ${theme.palette.info.main}`,
+                    boxShadow: (theme) => `inset 0 0 0 2px ${theme.palette.info.main}`,
                   }),
                   ...(isReview && {
                     "&::before": {
@@ -3512,6 +3625,7 @@ export function EditorPage() {
           onRailModeChange={setCommentRailMode}
           agentReplying={agentBusy && agentActivity.sentByUs}
           agentNewReplies={agentActivity.newReplies}
+          agentSentIds={agentActivity.sentIds}
         />
       </Box>
 

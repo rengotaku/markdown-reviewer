@@ -198,7 +198,11 @@ function CollapsibleText({
   stickyToggle?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const [overflowing, setBodyEl, bodyEl] = useClampOverflow(!clampDisabled, clampHeight, text);
+  const [overflowing, setBodyEl, bodyEl] = useClampOverflow(
+    !clampDisabled,
+    clampHeight,
+    text
+  );
   const measured = measureOverflow && !clampDisabled;
   const long = !clampDisabled && (overflowing ?? text.length > BODY_PREVIEW_LIMIT);
   const collapsed = long && !expanded;
@@ -431,6 +435,8 @@ interface Props {
   agentReplying?: boolean;
   /** New AI replies per comment id since that work began (#360). */
   agentNewReplies?: ReadonlyMap<string, number>;
+  /** Open comment ids that send handed over (#366); null before any send. */
+  agentSentIds?: ReadonlySet<string> | null;
 }
 
 const NO_NEW_REPLIES: ReadonlyMap<string, number> = new Map();
@@ -467,7 +473,12 @@ interface CardDraft {
   editBody: string;
 }
 
-const EMPTY_DRAFT: CardDraft = { replyOpen: false, replyBody: "", editOpen: false, editBody: "" };
+const EMPTY_DRAFT: CardDraft = {
+  replyOpen: false,
+  replyBody: "",
+  editOpen: false,
+  editBody: "",
+};
 
 /** Nothing worth keeping: both forms closed and no reply text (a closed edit
  *  form's text is discarded anyway — startEdit reloads the comment body). */
@@ -526,10 +537,15 @@ export function CommentSidePane({
   railRevealRef,
   agentReplying = false,
   agentNewReplies = NO_NEW_REPLIES,
+  agentSentIds = null,
 }: Props) {
   const agentActivity = useMemo<AgentCardActivity>(
-    () => ({ replying: agentReplying, newReplies: agentNewReplies }),
-    [agentReplying, agentNewReplies]
+    () => ({
+      replying: agentReplying,
+      newReplies: agentNewReplies,
+      sentIds: agentSentIds,
+    }),
+    [agentReplying, agentNewReplies, agentSentIds]
   );
   const canCopyLink = Boolean(root && filePath);
   const handleCopyLink = async (id: string) => {
@@ -592,7 +608,8 @@ export function CommentSidePane({
         .filter((c) => !(c.scope === "global" || hasNoLiveAnchor(c)))
         .sort(
           (a, b) =>
-            (a.context?.line_range[0] ?? Infinity) - (b.context?.line_range[0] ?? Infinity)
+            (a.context?.line_range[0] ?? Infinity) -
+            (b.context?.line_range[0] ?? Infinity)
         ),
     [visible, hasNoLiveAnchor]
   );
@@ -618,7 +635,8 @@ export function CommentSidePane({
   const [selectionSettled, setSelectionSettled] = useState(selectedId);
   if (selectedId !== selectionSettled) {
     const target = selectedId ? comments.find((c) => c.id === selectedId) : undefined;
-    const noLiveAnchor = !!target && (target.scope === "global" || hasNoLiveAnchor(target));
+    const noLiveAnchor =
+      !!target && (target.scope === "global" || hasNoLiveAnchor(target));
     if (!selectedId || noLiveAnchor || (target && Object.hasOwn(anchorTops, target.id))) {
       setSelectionSettled(selectedId);
     }
@@ -646,7 +664,9 @@ export function CommentSidePane({
   // id can come back on a different comment — which must not open with the old
   // one's reply, or an edit that would overwrite the new body. A draft whose
   // comment is no longer listed goes.
-  const staleDraftIds = Object.keys(drafts).filter((id) => !comments.some((c) => c.id === id));
+  const staleDraftIds = Object.keys(drafts).filter(
+    (id) => !comments.some((c) => c.id === id)
+  );
   if (staleDraftIds.length > 0) setDrafts((prev) => omitKeys(prev, staleDraftIds));
   const cardDrafts = useMemo<CardDrafts>(
     () => ({
@@ -981,7 +1001,9 @@ export function CommentSidePane({
 
   return (
     <CardDraftsContext.Provider value={cardDrafts}>
-      <AgentActivityContext.Provider value={agentActivity}>{pane}</AgentActivityContext.Provider>
+      <AgentActivityContext.Provider value={agentActivity}>
+        {pane}
+      </AgentActivityContext.Provider>
     </CardDraftsContext.Provider>
   );
 }
@@ -1013,7 +1035,10 @@ interface CardProps {
 function scrollParent(el: HTMLElement): HTMLElement | null {
   for (let p = el.parentElement; p; p = p.parentElement) {
     const { overflowY } = getComputedStyle(p);
-    if ((overflowY === "auto" || overflowY === "scroll") && p.scrollHeight > p.clientHeight) {
+    if (
+      (overflowY === "auto" || overflowY === "scroll") &&
+      p.scrollHeight > p.clientHeight
+    ) {
       return p;
     }
   }
@@ -1070,7 +1095,12 @@ function CommentCard({
   const aiOwned = isAiAuthored(c.author);
   const agentActivity = useContext(AgentActivityContext);
   const newAiReplies = agentActivity.newReplies.get(c.id) ?? 0;
-  const awaitingAi = agentActivity.replying && !resolved;
+  // #366: only the comments the send handed over are being answered. One
+  // written after it says so instead, or it would wait on a reply that the
+  // AI, which never read it, is not writing.
+  const sentToAi = agentActivity.sentIds?.has(c.id) ?? false;
+  const awaitingAi = agentActivity.replying && sentToAi && !resolved;
+  const unsentToAi = agentActivity.replying && !sentToAi && !resolved;
 
   const [{ replyOpen, replyBody, editOpen, editBody }, updateDraft] = useCardDraft(c.id);
   // #334: focus a form only when the reader opens it. A draft's form also
@@ -1209,7 +1239,14 @@ function CommentCard({
             data-testid="comment-new-ai-replies"
           />
         )}
-        <Box sx={{ display: "flex", alignItems: "center", flexShrink: 0, ...ACTION_HOVER_SX }}>
+        <Box
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            flexShrink: 0,
+            ...ACTION_HOVER_SX,
+          }}
+        >
           {/* #364: reply / resolve / detail sit in the header on every card, so
             a non-selected card can be acted on without opening it first and
             the selected card no longer needs a row of its own for them. */}
@@ -1425,7 +1462,9 @@ function CommentCard({
                 autoFocus={focusForm}
                 inputProps={{ "data-testid": "comment-reply-input" }}
               />
-              <Box sx={{ display: "flex", justifyContent: "flex-end", gap: 0.5, mt: 0.5 }}>
+              <Box
+                sx={{ display: "flex", justifyContent: "flex-end", gap: 0.5, mt: 0.5 }}
+              >
                 <Button size="small" onClick={() => updateDraft({ replyOpen: false })}>
                   キャンセル
                 </Button>
@@ -1463,9 +1502,40 @@ function CommentCard({
         >
           <Box
             component="span"
-            sx={[{ width: 6, height: 6, borderRadius: "50%", bgcolor: "warning.main" }, pulseSx]}
+            sx={[
+              { width: 6, height: 6, borderRadius: "50%", bgcolor: "warning.main" },
+              pulseSx,
+            ]}
           />
           AI が確認中
+        </Typography>
+      )}
+      {unsentToAi && (
+        <Typography
+          variant="caption"
+          data-testid="comment-unsent-to-ai"
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            gap: 0.75,
+            mt: 0.75,
+            pl: 1,
+            borderLeft: "2px solid",
+            borderColor: "divider",
+            color: "text.secondary",
+          }}
+        >
+          <Box
+            component="span"
+            sx={{
+              width: 6,
+              height: 6,
+              borderRadius: "50%",
+              border: "1px solid",
+              borderColor: "text.secondary",
+            }}
+          />
+          未送信（次の送信で AI に届く）
         </Typography>
       )}
     </Box>
@@ -1479,10 +1549,7 @@ function ReplyPreview({ replies }: { replies: ReadonlyArray<CommentReply> }) {
   const shown = replies.slice(-REPLY_PREVIEW_COUNT);
   const rest = replies.length - shown.length;
   return (
-    <Box
-      data-testid="comment-reply-preview"
-      sx={{ mt: 0.75 }}
-    >
+    <Box data-testid="comment-reply-preview" sx={{ mt: 0.75 }}>
       {rest > 0 && (
         <Typography
           variant="caption"
@@ -1545,7 +1612,12 @@ function CommentList({ comments, selectedId, ...cardProps }: CommentListProps) {
       sx={{ flex: 1, minHeight: 0, overflowY: "auto" }}
     >
       {comments.map((c) => (
-        <CommentCard key={c.id} comment={c} selected={c.id === selectedId} {...cardProps} />
+        <CommentCard
+          key={c.id}
+          comment={c}
+          selected={c.id === selectedId}
+          {...cardProps}
+        />
       ))}
     </Box>
   );
@@ -1681,7 +1753,11 @@ function AlignedCommentRail({
             anchorTops,
             selectedId
           )
-        : comments.map((c) => ({ kind: "card" as const, key: c.id, ids: [c.id] as [string] })),
+        : comments.map((c) => ({
+            kind: "card" as const,
+            key: c.id,
+            ids: [c.id] as [string],
+          })),
     [iconMode, comments, anchorTops, selectedId]
   );
   const entryByKey = useMemo(() => new Map(entries.map((e) => [e.key, e])), [entries]);
@@ -1730,7 +1806,9 @@ function AlignedCommentRail({
   const minTop =
     docBox === null
       ? undefined
-      : docBox.top + Math.max(0, paneBox.top - (docBox.top + docBox.scrollTop)) - paneBox.top;
+      : docBox.top +
+        Math.max(0, paneBox.top - (docBox.top + docBox.scrollTop)) -
+        paneBox.top;
   const layout = useMemo(
     () => layoutCommentRail(items, { paneTop: paneBox.top, minTop }),
     [items, paneBox.top, minTop]
@@ -1856,7 +1934,9 @@ function AlignedCard({
 
   useEffect(() => {
     if (!focusOnMount) return;
-    contentRef.current?.querySelector<HTMLElement>('[data-testid="comment-item"]')?.focus();
+    contentRef.current
+      ?.querySelector<HTMLElement>('[data-testid="comment-item"]')
+      ?.focus();
     onFocused?.();
   }, [focusOnMount, onFocused]);
 
@@ -1908,7 +1988,9 @@ function AlignedCard({
  *  raw source, whitespace collapsed (Markdown syntax left as typed). */
 function previewLine(body: string): string {
   const flat = body.replace(/\s+/g, " ").trim();
-  return flat.length > ICON_PREVIEW_CHARS ? `${flat.slice(0, ICON_PREVIEW_CHARS)}…` : flat;
+  return flat.length > ICON_PREVIEW_CHARS
+    ? `${flat.slice(0, ICON_PREVIEW_CHARS)}…`
+    : flat;
 }
 
 /** #332: one small icon standing for the comments anchored on one line,
@@ -2320,7 +2402,13 @@ export function CommentRow({
             </IconButton>
           </Tooltip>
         )}
-        <Tooltip title={canCopyLink ? "リンクをコピー" : "ファイルが開かれていないためコピーできません"}>
+        <Tooltip
+          title={
+            canCopyLink
+              ? "リンクをコピー"
+              : "ファイルが開かれていないためコピーできません"
+          }
+        >
           <span>
             <IconButton
               size="small"
@@ -2436,7 +2524,9 @@ function ReplyRow({
   // two can never collide when both render at once (comment open in detail
   // view while its thread is also visible in the side pane).
   const headerTestid =
-    outerTestid === "comment-reply" ? "comment-reply-header" : "comment-detail-reply-header";
+    outerTestid === "comment-reply"
+      ? "comment-reply-header"
+      : "comment-detail-reply-header";
 
   return (
     <Box sx={{ mb: 0.5 }} data-testid={outerTestid}>
@@ -2804,7 +2894,13 @@ export function CommentDetailDialog({
               </IconButton>
             </span>
           </Tooltip>
-          <Tooltip title={canCopyLink ? "リンクをコピー" : "ファイルが開かれていないためコピーできません"}>
+          <Tooltip
+            title={
+              canCopyLink
+                ? "リンクをコピー"
+                : "ファイルが開かれていないためコピーできません"
+            }
+          >
             <span>
               <IconButton
                 size="small"

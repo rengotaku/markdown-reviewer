@@ -371,14 +371,23 @@ describe("CommentSidePane", () => {
           .find((el) => el.dataset.selected === "true");
 
       it("opens the dialog on the global tab with the row marked", () => {
-        const comments = [pinned("g1"), pinned("g2"), comment("o1", { orphan: true, context: null })];
+        const comments = [
+          pinned("g1"),
+          pinned("g2"),
+          comment("o1", { orphan: true, context: null }),
+        ];
         const { rerender } = render(paneWith(comments, null));
         expect(screen.queryByTestId("global-comments-dialog")).toBeNull();
         rerender(paneWith(comments, "g2"));
-        expect(screen.getByTestId("global-comments-tab-global")).toHaveAttribute("aria-selected", "true");
+        expect(screen.getByTestId("global-comments-tab-global")).toHaveAttribute(
+          "aria-selected",
+          "true"
+        );
         expect(selectedRow()?.dataset.commentId).toBe("g2");
         // Marked in words too, not by the background colour alone.
-        expect(within(selectedRow()!).getByTestId("comment-linked-badge")).toHaveTextContent("リンク先");
+        expect(
+          within(selectedRow()!).getByTestId("comment-linked-badge")
+        ).toHaveTextContent("リンク先");
         expect(screen.getAllByTestId("comment-linked-badge")).toHaveLength(1);
       });
 
@@ -397,7 +406,10 @@ describe("CommentSidePane", () => {
         const comments = [pinned("g1"), comment("o1", { orphan: true, context: null })];
         const { rerender } = render(paneWith(comments, null));
         rerender(paneWith(comments, "o1"));
-        expect(screen.getByTestId("global-comments-tab-orphan")).toHaveAttribute("aria-selected", "true");
+        expect(screen.getByTestId("global-comments-tab-orphan")).toHaveAttribute(
+          "aria-selected",
+          "true"
+        );
         expect(selectedRow()?.dataset.commentId).toBe("o1");
       });
 
@@ -507,9 +519,10 @@ describe("CommentSidePane", () => {
         anchor: { heading_path: [], snippet: "生スニペット", occurrence: 0 },
       })
     );
-    expect(screen.getByTestId("comment-detail-context-c1")).toHaveTextContent("対象: 生スニペット");
+    expect(screen.getByTestId("comment-detail-context-c1")).toHaveTextContent(
+      "対象: 生スニペット"
+    );
   });
-
 
   // --- #147: Markdown rendering + header redesign (pre-designed spec A/B,
   // see issue brief). Do not delete/rename/loosen these assertions. ---
@@ -560,7 +573,17 @@ describe("CommentSidePane", () => {
       this: HTMLElement
     ) {
       const h = this.style.height === "3em" ? clampPx : 4000;
-      return { top: 0, left: 0, right: 300, bottom: h, width: 300, height: h, x: 0, y: 0, toJSON() {} } as DOMRect;
+      return {
+        top: 0,
+        left: 0,
+        right: 300,
+        bottom: h,
+        width: 300,
+        height: h,
+        x: 0,
+        y: 0,
+        toJSON() {},
+      } as DOMRect;
     });
     vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (
       this: HTMLElement
@@ -583,7 +606,8 @@ describe("CommentSidePane", () => {
     // setup.ts defines the global writable but not configurable, so assign
     // (vi.stubGlobal would redefine it) and put the original back after.
     const original = globalThis.ResizeObserver;
-    globalThis.ResizeObserver = ImmediateResizeObserver as unknown as typeof ResizeObserver;
+    globalThis.ResizeObserver =
+      ImmediateResizeObserver as unknown as typeof ResizeObserver;
     onTestFinished(() => {
       globalThis.ResizeObserver = original;
     });
@@ -621,7 +645,17 @@ describe("CommentSidePane", () => {
     stubRenderedHeight(400);
     // Clamp edge at 42px: the first link sits inside it, the second below.
     const rect = (top: number, height: number) =>
-      ({ top, left: 0, right: 300, bottom: top + height, width: 300, height, x: 0, y: top, toJSON() {} }) as DOMRect;
+      ({
+        top,
+        left: 0,
+        right: 300,
+        bottom: top + height,
+        width: 300,
+        height,
+        x: 0,
+        y: top,
+        toJSON() {},
+      }) as DOMRect;
     vi.mocked(HTMLElement.prototype.getBoundingClientRect).mockImplementation(function (
       this: HTMLElement
     ) {
@@ -631,7 +665,8 @@ describe("CommentSidePane", () => {
       if (this.textContent === "隠れるリンク") return rect(120, 16);
       return rect(0, 4000);
     });
-    const body = "[見えるリンク](https://a.example)\n\n本文\n\n本文\n\n[隠れるリンク](https://b.example)";
+    const body =
+      "[見えるリンク](https://a.example)\n\n本文\n\n本文\n\n[隠れるリンク](https://b.example)";
     renderPane({ comments: [comment("c1", { body })] });
     await waitFor(() =>
       expect(screen.getByTestId("comment-body")).toHaveAttribute("data-collapsed", "true")
@@ -678,7 +713,10 @@ describe("CommentSidePane", () => {
 
   it("#330: the selected card shows its body in full with no toggle, even past the preview limit", async () => {
     stubRenderedHeight(400);
-    renderPane({ comments: [comment("c1", { body: "あ".repeat(250) })], selectedId: "c1" });
+    renderPane({
+      comments: [comment("c1", { body: "あ".repeat(250) })],
+      selectedId: "c1",
+    });
     await act(async () => {});
     expect(screen.getByTestId("comment-body")).toHaveAttribute("data-collapsed", "false");
     expect(screen.queryByTestId("comment-body-toggle")).toBeNull();
@@ -973,7 +1011,9 @@ describe("CommentSidePane rail card selection (#308)", () => {
         comment("c1", {
           author: "kishira",
           date: "2026-05-20T10:00:00+09:00",
-          replies: [{ author: "ai", date: "2026-05-21T10:00:00+09:00", body: "reply body" }],
+          replies: [
+            { author: "ai", date: "2026-05-21T10:00:00+09:00", body: "reply body" },
+          ],
         }),
       ],
       selectedId: "c1",
@@ -984,7 +1024,9 @@ describe("CommentSidePane rail card selection (#308)", () => {
     expect(within(main).getByTestId("comment-edit")).toBeInTheDocument();
     expect(within(main).getByTestId("comment-delete")).toBeInTheDocument();
     expect(
-      within(within(item).getByTestId("comment-reply-header")).getByRole("img", { name: "ai" })
+      within(within(item).getByTestId("comment-reply-header")).getByRole("img", {
+        name: "ai",
+      })
     ).toBeInTheDocument();
     expect(item.textContent).not.toContain("2026-05-2");
   });
@@ -1231,11 +1273,11 @@ describe("CommentSidePane list mode (#333)", () => {
       onRailModeChange: vi.fn(),
     });
     const list = screen.getByTestId("comment-list");
-    expect(within(list).getAllByTestId("comment-id").map((el) => el.textContent)).toEqual([
-      "c1",
-      "c2",
-      "c3",
-    ]);
+    expect(
+      within(list)
+        .getAllByTestId("comment-id")
+        .map((el) => el.textContent)
+    ).toEqual(["c1", "c2", "c3"]);
     expect(screen.queryByTestId("comment-rail-aligned")).toBeNull();
     expect(screen.queryByTestId("comment-rail-below")).toBeNull();
     expect(screen.queryByTestId("comment-rail-above")).toBeNull();
@@ -1245,7 +1287,9 @@ describe("CommentSidePane list mode (#333)", () => {
     // Added bottom-first: the API returns c-late (line 40) before c-early (line 2).
     renderPane({
       comments: [
-        comment("c-late", { context: { heading_path: ["## Sec"], line_range: [40, 40] } }),
+        comment("c-late", {
+          context: { heading_path: ["## Sec"], line_range: [40, 40] },
+        }),
         comment("c-early", { context: { heading_path: ["## Sec"], line_range: [2, 5] } }),
         comment("c-mid", { context: { heading_path: ["## Sec"], line_range: [20, 20] } }),
       ],
@@ -1253,11 +1297,11 @@ describe("CommentSidePane list mode (#333)", () => {
       onRailModeChange: vi.fn(),
     });
     const list = screen.getByTestId("comment-list");
-    expect(within(list).getAllByTestId("comment-id").map((el) => el.textContent)).toEqual([
-      "c-early",
-      "c-mid",
-      "c-late",
-    ]);
+    expect(
+      within(list)
+        .getAllByTestId("comment-id")
+        .map((el) => el.textContent)
+    ).toEqual(["c-early", "c-mid", "c-late"]);
   });
 
   it("clicking a listed card selects it", async () => {
@@ -1267,7 +1311,9 @@ describe("CommentSidePane list mode (#333)", () => {
       railMode: "list",
       onRailModeChange: vi.fn(),
     });
-    const items = within(screen.getByTestId("comment-list")).getAllByTestId("comment-item");
+    const items = within(screen.getByTestId("comment-list")).getAllByTestId(
+      "comment-item"
+    );
     await user.click(items[1]);
     expect(h.onSelect).toHaveBeenCalledWith("c2");
   });
@@ -1422,7 +1468,9 @@ describe("CommentSidePane icon mode (#332)", () => {
       observe(el: Element) {
         // Only the card's own content box reports a height; other observers
         // (the body's overflow check) get a callback with nothing to read.
-        if ((el.parentElement as HTMLElement | null)?.dataset.testid !== "comment-rail-card") {
+        if (
+          (el.parentElement as HTMLElement | null)?.dataset.testid !== "comment-rail-card"
+        ) {
           this.cb([], this as unknown as ResizeObserver);
           return;
         }
@@ -1436,7 +1484,8 @@ describe("CommentSidePane icon mode (#332)", () => {
       disconnect() {}
     }
     const original = globalThis.ResizeObserver;
-    globalThis.ResizeObserver = ReportingResizeObserver as unknown as typeof ResizeObserver;
+    globalThis.ResizeObserver =
+      ReportingResizeObserver as unknown as typeof ResizeObserver;
     onTestFinished(() => {
       globalThis.ResizeObserver = original;
     });
@@ -1639,7 +1688,9 @@ describe("CommentSidePane drafts survive the card unmounting (#334)", () => {
     // adding again hands the same id to a different comment.
     const user = userEvent.setup();
     const props = { ...baseProps(), selectedId: "c1", anchorTops: { c1: 10 } };
-    const { rerender } = render(<CommentSidePane {...props} comments={[comment("c1")]} />);
+    const { rerender } = render(
+      <CommentSidePane {...props} comments={[comment("c1")]} />
+    );
     await user.click(screen.getByTestId("comment-edit"));
     await user.type(screen.getByTestId("comment-edit-input"), " 旧");
     await user.click(screen.getByTestId("comment-reply-toggle"));
@@ -1647,7 +1698,10 @@ describe("CommentSidePane drafts survive the card unmounting (#334)", () => {
 
     rerender(<CommentSidePane {...props} comments={[]} />);
     rerender(
-      <CommentSidePane {...props} comments={[comment("c1", { body: "新しいコメント" })]} />
+      <CommentSidePane
+        {...props}
+        comments={[comment("c1", { body: "新しいコメント" })]}
+      />
     );
     expect(screen.queryByTestId("comment-edit-input")).toBeNull();
     expect(screen.queryByTestId("comment-reply-input")).toBeNull();
@@ -1656,14 +1710,19 @@ describe("CommentSidePane drafts survive the card unmounting (#334)", () => {
   it("drops the draft as soon as the comment is deleted from this pane", async () => {
     const user = userEvent.setup();
     const props = { ...baseProps(), selectedId: "c1", anchorTops: { c1: 10 } };
-    const { rerender } = render(<CommentSidePane {...props} comments={[comment("c1")]} />);
+    const { rerender } = render(
+      <CommentSidePane {...props} comments={[comment("c1")]} />
+    );
     await startReply(user, "旧い返信");
     await user.click(screen.getByTestId("comment-delete"));
     expect(props.onDelete).toHaveBeenCalledWith("c1");
 
     // The refetch skipped the moment c1 was missing: delete + add landed in one.
     rerender(
-      <CommentSidePane {...props} comments={[comment("c1", { body: "新しいコメント" })]} />
+      <CommentSidePane
+        {...props}
+        comments={[comment("c1", { body: "新しいコメント" })]}
+      />
     );
     expect(screen.queryByTestId("comment-reply-input")).toBeNull();
   });
@@ -1705,5 +1764,34 @@ describe("CommentSidePane drafts survive the card unmounting (#334)", () => {
 
     rerender(<CommentSidePane {...props} filePath="other.md" />);
     expect(screen.queryByTestId("comment-reply-input")).toBeNull();
+  });
+});
+
+describe("CommentSidePane sent to AI (#366)", () => {
+  const cardOf = (id: string) =>
+    document.querySelector<HTMLElement>(
+      `[data-testid="comment-item"][data-comment-id="${id}"]`
+    )!;
+
+  it("marks only the sent comments as being answered", () => {
+    renderPane({
+      comments: [comment("c1"), comment("c2")],
+      agentReplying: true,
+      agentSentIds: new Set(["c1"]),
+    });
+    expect(within(cardOf("c1")).getByTestId("comment-awaiting-ai")).toBeInTheDocument();
+    expect(within(cardOf("c1")).queryByTestId("comment-unsent-to-ai")).toBeNull();
+    expect(within(cardOf("c2")).getByTestId("comment-unsent-to-ai")).toBeInTheDocument();
+    expect(within(cardOf("c2")).queryByTestId("comment-awaiting-ai")).toBeNull();
+  });
+
+  it("shows neither once the AI is done", () => {
+    renderPane({
+      comments: [comment("c1"), comment("c2")],
+      agentReplying: false,
+      agentSentIds: new Set(["c1"]),
+    });
+    expect(screen.queryByTestId("comment-awaiting-ai")).toBeNull();
+    expect(screen.queryByTestId("comment-unsent-to-ai")).toBeNull();
   });
 });

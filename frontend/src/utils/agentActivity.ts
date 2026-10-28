@@ -18,6 +18,9 @@ export interface AgentTracking {
   /** AI reply count per comment when the last busy period began; anything
    *  above it is new. Null once the reader has acknowledged them. */
   baseline: ReadonlyMap<string, number> | null;
+  /** Open comment ids at the last send from this editor (#366): the AI reads
+   *  these and only these. Null until this editor has sent for the file. */
+  sentIds: ReadonlySet<string> | null;
 }
 
 export const emptyTracking = (key: string): AgentTracking => ({
@@ -26,6 +29,7 @@ export const emptyTracking = (key: string): AgentTracking => ({
   busySince: null,
   sentByUs: false,
   baseline: null,
+  sentIds: null,
 });
 
 const aiReplyCount = (c: CommentJSON) =>
@@ -35,6 +39,22 @@ const aiReplyCount = (c: CommentJSON) =>
  *  own replies they never disappear and the count only grows. */
 export function replyCounts(comments: ReadonlyArray<CommentJSON>): Map<string, number> {
   return new Map(comments.map((c) => [c.id, aiReplyCount(c)]));
+}
+
+/** Comments the AI still has to see: a send hands over every open comment, so
+ *  each one is either in the last send or written after it. */
+export function openCommentIds(comments: ReadonlyArray<CommentJSON>): Set<string> {
+  return new Set(comments.filter((c) => c.status !== "resolved").map((c) => c.id));
+}
+
+/** Open comments written after the last send. Null when this editor hasn't
+ *  sent for the file yet, so nothing is known about what the AI has read. */
+export function unsentCount(
+  sentIds: ReadonlySet<string> | null,
+  comments: ReadonlyArray<CommentJSON>
+): number | null {
+  if (!sentIds) return null;
+  return comments.filter((c) => c.status !== "resolved" && !sentIds.has(c.id)).length;
 }
 
 /** AI replies added since `baseline`, per comment id. Comments that did not
@@ -56,7 +76,9 @@ export function newAiReplies(
 }
 
 const sameStatus = (a: AgentStatusResponse | null, b: AgentStatusResponse | null) =>
-  a?.state === b?.state && a?.session_name === b?.session_name && a?.agent_id === b?.agent_id;
+  a?.state === b?.state &&
+  a?.session_name === b?.session_name &&
+  a?.agent_id === b?.agent_id;
 
 /** Folds one polled status into the tracking. Returns `prev` itself when
  *  nothing visible changed, so a steady state doesn't re-render the editor. */
@@ -70,19 +92,28 @@ export function applyStatus(
   const base = prev.key === key ? prev : emptyTracking(key);
   // A failed poll says nothing about the session: hide the state but keep the
   // busy period and baseline, so a reply that lands meanwhile still counts.
-  if (next === null) return base.status === null && base === prev ? prev : { ...base, status: null };
+  if (next === null)
+    return base.status === null && base === prev ? prev : { ...base, status: null };
   const wasBusy = base.busySince !== null;
   const nowBusy = next?.state === "busy";
   if (wasBusy && !nowBusy && base.sentByUs && now - base.busySince! < SEND_GRACE_MS) {
     return base;
   }
   if (nowBusy && !wasBusy) {
-    return { ...base, status: next, busySince: now, sentByUs: false, baseline: replyCounts(comments) };
+    return {
+      ...base,
+      status: next,
+      busySince: now,
+      sentByUs: false,
+      baseline: replyCounts(comments),
+    };
   }
   if (!nowBusy && wasBusy) {
     return { ...base, status: next, busySince: null, sentByUs: false };
   }
-  return sameStatus(base.status, next) && base === prev ? prev : { ...base, status: next };
+  return sameStatus(base.status, next) && base === prev
+    ? prev
+    : { ...base, status: next };
 }
 
 /** The send button delivered the command: show "replying" right away. */
@@ -90,13 +121,22 @@ export function applySent(
   prev: AgentTracking,
   key: string,
   comments: ReadonlyArray<CommentJSON>,
-  now: number
+  now: number,
+  /** Open comments fixed before the request; defaults to those in `comments`. */
+  sentIds: ReadonlySet<string> = openCommentIds(comments)
 ): AgentTracking {
   // The send resolves after a network round trip. If another file is active
   // by then, this send no longer describes what is on screen.
   if (prev.key !== key) return prev;
   const status: AgentStatusResponse = { ...(prev.status ?? {}), state: "busy" };
-  return { ...prev, status, busySince: now, sentByUs: true, baseline: replyCounts(comments) };
+  return {
+    ...prev,
+    status,
+    busySince: now,
+    sentByUs: true,
+    baseline: replyCounts(comments),
+    sentIds,
+  };
 }
 
 /** Display name for an adapter id ("claude" → "Claude"). */

@@ -1,12 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import {
-  render,
-  screen,
-  waitFor,
-  fireEvent,
-  act,
-  within,
-} from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, act, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Routes, Route, useLocation } from "react-router-dom";
@@ -101,16 +94,17 @@ describe("EditorPage", () => {
     await user.click(screen.getByTestId("sidebar-file-README.md"));
     await waitFor(() =>
       expect(
-        useRecentOpened.getState().listForRoot("mock-root").map((e) => e.path)
+        useRecentOpened
+          .getState()
+          .listForRoot("mock-root")
+          .map((e) => e.path)
       ).toEqual(["README.md"])
     );
   });
 
   it("shows the empty-state placeholder when no file is active", () => {
     renderPage();
-    expect(screen.getByTestId("editor-empty-state")).toHaveTextContent(
-      "ファイルを選択"
-    );
+    expect(screen.getByTestId("editor-empty-state")).toHaveTextContent("ファイルを選択");
     expect(screen.queryByTestId("tiptap-editor")).not.toBeInTheDocument();
   });
 
@@ -128,9 +122,7 @@ describe("EditorPage", () => {
       expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
     );
     await user.click(screen.getByTestId("sidebar-file-README.md"));
-    await waitFor(() =>
-      expect(screen.getByTestId("tiptap-editor")).toBeInTheDocument()
-    );
+    await waitFor(() => expect(screen.getByTestId("tiptap-editor")).toBeInTheDocument());
     expect(screen.queryByTestId("editor-empty-state")).not.toBeInTheDocument();
   });
 
@@ -138,13 +130,9 @@ describe("EditorPage", () => {
     renderPage(`/${DEFAULT_ROOT}/docs/intro.md`);
 
     await waitFor(() => {
-      expect(screen.getByTestId("editor-active-path")).toHaveTextContent(
-        "docs/intro.md"
-      );
+      expect(screen.getByTestId("editor-active-path")).toHaveTextContent("docs/intro.md");
     });
-    const opened = useOpenFiles
-      .getState()
-      .files.find((f) => f.path === "docs/intro.md");
+    const opened = useOpenFiles.getState().files.find((f) => f.path === "docs/intro.md");
     expect(opened).toBeDefined();
   });
 
@@ -152,13 +140,9 @@ describe("EditorPage", () => {
     renderPage(`/${DEFAULT_ROOT}/${encodeURIComponent("docs/intro.md")}`);
 
     await waitFor(() => {
-      expect(screen.getByTestId("editor-active-path")).toHaveTextContent(
-        "docs/intro.md"
-      );
+      expect(screen.getByTestId("editor-active-path")).toHaveTextContent("docs/intro.md");
     });
-    const opened = useOpenFiles
-      .getState()
-      .files.find((f) => f.path === "docs/intro.md");
+    const opened = useOpenFiles.getState().files.find((f) => f.path === "docs/intro.md");
     expect(opened).toBeDefined();
   });
 
@@ -184,13 +168,9 @@ describe("EditorPage", () => {
     renderPage(`/${DEFAULT_ROOT}/${encodeURIComponent("100% done.md")}`);
 
     await waitFor(() => {
-      expect(screen.getByTestId("editor-active-path")).toHaveTextContent(
-        "100% done.md"
-      );
+      expect(screen.getByTestId("editor-active-path")).toHaveTextContent("100% done.md");
     });
-    const opened = useOpenFiles
-      .getState()
-      .files.find((f) => f.path === "100% done.md");
+    const opened = useOpenFiles.getState().files.find((f) => f.path === "100% done.md");
     expect(opened).toBeDefined();
   });
 
@@ -296,9 +276,7 @@ describe("EditorPage", () => {
       expect(screen.getByTestId("editor-active-path")).toHaveTextContent("docs/intro.md");
     });
 
-    const opened = useOpenFiles
-      .getState()
-      .files.find((f) => f.path === "docs/intro.md");
+    const opened = useOpenFiles.getState().files.find((f) => f.path === "docs/intro.md");
     expect(opened).toBeDefined();
     expect(opened?.markdown).toContain("mock content");
   });
@@ -314,13 +292,13 @@ describe("EditorPage", () => {
     // Open README, then make it dirty
     await user.click(screen.getByTestId("sidebar-file-README.md"));
     await waitFor(() => {
-      const active = useOpenFiles
-        .getState()
-        .files.find((f) => f.path === "README.md");
+      const active = useOpenFiles.getState().files.find((f) => f.path === "README.md");
       expect(active).toBeDefined();
     });
     useOpenFiles.getState().updateActiveMarkdown("mock-root", "edited content");
-    useOpenFiles.getState().markFileUserEdited(useOpenFiles.getState().activeIdByRoot["mock-root"]!);
+    useOpenFiles
+      .getState()
+      .markFileUserEdited(useOpenFiles.getState().activeIdByRoot["mock-root"]!);
 
     // Expand docs/ and switch to a different file
     await user.click(screen.getByTestId("sidebar-dir-docs"));
@@ -333,9 +311,7 @@ describe("EditorPage", () => {
     // discard it — with autosave on, the edits are on their way to disk anyway,
     // so a discard prompt has nothing left to offer.
     await waitFor(() => {
-      const readme = useOpenFiles
-        .getState()
-        .files.find((f) => f.path === "README.md");
+      const readme = useOpenFiles.getState().files.find((f) => f.path === "README.md");
       expect(readme?.isDirty).toBe(false);
       expect(readme?.savedMarkdown).toBe("edited content");
     });
@@ -360,13 +336,17 @@ describe("EditorPage", () => {
     );
 
     useOpenFiles.getState().updateActiveMarkdown("mock-root", "new content");
-    useOpenFiles.getState().markFileUserEdited(useOpenFiles.getState().activeIdByRoot["mock-root"]!);
+    useOpenFiles
+      .getState()
+      .markFileUserEdited(useOpenFiles.getState().activeIdByRoot["mock-root"]!);
     expect(
       useOpenFiles
         .getState()
-        .files.find((f) => f.id === useOpenFiles.getState().activeIdByRoot["mock-root"])!.isDirty
+        .files.find((f) => f.id === useOpenFiles.getState().activeIdByRoot["mock-root"])!
+        .isDirty
     ).toBe(true);
 
+    await user.click(screen.getByTestId("editor-file-menu"));
     await user.click(screen.getByTestId("editor-save"));
 
     await waitFor(() => {
@@ -393,14 +373,13 @@ describe("EditorPage", () => {
       expect(screen.getByTestId("editor-active-path")).toHaveTextContent("README.md")
     );
 
+    await user.click(screen.getByTestId("editor-file-menu"));
     await user.click(screen.getByTestId("editor-copy-markdown"));
 
     await waitFor(() =>
       expect(writeText).toHaveBeenCalledWith("# README.md\n\nmock content")
     );
-    expect(useToast.getState().toasts.some((t) => t.severity === "success")).toBe(
-      true
-    );
+    expect(useToast.getState().toasts.some((t) => t.severity === "success")).toBe(true);
   });
 
   it("copies the `mr comments <abs-path>` review command for the active file", async () => {
@@ -421,9 +400,7 @@ describe("EditorPage", () => {
     await waitFor(() =>
       expect(writeText).toHaveBeenCalledWith("mr comments '/tmp/mock-root/README.md'")
     );
-    expect(useToast.getState().toasts.some((t) => t.severity === "success")).toBe(
-      true
-    );
+    expect(useToast.getState().toasts.some((t) => t.severity === "success")).toBe(true);
   });
 
   it("sends the review command after creating the revision, without copying", async () => {
@@ -455,6 +432,133 @@ describe("EditorPage", () => {
       ).toBe(true)
     );
     expect(writeText).not.toHaveBeenCalled();
+  });
+
+  it("counts open comments written after the send as unsent (#366)", async () => {
+    const { http, HttpResponse } = await import("msw");
+    const { server } = await import("@/test/mocks/server");
+    const open = (id: string): CommentJSON => ({
+      id,
+      scope: "global",
+      author: "kishira",
+      body: id,
+      status: "open",
+      context: null,
+      orphan: false,
+    });
+    let comments: CommentJSON[] = [open("c1"), open("c2")];
+    server.use(
+      http.get("http://localhost:8080/api/stat/*", () =>
+        HttpResponse.json({
+          path: "README.md",
+          root: "mock-root",
+          modified: "2026-05-20T00:00:00Z",
+          created: "2026-05-19T00:00:00Z",
+          state: "review",
+          hasOpenComments: true,
+        })
+      ),
+      http.get("http://localhost:8080/api/comments/*", () =>
+        HttpResponse.json({
+          file: "README.md",
+          root: "mock-root",
+          summary: { total: comments.length, by_scope: {}, by_status: {} },
+          comments,
+        })
+      ),
+      http.post("http://localhost:8080/api/revisions/*", () =>
+        HttpResponse.json({ created: false })
+      ),
+      http.post("http://localhost:8080/api/agents/send/*", () =>
+        HttpResponse.json({ sent: true, session_name: "unit" })
+      )
+    );
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(await screen.findByTestId("sidebar-file-README.md"));
+    await waitFor(() =>
+      expect(screen.getByTestId("comment-filter-all")).toHaveTextContent("すべて 2")
+    );
+    // Nothing is known about what the AI has read before the first send.
+    expect(screen.queryByTestId("editor-unsent-count")).toBeNull();
+
+    await user.click(screen.getByTestId("editor-copy-review-command"));
+    await waitFor(() =>
+      expect(screen.getByTestId("editor-agent-sent-count")).toHaveTextContent("送信 2 件")
+    );
+    expect(screen.queryByTestId("editor-unsent-count")).toBeNull();
+
+    comments = [...comments, open("c3")];
+    await user.click(screen.getByTestId("comment-pane-refresh"));
+    await waitFor(() =>
+      expect(screen.getByTestId("editor-unsent-count")).toHaveTextContent("未送信 1")
+    );
+    expect(screen.getByTestId("editor-agent-sent-count")).toHaveTextContent("送信 2 件");
+  });
+
+  it("keeps a comment written while the send is in flight unsent (#366)", async () => {
+    const { http, HttpResponse } = await import("msw");
+    const { server } = await import("@/test/mocks/server");
+    const open = (id: string): CommentJSON => ({
+      id,
+      scope: "global",
+      author: "kishira",
+      body: id,
+      status: "open",
+      context: null,
+      orphan: false,
+    });
+    let comments: CommentJSON[] = [open("c1"), open("c2")];
+    let releaseSend = () => {};
+    const sendHeld = new Promise<void>((resolve) => {
+      releaseSend = resolve;
+    });
+    server.use(
+      http.get("http://localhost:8080/api/stat/*", () =>
+        HttpResponse.json({
+          path: "README.md",
+          root: "mock-root",
+          modified: "2026-05-20T00:00:00Z",
+          created: "2026-05-19T00:00:00Z",
+          state: "review",
+          hasOpenComments: true,
+        })
+      ),
+      http.get("http://localhost:8080/api/comments/*", () =>
+        HttpResponse.json({
+          file: "README.md",
+          root: "mock-root",
+          summary: { total: comments.length, by_scope: {}, by_status: {} },
+          comments,
+        })
+      ),
+      http.post("http://localhost:8080/api/revisions/*", () =>
+        HttpResponse.json({ created: false })
+      ),
+      http.post("http://localhost:8080/api/agents/send/*", async () => {
+        await sendHeld;
+        return HttpResponse.json({ sent: true, session_name: "unit" });
+      })
+    );
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(await screen.findByTestId("sidebar-file-README.md"));
+    await waitFor(() =>
+      expect(screen.getByTestId("comment-filter-all")).toHaveTextContent("すべて 2")
+    );
+
+    await user.click(screen.getByTestId("editor-copy-review-command"));
+    comments = [...comments, open("c3")];
+    await user.click(screen.getByTestId("comment-pane-refresh"));
+    await waitFor(() =>
+      expect(screen.getByTestId("comment-filter-all")).toHaveTextContent("すべて 3")
+    );
+    releaseSend();
+
+    await waitFor(() =>
+      expect(screen.getByTestId("editor-agent-sent-count")).toHaveTextContent("送信 2 件")
+    );
+    expect(screen.getByTestId("editor-unsent-count")).toHaveTextContent("未送信 1");
   });
 
   it.each([403, 404, 500])(
@@ -1203,9 +1307,9 @@ describe("EditorPage", () => {
 
         await user.click(await screen.findByTestId("tab-ctx-copy-name"));
         await waitFor(() =>
-          expect(
-            useToast.getState().toasts.some((t) => t.severity === "error")
-          ).toBe(true)
+          expect(useToast.getState().toasts.some((t) => t.severity === "error")).toBe(
+            true
+          )
         );
       } finally {
         vi.unstubAllGlobals();
@@ -1232,9 +1336,7 @@ describe("EditorPage", () => {
     // is still open — without moving off it first, findByRole("tooltip")
     // resolves to that one ("intro.md") instead of the tab's (#230).
     await user.unhover(screen.getByTestId("sidebar-file-docs/intro.md"));
-    await waitFor(() =>
-      expect(screen.queryByRole("tooltip")).not.toBeInTheDocument()
-    );
+    await waitFor(() => expect(screen.queryByRole("tooltip")).not.toBeInTheDocument());
 
     await user.hover(screen.getByTestId("editor-tab-label-README.md"));
     const tooltip = await screen.findByRole("tooltip", {}, { timeout: 3000 });
@@ -1244,9 +1346,7 @@ describe("EditorPage", () => {
     // off the Tab and clicking it switches the active file.
     await user.click(screen.getByTestId("editor-tab-README.md"));
     await waitFor(() =>
-      expect(screen.getByTestId("editor-active-path")).toHaveTextContent(
-        "README.md"
-      )
+      expect(screen.getByTestId("editor-active-path")).toHaveTextContent("README.md")
     );
   });
 
@@ -1266,9 +1366,7 @@ describe("EditorPage", () => {
       expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
     );
     await user.click(screen.getByTestId("sidebar-file-README.md"));
-    await waitFor(() =>
-      expect(screen.getByTestId("tiptap-editor")).toBeInTheDocument()
-    );
+    await waitFor(() => expect(screen.getByTestId("tiptap-editor")).toBeInTheDocument());
     expect(screen.getByTestId("editor-diff-toggle")).toBeDisabled();
 
     // Under review with a revision to compare against → enabled.
@@ -1308,9 +1406,7 @@ describe("EditorPage", () => {
     );
     await user.click(screen.getByTestId("sidebar-file-docs/intro.md"));
 
-    await waitFor(() =>
-      expect(screen.getByTestId("editor-diff-toggle")).toBeEnabled()
-    );
+    await waitFor(() => expect(screen.getByTestId("editor-diff-toggle")).toBeEnabled());
   });
 
   it("switches active file via tab click and closes a tab via the close button", async () => {
@@ -1327,9 +1423,7 @@ describe("EditorPage", () => {
       expect(screen.getByTestId("sidebar-file-docs/intro.md")).toBeInTheDocument()
     );
     await user.click(screen.getByTestId("sidebar-file-docs/intro.md"));
-    await waitFor(() =>
-      expect(useOpenFiles.getState().files).toHaveLength(2)
-    );
+    await waitFor(() => expect(useOpenFiles.getState().files).toHaveLength(2));
 
     // Tab click switches the active file (covers Tabs onChange).
     await user.click(screen.getByTestId("editor-tab-README.md"));
@@ -1339,9 +1433,7 @@ describe("EditorPage", () => {
 
     // Close the inactive tab via its close icon — active stays on README.md.
     await user.click(screen.getByTestId("editor-tab-close-docs/intro.md"));
-    await waitFor(() =>
-      expect(useOpenFiles.getState().files).toHaveLength(1)
-    );
+    await waitFor(() => expect(useOpenFiles.getState().files).toHaveLength(1));
     expect(useOpenFiles.getState().files[0].path).toBe("README.md");
 
     // Close the last tab → store goes empty and editor shows the placeholder.
@@ -1350,7 +1442,9 @@ describe("EditorPage", () => {
       expect(screen.getByTestId("editor-empty-state")).toBeInTheDocument()
     );
     expect(useOpenFiles.getState().files).toEqual([]);
-    expect(Object.values(useOpenFiles.getState().activeIdByRoot).filter(Boolean)).toEqual([]);
+    expect(Object.values(useOpenFiles.getState().activeIdByRoot).filter(Boolean)).toEqual(
+      []
+    );
   });
 
   it("shows an error toast and stays on the empty state when the URL path points to a missing file", async () => {
@@ -1369,7 +1463,9 @@ describe("EditorPage", () => {
       expect(toasts.some((t) => t.severity === "error")).toBe(true);
     });
     expect(screen.getByTestId("editor-empty-state")).toBeInTheDocument();
-    expect(Object.values(useOpenFiles.getState().activeIdByRoot).filter(Boolean)).toEqual([]);
+    expect(Object.values(useOpenFiles.getState().activeIdByRoot).filter(Boolean)).toEqual(
+      []
+    );
   });
 
   it("save shows an error toast when the API fails", async () => {
@@ -1393,8 +1489,11 @@ describe("EditorPage", () => {
       expect(screen.getByTestId("editor-active-path")).toHaveTextContent("README.md")
     );
     useOpenFiles.getState().updateActiveMarkdown("mock-root", "edited");
-    useOpenFiles.getState().markFileUserEdited(useOpenFiles.getState().activeIdByRoot["mock-root"]!);
+    useOpenFiles
+      .getState()
+      .markFileUserEdited(useOpenFiles.getState().activeIdByRoot["mock-root"]!);
 
+    await user.click(screen.getByTestId("editor-file-menu"));
     await user.click(screen.getByTestId("editor-save"));
     await waitFor(() => {
       const toasts = useToast.getState().toasts;
@@ -1430,6 +1529,7 @@ describe("EditorPage line numbers toggle (#234)", () => {
     const user = userEvent.setup();
     renderPage();
 
+    await user.click(await screen.findByTestId("editor-view-menu"));
     const toggle = await screen.findByTestId("editor-toggle-line-numbers");
     expect(useEditorPrefs.getState().showLineNumbers).toBe(false);
 
@@ -1444,6 +1544,7 @@ describe("EditorPage line numbers toggle (#234)", () => {
     const user = userEvent.setup();
     renderPage();
 
+    await user.click(await screen.findByTestId("editor-view-menu"));
     await user.click(await screen.findByTestId("editor-toggle-line-numbers"));
     expect(localStorage.getItem("markdown-reviewer-prefs")).toContain(
       '"showLineNumbers":true'
@@ -1642,9 +1743,7 @@ describe("EditorPage selection menu (#233)", () => {
     fireEvent.mouseDown(document.body);
 
     await waitFor(() =>
-      expect(
-        screen.queryByTestId("comment-composer-popover")
-      ).not.toBeInTheDocument()
+      expect(screen.queryByTestId("comment-composer-popover")).not.toBeInTheDocument()
     );
   });
 });
@@ -1714,9 +1813,7 @@ describe("EditorPage comment highlight & rail selection (#304)", () => {
     // measured. Waiting on `comment-context-*` here, before the editor is
     // even installed, would never resolve.
     await waitFor(() =>
-      expect(screen.getByTestId("comment-filter-all")).toHaveTextContent(
-        `すべて 1`
-      )
+      expect(screen.getByTestId("comment-filter-all")).toHaveTextContent(`すべて 1`)
     );
     const ed = installEditor("<h2>実績</h2><p>SLA遵守率 98%</p>");
     // Wait for the page to push the comment into the editor as a decoration.
@@ -1728,9 +1825,9 @@ describe("EditorPage comment highlight & rail selection (#304)", () => {
     // selection, so it's no longer a reliable proxy for "the card exists";
     // wait on the card itself instead.
     await waitFor(() =>
-      expect(
-        screen.getByTestId("comment-item").getAttribute("data-comment-id")
-      ).toBe(comment.id)
+      expect(screen.getByTestId("comment-item").getAttribute("data-comment-id")).toBe(
+        comment.id
+      )
     );
     return { user, ed };
   }
@@ -1815,8 +1912,14 @@ describe("EditorPage comment highlight & rail selection (#304)", () => {
     const wrapper = ed.view.dom.parentElement as HTMLElement;
     const scrollContainer = document.createElement("div");
     scrollContainer.style.overflowY = "auto";
-    Object.defineProperty(scrollContainer, "scrollHeight", { value: 2000, configurable: true });
-    Object.defineProperty(scrollContainer, "clientHeight", { value: 800, configurable: true });
+    Object.defineProperty(scrollContainer, "scrollHeight", {
+      value: 2000,
+      configurable: true,
+    });
+    Object.defineProperty(scrollContainer, "clientHeight", {
+      value: 800,
+      configurable: true,
+    });
     scrollContainer.appendChild(wrapper);
     // The scroll-listener effect only (re)runs on [editor, centered] —
     // reparenting after mount doesn't retrigger it on its own, so toggle
@@ -1838,7 +1941,17 @@ describe("EditorPage comment highlight & rail selection (#304)", () => {
     // it below the pane once the ancestor scrolls.
     let markTop = 0;
     mark.getBoundingClientRect = () =>
-      ({ top: markTop, bottom: markTop + 20, left: 0, right: 0, width: 0, height: 20, x: 0, y: markTop, toJSON() {} }) as DOMRect;
+      ({
+        top: markTop,
+        bottom: markTop + 20,
+        left: 0,
+        right: 0,
+        width: 0,
+        height: 20,
+        x: 0,
+        y: markTop,
+        toJSON() {},
+      }) as DOMRect;
 
     // Scrolling `wrapper` itself (the non-scrollable immediate parent) must
     // not trigger a recompute — proves the listener isn't attached there.
@@ -2108,16 +2221,18 @@ describe("EditorPage jump to comment (#167)", () => {
     await waitFor(() =>
       expect(ed.view.dom.querySelectorAll('[data-comment-id="c-020"]')).toHaveLength(1)
     );
-    const decorated = ed.view.dom.querySelector<HTMLElement>('[data-comment-id="c-020"]')!;
+    const decorated = ed.view.dom.querySelector<HTMLElement>(
+      '[data-comment-id="c-020"]'
+    )!;
     // #306: the rail only draws this row once EditorPage's anchorTops state
     // actually reflects the decoration above (an async rAF measurement, not
     // synchronous with it appearing) — wait for that too before clicking.
     // #312 moved the comment-context row behind selection, so the card
     // itself (still rendered regardless of selection) is what's waited on.
     await waitFor(() =>
-      expect(
-        screen.getByTestId("comment-item").getAttribute("data-comment-id")
-      ).toBe("c-020")
+      expect(screen.getByTestId("comment-item").getAttribute("data-comment-id")).toBe(
+        "c-020"
+      )
     );
 
     const scrollSpy = vi.mocked(Element.prototype.scrollIntoView);
@@ -2136,7 +2251,11 @@ describe("EditorPage jump to comment (#167)", () => {
       scope: "inline",
       body: "もう無い場所を指してる",
       status: "open",
-      anchor: { heading_path: [], snippet: "vanished text no longer present", occurrence: 0 },
+      anchor: {
+        heading_path: [],
+        snippet: "vanished text no longer present",
+        occurrence: 0,
+      },
       context: { heading_path: [], line_range: [10, 10] },
       orphan: false,
     };

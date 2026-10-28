@@ -27,12 +27,21 @@ interface Props {
   status: AgentStatusResponse | null;
   busySince: number | null;
   newReplyCount: number;
+  /** Open comments this editor's send handed over, while the AI works on
+   *  them (#366). Omitted when the busy period came from elsewhere. */
+  sentCount?: number | null;
   onShowReplies: () => void;
 }
 
 /** The AI recipient's state beside "レビュー中" (#360). A separate slot from
  *  the review indicator: it describes the session, not the file. */
-export function AgentStatusIndicator({ status, busySince, newReplyCount, onShowReplies }: Props) {
+export function AgentStatusIndicator({
+  status,
+  busySince,
+  newReplyCount,
+  sentCount = null,
+  onShowReplies,
+}: Props) {
   const elapsed = useElapsed(busySince);
   if (!status) return null;
   const name = agentLabel(status.agent_id);
@@ -50,7 +59,14 @@ export function AgentStatusIndicator({ status, busySince, newReplyCount, onShowR
   );
   // `ticker` is outside what assistive tech announces: the live region should
   // speak once per state change, not every second while the timer runs.
-  const label = (text: string, color: string, marker: ReactNode, title: string, ticker?: string) => (
+  const label = (
+    text: string,
+    color: string,
+    marker: ReactNode,
+    title: string,
+    ticker?: string,
+    suffix?: string
+  ) => (
     <Tooltip title={title}>
       <Typography
         variant="caption"
@@ -72,6 +88,7 @@ export function AgentStatusIndicator({ status, busySince, newReplyCount, onShowR
         {marker}
         {text}
         {ticker && <span aria-hidden="true">{ticker}</span>}
+        {suffix && <span data-testid="editor-agent-sent-count">{suffix}</span>}
       </Typography>
     </Tooltip>
   );
@@ -82,7 +99,8 @@ export function AgentStatusIndicator({ status, busySince, newReplyCount, onShowR
       "warning.main",
       dot("warning.main", true),
       `${session}（処理中。いま送信ボタンを押すとコマンドのコピーになります）`,
-      elapsed
+      elapsed,
+      sentCount === null ? undefined : `· 送信 ${sentCount} 件`
     );
   }
   if (newReplyCount > 0) {
@@ -125,5 +143,10 @@ export function AgentStatusIndicator({ status, busySince, newReplyCount, onShowR
       `${session}（応答は終わり、バックグラウンドの処理が残っています。送信できます）`
     );
   }
-  return label(`${name} 待機中`, "text.secondary", dot("success.main"), `${session}（入力待ち）`);
+  return label(
+    `${name} 待機中`,
+    "text.secondary",
+    dot("success.main"),
+    `${session}（入力待ち）`
+  );
 }
