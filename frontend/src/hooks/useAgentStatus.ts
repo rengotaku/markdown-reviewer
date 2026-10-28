@@ -21,6 +21,8 @@ export interface AgentActivity {
   sentByUs: boolean;
   /** New AI replies per comment id since the last busy period began. */
   newReplies: ReadonlyMap<string, number>;
+  /** Open comment ids at this editor's last send; null before the first. */
+  sentIds: ReadonlySet<string> | null;
   markSent: () => void;
   /** The reader has seen the new replies; stop marking them. */
   acknowledge: () => void;
@@ -65,7 +67,9 @@ export function useAgentStatus(
         inFlight = false;
       }
       if (cancelled) return;
-      setTracking((prev) => applyStatus(prev, key, next, commentsRef.current, Date.now()));
+      setTracking((prev) =>
+        applyStatus(prev, key, next, commentsRef.current, Date.now())
+      );
     };
     void poll();
     const handle = window.setInterval(() => void poll(), AGENT_STATUS_POLL_MS);
@@ -82,13 +86,18 @@ export function useAgentStatus(
 
   const current = tracking.key === key ? tracking : emptyTracking(key);
   const baseline = current.baseline;
-  const newReplies = useMemo(() => newAiReplies(baseline, comments), [baseline, comments]);
+  const newReplies = useMemo(
+    () => newAiReplies(baseline, comments),
+    [baseline, comments]
+  );
 
   const markSent = useCallback(() => {
     setTracking((prev) => applySent(prev, key, commentsRef.current, Date.now()));
   }, [key]);
   const acknowledge = useCallback(() => {
-    setTracking((prev) => (prev.key === key && prev.baseline ? { ...prev, baseline: null } : prev));
+    setTracking((prev) =>
+      prev.key === key && prev.baseline ? { ...prev, baseline: null } : prev
+    );
   }, [key]);
 
   return {
@@ -96,6 +105,7 @@ export function useAgentStatus(
     busySince: current.busySince,
     sentByUs: current.sentByUs,
     newReplies,
+    sentIds: current.sentIds,
     markSent,
     acknowledge,
   };

@@ -120,6 +120,7 @@ describe("EditorPage changed-paths integration (#178)", () => {
 
     useOpenFiles.getState().updateActiveMarkdown("mock-root", "edited content");
     useOpenFiles.getState().markFileUserEdited(useOpenFiles.getState().activeIdByRoot["mock-root"]!);
+    await user.click(screen.getByTestId("editor-file-menu"));
     await user.click(screen.getByTestId("editor-save"));
 
     await waitFor(() => {
@@ -309,6 +310,7 @@ describe("EditorPage changed-paths integration (#178)", () => {
 
     useOpenFiles.getState().updateActiveMarkdown("mock-root", "edited");
     useOpenFiles.getState().markFileUserEdited(useOpenFiles.getState().activeIdByRoot["mock-root"]!);
+    await user.click(screen.getByTestId("editor-file-menu"));
     await user.click(screen.getByTestId("editor-save"));
     await waitFor(() => {
       const active = useOpenFiles

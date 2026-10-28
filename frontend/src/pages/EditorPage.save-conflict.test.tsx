@@ -90,6 +90,7 @@ describe("EditorPage save conflict (#119 case 5)", () => {
     );
 
     await openAndDirtyReadme(user);
+    await user.click(screen.getByTestId("editor-file-menu"));
     await user.click(screen.getByTestId("editor-save"));
 
     await waitFor(() => expect(capturedHeaders).toHaveLength(1));
@@ -147,6 +148,7 @@ describe("EditorPage save conflict (#119 case 5)", () => {
     );
 
     await openAndDirtyReadme(user);
+    await user.click(screen.getByTestId("editor-file-menu"));
     await user.click(screen.getByTestId("editor-save"));
 
     await waitFor(() =>
@@ -202,6 +204,7 @@ describe("EditorPage save conflict (#119 case 5)", () => {
     );
 
     await openAndDirtyReadme(user);
+    await user.click(screen.getByTestId("editor-file-menu"));
     await user.click(screen.getByTestId("editor-save"));
 
     await waitFor(() =>
@@ -262,6 +265,7 @@ describe("EditorPage save conflict (#119 case 5)", () => {
       .getState()
       .ignoreExternalChange(id, "2026-05-22T00:00:00Z", "sha-external");
 
+    await user.click(screen.getByTestId("editor-file-menu"));
     await user.click(screen.getByTestId("editor-save"));
 
     await waitFor(() =>
@@ -306,6 +310,7 @@ describe("EditorPage save conflict (#119 case 5)", () => {
     // A server that reports no sha: the watcher can only record the mtime.
     useOpenFiles.getState().ignoreExternalChange(id, "2026-05-22T00:00:00Z");
 
+    await user.click(screen.getByTestId("editor-file-menu"));
     await user.click(screen.getByTestId("editor-save"));
 
     await waitFor(() =>
@@ -341,6 +346,7 @@ describe("EditorPage save conflict (#119 case 5)", () => {
       .getState()
       .ignoreExternalChange(id, "2026-05-22T00:00:00Z", "sha-external");
 
+    await user.click(screen.getByTestId("editor-file-menu"));
     await user.click(screen.getByTestId("editor-save"));
 
     await waitFor(() =>
@@ -392,6 +398,7 @@ describe("EditorPage save conflict (#119 case 5)", () => {
       .getState()
       .ignoreExternalChange(id, "2026-05-22T00:00:00Z", "sha-external");
 
+    await user.click(screen.getByTestId("editor-file-menu"));
     await user.click(screen.getByTestId("editor-save"));
 
     // With a baseline the server's 412 is the gate, so no client-side prompt.

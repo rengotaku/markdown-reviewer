@@ -124,6 +124,7 @@ describe("TiptapEditor debounced Markdown resync + flush (#265)", () => {
     // Type the marker and click Save back-to-back, with no wait in between
     // -- well inside the 250ms debounce window the fix introduces.
     await user.keyboard("MARKER_TAIL");
+    await user.click(screen.getByTestId("editor-file-menu"));
     await user.click(screen.getByTestId("editor-save"));
 
     await waitFor(() => expect(putBody).not.toBeNull());
