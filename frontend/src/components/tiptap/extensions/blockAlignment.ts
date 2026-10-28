@@ -35,23 +35,24 @@ export interface ContentBlock {
 const LIST_TYPES = new Set(["bulletList", "orderedList", "taskList"]);
 
 /**
- * Walks the units the gutters label, in document order (#368): each
- * top-level child except blank-line paragraphs, with lists replaced by their
- * items (an item followed by the items of its directly nested lists) and
- * tables by their rows. This must produce the same units in the same order
- * as gutterUnitRanges() does on the markdown side.
+ * Walks the units the gutters label within one top-level child, in document
+ * order (#368): lists are replaced by their items (an item followed by the
+ * items of its directly nested lists) and tables by their rows; any other
+ * block is a unit by itself. This must produce the same units in the same
+ * order as gutterUnitRanges() does on the markdown side.
  */
-function forEachUnit(doc: ProseMirrorNode, visit: (offset: number, node: ProseMirrorNode) => void) {
-  doc.forEach((node, offset) => {
-    if (isBlankLineParagraph(node)) return;
-    if (LIST_TYPES.has(node.type.name)) {
-      forEachListItem(node, offset, visit);
-    } else if (node.type.name === "table") {
-      node.forEach((row, rowOffset) => visit(offset + 1 + rowOffset, row));
-    } else {
-      visit(offset, node);
-    }
-  });
+function forEachUnitIn(
+  node: ProseMirrorNode,
+  offset: number,
+  visit: (offset: number, node: ProseMirrorNode) => void
+) {
+  if (LIST_TYPES.has(node.type.name)) {
+    forEachListItem(node, offset, visit);
+  } else if (node.type.name === "table") {
+    node.forEach((row, rowOffset) => visit(offset + 1 + rowOffset, row));
+  } else {
+    visit(offset, node);
+  }
 }
 
 function forEachListItem(
@@ -68,25 +69,68 @@ function forEachListItem(
   });
 }
 
-/**
- * contentBlocks returns the gutter units of doc in order (see forEachUnit),
- * so index i lines up with markdown-it's i-th unit.
- */
-export function contentBlocks(doc: ProseMirrorNode): ContentBlock[] {
+/** Top-level children in order, skipping blank-line paragraphs. */
+function topLevelBlocks(doc: ProseMirrorNode): ContentBlock[] {
   const blocks: ContentBlock[] = [];
-  forEachUnit(doc, (offset, node) => blocks.push({ offset, node }));
+  doc.forEach((node, offset) => {
+    if (!isBlankLineParagraph(node)) blocks.push({ offset, node });
+  });
   return blocks;
 }
 
 /**
- * Number of blocks contentBlocks() would return, without building the array.
- * The gutter plugins only need the count on their per-keystroke path (#270),
- * where allocating one object per unit is the thing being avoided.
+ * alignUnits returns, for each of markdown-it's units, the node to decorate,
+ * or null when the doc can't be lined up with them.
+ *
+ * `groupSizes[i]` is how many units markdown-it found in its i-th top-level
+ * block. The two parsers don't always split a block the same way — a list
+ * mixing plain and task items comes out of tiptap-markdown as several
+ * lists, sometimes with an extra empty task item — so the units are
+ * compared block by block, and a block whose counts differ falls back to
+ * being labelled as a whole: every one of its units maps to the top-level
+ * node. Only a disagreement on the top-level blocks themselves gives up on
+ * the whole doc, as before #368.
+ *
+ * Without `groupSizes`, the doc's units must match `unitCount` one to one.
+ */
+export function alignUnits(
+  doc: ProseMirrorNode,
+  unitCount: number,
+  groupSizes?: number[]
+): ContentBlock[] | null {
+  const targets: ContentBlock[] = [];
+  if (!groupSizes) {
+    doc.forEach((node, offset) => {
+      if (isBlankLineParagraph(node)) return;
+      forEachUnitIn(node, offset, (o, n) => targets.push({ offset: o, node: n }));
+    });
+    return targets.length === unitCount ? targets : null;
+  }
+
+  const blocks = topLevelBlocks(doc);
+  if (blocks.length !== groupSizes.length) return null;
+  blocks.forEach((block, index) => {
+    const units: ContentBlock[] = [];
+    forEachUnitIn(block.node, block.offset, (o, n) => units.push({ offset: o, node: n }));
+    if (units.length === groupSizes[index]) targets.push(...units);
+    else for (let k = 0; k < groupSizes[index]; k++) targets.push(block);
+  });
+  return targets.length === unitCount ? targets : null;
+}
+
+/**
+ * Number of units the doc itself has (see forEachUnitIn), without building
+ * an array. The gutter plugins only need the count on their per-keystroke
+ * path (#270), where allocating one object per unit is the thing being
+ * avoided: a change in this count means the edit added or removed a unit.
  */
 export function contentBlockCount(doc: ProseMirrorNode): number {
   let n = 0;
-  forEachUnit(doc, () => {
-    n += 1;
+  doc.forEach((node, offset) => {
+    if (isBlankLineParagraph(node)) return;
+    forEachUnitIn(node, offset, () => {
+      n += 1;
+    });
   });
   return n;
 }

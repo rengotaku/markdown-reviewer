@@ -83,11 +83,26 @@ export function hasLinkReferenceDefinitions(markdownBody: string): boolean {
  * same units in the same order.
  */
 export function gutterUnitRanges(markdownBody: string): BlockRange[] {
+  return gutterUnits(markdownBody).ranges;
+}
+
+export interface GutterUnits {
+  /** Every unit, in document order (see gutterUnitRanges). */
+  ranges: BlockRange[];
+  /** How many of `ranges` each top-level block contributed, in order. The
+   *  editor uses it to fall back to labelling a block as a whole when it
+   *  splits that block differently (blockAlignment.ts's alignUnits). */
+  groupSizes: number[];
+}
+
+export function gutterUnits(markdownBody: string): GutterUnits {
   const tokens = md.parse(markdownBody, {});
   const lines = markdownBody.split("\n");
   const ranges: BlockRange[] = [];
+  const groupSizes: number[] = [];
   tokens.forEach((token, index) => {
     if (token.level !== 0 || !token.map) return;
+    const before = ranges.length;
     if (LIST_OPEN_TYPES.has(token.type)) {
       collectListItems(tokens, index, lines, ranges);
     } else if (token.type === "table_open") {
@@ -95,8 +110,9 @@ export function gutterUnitRanges(markdownBody: string): BlockRange[] {
     } else if (BLOCK_OPEN_TYPES.has(token.type) || BLOCK_STANDALONE_TYPES.has(token.type)) {
       ranges.push({ type: token.type, start: token.map[0], end: token.map[1] });
     }
+    if (ranges.length > before) groupSizes.push(ranges.length - before);
   });
-  return ranges;
+  return { ranges, groupSizes };
 }
 
 const LIST_OPEN_TYPES = new Set(["bullet_list_open", "ordered_list_open"]);
@@ -193,9 +209,11 @@ export interface GutterMark {
 
 export interface DiffGutterResult {
   marks: GutterMark[];
-  /** Number of top-level blocks in `currentBody` — used by the DiffGutter
-   *  extension as a safety check against the live doc's childCount. */
+  /** Number of units in `currentBody` — used by the DiffGutter extension
+   *  as a safety check against the live doc. */
   blockCount: number;
+  /** Units per top-level block (see GutterUnits). */
+  groupSizes: number[];
 }
 
 /**
@@ -204,18 +222,18 @@ export interface DiffGutterResult {
  * changed line to the top-level block it falls in (computed from
  * `currentBody`; for a nested list item, the innermost item). A block is
  * "add" when every one of its lines is new, "mod" when only part of it
- * changed. Deleted lines carry no position of their own
- * in the new text, so each contiguous run of deletions is attributed to the
- * block immediately following it (or the last block, if the deletion is at
- * end of file) via `delAbove`.
+ * changed or one of its lines replaced a deleted one. Deleted lines carry no
+ * position of their own in the new text, so deletions not paired with an
+ * added line are attributed to the block immediately following them (or the
+ * last block, if the deletion is at end of file) via `delAbove`.
  */
 export function computeDiffGutterMarks(
   baselineBody: string,
   currentBody: string
 ): DiffGutterResult {
-  const ranges = gutterUnitRanges(currentBody);
+  const { ranges, groupSizes } = gutterUnits(currentBody);
   const blockCount = ranges.length;
-  if (blockCount === 0) return { marks: [], blockCount };
+  if (blockCount === 0) return { marks: [], blockCount, groupSizes };
   const owners = lineOwners(ranges);
 
   const rows = lineDiff(baselineBody, currentBody);
@@ -229,82 +247,67 @@ export function computeDiffGutterMarks(
     return created;
   };
 
-  // Added lines: tally how many of each block's lines were added, so a block
-  // that is entirely new (added count === block's total line count) can be
-  // told apart from one that was only partially edited.
-  const addedLineCountByBlock = new Map<number, number>();
-  for (const row of rows) {
-    if (row.type !== "add" || row.newLine === null) continue;
-    const blockIndex = ownerOf(owners, row.newLine - 1);
-    if (blockIndex === null) continue;
-    addedLineCountByBlock.set(
-      blockIndex,
-      (addedLineCountByBlock.get(blockIndex) ?? 0) + 1
-    );
+  // Walk the diff one hunk (maximal run of non-equal rows) at a time.
+  // lineDiff writes an edited line as a del + add pair, so within a hunk the
+  // first min(dels, adds) added lines are rewrites of deleted ones — they
+  // make their unit "mod". Only the added lines beyond that are new, and
+  // only the deletions beyond that are content that disappeared (#368:
+  // rewriting two adjacent items is one hunk of 2 dels + 2 adds and must
+  // read as two "mod" items, not "mod + dash" and "add").
+  const rewrittenUnits = new Set<number>();
+  const newLineCountByBlock = new Map<number, number>();
+  let i = 0;
+  while (i < rows.length) {
+    if (rows[i].type === "equal") {
+      i++;
+      continue;
+    }
+    let end = i;
+    while (end < rows.length && rows[end].type !== "equal") end++;
+    const hunk = rows.slice(i, end);
+    const delCount = hunk.filter((r) => r.type === "del").length;
+    const addedUnits: (number | null)[] = hunk
+      .filter((r) => r.type === "add" && r.newLine !== null)
+      .map((r) => ownerOf(owners, (r.newLine as number) - 1));
+
+    addedUnits.forEach((unit, k) => {
+      if (unit === null) return;
+      if (k < delCount) rewrittenUnits.add(unit);
+      else newLineCountByBlock.set(unit, (newLineCountByBlock.get(unit) ?? 0) + 1);
+    });
+
+    if (delCount > addedUnits.length) {
+      // The dash goes on the unit that now sits where the deleted content
+      // used to be: the hunk's first added line if it has one, otherwise the
+      // next line after the hunk. Lines no unit owns (blank lines between
+      // blocks or after an item) are skipped so the dash lands on the next
+      // unit rather than on the last one; a trailing deletion falls back to
+      // the last unit.
+      let target: number | null = addedUnits.find((u) => u !== null) ?? null;
+      for (let j = end; target === null && j < rows.length; j++) {
+        const newLine = rows[j].newLine;
+        if (newLine !== null) target = ownerOf(owners, newLine - 1);
+      }
+      markFor(target ?? blockCount - 1).delAbove = true;
+    }
+
+    i = end;
   }
+
   // A unit's total is the lines it owns: a list item's nested items own
   // their own lines, so they don't count towards the parent.
   const ownedLineCountByBlock = new Map<number, number>();
   for (const owner of owners) {
     if (owner !== -1) ownedLineCountByBlock.set(owner, (ownedLineCountByBlock.get(owner) ?? 0) + 1);
   }
-  for (const [blockIndex, addedCount] of addedLineCountByBlock) {
-    const total = ownedLineCountByBlock.get(blockIndex) ?? 0;
-    markFor(blockIndex).kind = addedCount >= total ? "add" : "mod";
-  }
-
-  // Deleted lines: attribute each contiguous del run to the block containing
-  // the next row that still has a new-side line number (i.e. the block that
-  // now sits where the deleted content used to be). A run with nothing after
-  // it (trailing deletion) attaches to the last block. Also remember the run
-  // size so the UX post-pass below can collapse pure in-place rewrites.
-  const delRunSizeByBlock = new Map<number, number>();
-  let i = 0;
-  while (i < rows.length) {
-    if (rows[i].type !== "del") {
-      i++;
-      continue;
-    }
-    let end = i;
-    while (end < rows.length && rows[end].type === "del") end++;
-
-    // Lines no unit owns (blank lines between blocks or after an item) are
-    // skipped so the dash lands on the next unit rather than on the last one.
-    let targetBlockIndex: number | null = null;
-    for (let j = end; j < rows.length; j++) {
-      const newLine = rows[j].newLine;
-      if (newLine === null) continue;
-      targetBlockIndex = ownerOf(owners, newLine - 1);
-      if (targetBlockIndex !== null) break;
-    }
-    if (targetBlockIndex === null) targetBlockIndex = blockCount - 1;
-    markFor(targetBlockIndex).delAbove = true;
-    delRunSizeByBlock.set(
-      targetBlockIndex,
-      (delRunSizeByBlock.get(targetBlockIndex) ?? 0) + (end - i)
-    );
-
-    i = end;
-  }
-
-  // UX post-pass: line-level lineDiff represents an edited line as a del + add
-  // pair, which we naïvely tag as "add + delAbove". Visually one "mod" bar is
-  // clearer than two adjacent markers, so:
-  //   - When both add and del land in the same block, demote kind "add" to
-  //     "mod" (the block wasn't wholly new, it was rewritten).
-  //   - When the del run's size equals the block's added-line count, treat it
-  //     as a pure in-place rewrite and drop delAbove entirely.
-  for (const mark of marksByBlock.values()) {
-    if (!mark.delAbove) continue;
-    const addCount = addedLineCountByBlock.get(mark.blockIndex) ?? 0;
-    if (addCount === 0) continue;
-    if (mark.kind === "add") mark.kind = "mod";
-    const delCount = delRunSizeByBlock.get(mark.blockIndex) ?? 0;
-    if (delCount === addCount) delete mark.delAbove;
+  for (const unit of rewrittenUnits) markFor(unit).kind = "mod";
+  for (const [unit, newCount] of newLineCountByBlock) {
+    if (rewrittenUnits.has(unit)) continue;
+    markFor(unit).kind = newCount >= (ownedLineCountByBlock.get(unit) ?? 0) ? "add" : "mod";
   }
 
   const marks = Array.from(marksByBlock.values()).sort(
     (a, b) => a.blockIndex - b.blockIndex
   );
-  return { marks, blockCount };
+  return { marks, blockCount, groupSizes };
 }

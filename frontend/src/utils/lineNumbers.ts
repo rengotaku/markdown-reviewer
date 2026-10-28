@@ -1,4 +1,4 @@
-import { gutterUnitRanges } from "@/utils/diffGutterMarks";
+import { gutterUnits } from "@/utils/diffGutterMarks";
 import type { LineNumberPayload } from "@/components/tiptap/extensions/LineNumberGutter";
 
 /**
@@ -25,11 +25,12 @@ export function preambleLineOffset(raw: string, body: string): number {
  * numbers match the file on disk, not the body-only offset.
  */
 export function computeLineNumbers(raw: string, body: string): LineNumberPayload {
-  const ranges = gutterUnitRanges(body);
+  const { ranges, groupSizes } = gutterUnits(body);
   if (ranges.length === 0) return { lines: [], blockCount: 0 };
   const offset = preambleLineOffset(raw, body);
   return {
     lines: ranges.map((r) => offset + r.start + 1),
     blockCount: ranges.length,
+    groupSizes,
   };
 }

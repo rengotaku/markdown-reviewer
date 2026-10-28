@@ -7,6 +7,10 @@ import { TableCell } from "@tiptap/extension-table-cell";
 import { TableHeader } from "@tiptap/extension-table-header";
 import { TaskList } from "@tiptap/extension-task-list";
 import { TaskItem } from "@tiptap/extension-task-item";
+import { Markdown } from "tiptap-markdown";
+import { computeLineNumbers } from "@/utils/lineNumbers";
+import { computeDiffGutterMarks } from "@/utils/diffGutterMarks";
+import { DiffGutter } from "./DiffGutter";
 import { LineNumberGutter } from "./LineNumberGutter";
 
 // Mirrors DiffGutter.test.ts: the numbers are top-level block indices coming
@@ -156,5 +160,47 @@ describe("LineNumberGutter — list items and table rows (#368)", () => {
     );
     ed.commands.setLineNumbers({ lines: [1, 3, 4], blockCount: 3 });
     expect(labelled(ed)).toEqual(["tr:1", "tr:3", "tr:4"]);
+  });
+});
+
+// #368: tiptap-markdown splits a list mixing plain and task items into
+// several lists (sometimes with an extra empty task item), so its items no
+// longer line up with markdown-it's. Only that list falls back to one label;
+// the rest of the doc keeps per-item / per-row labels.
+describe("gutters — a block the two parsers split differently (#368)", () => {
+  const body = "# T\n\n- a\n  - b\n  - [ ] c\n- d\n\ntext\n\n- x\n- y\n";
+
+  function loadMarkdown(markdown: string): Editor {
+    editor = new Editor({
+      extensions: [
+        StarterKit.configure({ link: false }),
+        TaskList,
+        TaskItem.configure({ nested: true }),
+        Markdown,
+        DiffGutter,
+        LineNumberGutter,
+      ],
+      content: markdown,
+    });
+    return editor;
+  }
+
+  it("labels the mismatched list as a whole and keeps the others per item", () => {
+    const ed = loadMarkdown(body);
+    ed.commands.setLineNumbers(computeLineNumbers(body, body));
+    const labelled = Array.from(ed.view.dom.querySelectorAll("[data-line-number]")).map(
+      (el) => `${el.tagName.toLowerCase()}:${el.getAttribute("data-line-number")}`
+    );
+    expect(labelled).toEqual(["h1:1", "ul:3", "p:8", "li:10", "li:11"]);
+  });
+
+  it("puts a change inside the mismatched list on the list itself", () => {
+    const ed = loadMarkdown(body);
+    const before = "# T\n\n- a\n  - b\n  - [ ] old\n- d\n\ntext\n\n- x\n- y\n";
+    ed.commands.setDiffGutter(computeDiffGutterMarks(before, body));
+    const marked = Array.from(ed.view.dom.querySelectorAll(".diff-gutter-mod")).map((el) =>
+      el.tagName.toLowerCase()
+    );
+    expect(marked).toEqual(["ul"]);
   });
 });

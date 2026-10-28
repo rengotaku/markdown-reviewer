@@ -2,7 +2,7 @@ import { Extension } from "@tiptap/core";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
-import { contentBlocks, contentBlockCount } from "./blockAlignment";
+import { alignUnits, contentBlockCount } from "./blockAlignment";
 
 // LineNumberGutter labels each top-level block with the Markdown source line
 // its first line sits on (#234), so "N 行目" in a review comment lines up with
@@ -23,24 +23,31 @@ export interface LineNumberPayload {
   lines: number[];
   /** Block count markdown-it saw — cross-checked against the live doc. */
   blockCount: number;
+  /** Units per top-level block (#368); see alignUnits. */
+  groupSizes?: number[];
 }
 
 interface PluginState {
   payload: LineNumberPayload;
   deco: DecorationSet;
+  /** The doc's own unit count when `deco` was built (#270 fast path). */
+  unitCount: number;
 }
 
 const key = new PluginKey<PluginState>("lineNumberGutter");
 
 function buildDeco(doc: ProseMirrorNode, payload: LineNumberPayload): DecorationSet {
   if (payload.lines.length === 0) return DecorationSet.empty;
-  const blocks = contentBlocks(doc);
-  if (blocks.length !== payload.blockCount) return DecorationSet.empty;
+  const targets = alignUnits(doc, payload.blockCount, payload.groupSizes);
+  if (!targets) return DecorationSet.empty;
 
   const decos: Decoration[] = [];
-  blocks.forEach(({ offset, node }, index) => {
+  let lastOffset = -1;
+  targets.forEach(({ offset, node }, index) => {
     const line = payload.lines[index];
-    if (line === undefined) return;
+    // A block labelled as a whole gets its first unit's line only.
+    if (line === undefined || offset === lastOffset) return;
+    lastOffset = offset;
     decos.push(
       Decoration.node(offset, offset + node.nodeSize, {
         class: "line-number-gutter",
@@ -52,6 +59,10 @@ function buildDeco(doc: ProseMirrorNode, payload: LineNumberPayload): Decoration
 }
 
 const EMPTY_PAYLOAD: LineNumberPayload = { lines: [], blockCount: 0 };
+
+function built(doc: ProseMirrorNode, payload: LineNumberPayload): PluginState {
+  return { payload, deco: buildDeco(doc, payload), unitCount: contentBlockCount(doc) };
+}
 
 declare module "@tiptap/core" {
   interface Commands<ReturnType> {
@@ -70,12 +81,10 @@ export const LineNumberGutter = Extension.create({
       new Plugin<PluginState>({
         key,
         state: {
-          init: () => ({ payload: EMPTY_PAYLOAD, deco: DecorationSet.empty }),
+          init: () => ({ payload: EMPTY_PAYLOAD, deco: DecorationSet.empty, unitCount: 0 }),
           apply(tr, value, _oldState, newState) {
             const meta = tr.getMeta(key) as LineNumberPayload | undefined;
-            if (meta) {
-              return { payload: meta, deco: buildDeco(newState.doc, meta) };
-            }
+            if (meta) return built(newState.doc, meta);
             if (tr.docChanged) {
               // Per-keystroke path (#270): rebuilding placed one Decoration per
               // top-level block on every transaction. The payload itself cannot
@@ -84,17 +93,15 @@ export const LineNumberGutter = Extension.create({
               // arrives as a meta above — so mapping the existing decorations
               // through the change gives the same placement far more cheaply.
               //
-              // The block-count cross-check is kept: once the edit adds or
-              // removes a top-level block the payload no longer lines up with
-              // the doc, and rendering nothing (as before) beats rendering
-              // misaligned bars until the next payload lands.
-              if (contentBlockCount(newState.doc) !== value.payload.blockCount) {
-                return { payload: value.payload, deco: DecorationSet.empty };
+              // The unit-count cross-check is kept: once the edit adds or
+              // removes a unit (a block, list item or table row) the payload
+              // no longer lines up with the doc, and rendering nothing (as
+              // before) beats rendering misaligned numbers until the next
+              // payload lands.
+              if (contentBlockCount(newState.doc) !== value.unitCount) {
+                return { ...value, deco: DecorationSet.empty };
               }
-              return {
-                payload: value.payload,
-                deco: value.deco.map(tr.mapping, newState.doc),
-              };
+              return { ...value, deco: value.deco.map(tr.mapping, newState.doc) };
             }
             return value;
           },

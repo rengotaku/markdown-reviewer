@@ -129,6 +129,7 @@ describe("computeDiffGutterMarks", () => {
     expect(computeDiffGutterMarks(baseline, current)).toEqual({
       marks: [],
       blockCount: 0,
+      groupSizes: [],
     });
   });
 });
@@ -216,6 +217,34 @@ describe("computeDiffGutterMarks — list items and table rows (#368)", () => {
     const after = "- a\n\nafter\n";
     expect(computeDiffGutterMarks(before, after).marks).toEqual([
       { blockIndex: 1, delAbove: true },
+    ]);
+  });
+
+  it("marks every rewritten item of a run as mod, with no dash", () => {
+    const before = "- a\n- b\n  - b1\n";
+    const after = "- A\n- B\n  - B1\n";
+    expect(computeDiffGutterMarks(before, after).marks).toEqual([
+      { blockIndex: 0, kind: "mod" },
+      { blockIndex: 1, kind: "mod" },
+      { blockIndex: 2, kind: "mod" },
+    ]);
+  });
+
+  it("marks every rewritten table row of a run as mod, with no dash", () => {
+    const before = "| x |\n|---|\n| 1 |\n| 2 |\n";
+    const after = "| x |\n|---|\n| 3 |\n| 4 |\n";
+    expect(computeDiffGutterMarks(before, after).marks).toEqual([
+      { blockIndex: 1, kind: "mod" },
+      { blockIndex: 2, kind: "mod" },
+    ]);
+  });
+
+  it("splits a hunk into a rewritten item and a new one", () => {
+    const before = "- a\n";
+    const after = "- A\n- b\n";
+    expect(computeDiffGutterMarks(before, after).marks).toEqual([
+      { blockIndex: 0, kind: "mod" },
+      { blockIndex: 1, kind: "add" },
     ]);
   });
 

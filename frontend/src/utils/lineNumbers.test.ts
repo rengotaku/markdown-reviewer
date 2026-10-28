@@ -24,6 +24,7 @@ describe("computeLineNumbers (#234)", () => {
     expect(computeLineNumbers(body, body)).toEqual({
       lines: [1, 3, 5, 9],
       blockCount: 4,
+      groupSizes: [1, 1, 1, 1],
     });
   });
 
@@ -32,6 +33,7 @@ describe("computeLineNumbers (#234)", () => {
     expect(computeLineNumbers(body, body)).toEqual({
       lines: [1, 2, 3, 4, 6],
       blockCount: 5,
+      groupSizes: [4, 1],
     });
   });
 
@@ -40,6 +42,7 @@ describe("computeLineNumbers (#234)", () => {
     expect(computeLineNumbers(body, body)).toEqual({
       lines: [1, 3, 4],
       blockCount: 3,
+      groupSizes: [3],
     });
   });
 
@@ -49,6 +52,7 @@ describe("computeLineNumbers (#234)", () => {
     expect(computeLineNumbers(raw, body)).toEqual({
       lines: [4, 6],
       blockCount: 2,
+      groupSizes: [1, 1],
     });
   });
 
