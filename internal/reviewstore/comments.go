@@ -348,7 +348,7 @@ func ResolveAnchor(content string, a Anchor) (lineRange [2]int, ok bool) {
 		// Snippet/heading_path are authored from the frontend's ProseMirror
 		// textContent, which renders inline marks away. Strip the same marks
 		// here so a code span / emphasis in the canonical line still matches.
-		if !strings.Contains(stripInlineMarkup(line), a.Snippet) {
+		if !lineContainsSnippet(line, a.Snippet) {
 			continue
 		}
 		if len(a.HeadingPath) > 0 && !headingSuffixMatch(stacks[i], a.HeadingPath) {
@@ -423,7 +423,7 @@ func ResolveAnchorForDisplay(content string, a Anchor) (anchor Anchor, lineRange
 	lines := strings.Split(content, "\n")
 	match := -1
 	for i, line := range lines {
-		if !strings.Contains(stripInlineMarkup(line), a.Snippet) {
+		if !lineContainsSnippet(line, a.Snippet) {
 			continue
 		}
 		if match >= 0 {
@@ -475,7 +475,7 @@ func headingStacks(content string) [][]string {
 				for len(stack) > 0 && stack[len(stack)-1].level >= level {
 					stack = stack[:len(stack)-1]
 				}
-				stack = append(stack, entry{text: m[1] + " " + stripInlineMarkup(strings.TrimSpace(m[2])), level: level})
+				stack = append(stack, entry{text: m[1] + " " + stripInlineMarkupUnescaped(strings.TrimSpace(m[2])), level: level})
 			}
 		}
 		snap := make([]string, len(stack))
@@ -621,7 +621,48 @@ func StripInlineMarkup(s string) string { return stripInlineMarkup(s) }
 // underscores in `_watchlist.md`) survive. Only text outside code spans has
 // links/images unwrapped to their text and emphasis/strikethrough delimiters
 // dropped.
-func stripInlineMarkup(s string) string {
+func stripInlineMarkup(s string) string { return stripInline(s, false) }
+
+// stripInlineMarkupUnescaped is stripInlineMarkup that also resolves CommonMark
+// backslash escapes outside code spans (`\[` → `[`), matching what the editor
+// renders for prose. The editor's serializer writes such escapes on save
+// (`[新]` comes back as `\[新\]`), so without this a snippet authored from the
+// rendered text orphans on the next save (#370). An escaped character never
+// acts as an emphasis/link/code delimiter.
+func stripInlineMarkupUnescaped(s string) string { return stripInline(s, true) }
+
+// lineContainsSnippet reports whether line's rendered text contains snippet.
+// The line is tried both as-is and with backslash escapes resolved: in prose
+// the editor renders `\[` as `[`, but inside a fenced code block the backslash
+// is literal and stays in the frontend's text, and a single line does not know
+// which of the two it is.
+func lineContainsSnippet(line, snippet string) bool {
+	return strings.Contains(stripInlineMarkup(line), snippet) ||
+		strings.Contains(stripInlineMarkupUnescaped(line), snippet)
+}
+
+// escapeBase maps an escaped ASCII punctuation character to a rune in the
+// supplementary private use area while emphasis is stripped, so the regexes
+// in stripEmphasis cannot treat it as a delimiter. restoreEscapes maps it back.
+const escapeBase = 0xF0000
+
+func isASCIIPunct(r rune) bool {
+	return r < 0x80 && strings.ContainsRune("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~", r)
+}
+
+func restoreEscapes(s string) string {
+	if !strings.ContainsFunc(s, func(r rune) bool { return r >= escapeBase && r < escapeBase+0x80 }) {
+		return s
+	}
+	return strings.Map(func(r rune) rune {
+		if r >= escapeBase && r < escapeBase+0x80 {
+			return r - escapeBase
+		}
+		return r
+	}, s)
+}
+
+func stripInline(s string, unescape bool) string {
 	runes := []rune(s)
 	n := len(runes)
 	var out strings.Builder
@@ -634,6 +675,11 @@ func stripInlineMarkup(s string) string {
 	}
 	i := 0
 	for i < n {
+		if unescape && runes[i] == '\\' && i+1 < n && isASCIIPunct(runes[i+1]) {
+			seg.WriteRune(escapeBase + runes[i+1])
+			i += 2
+			continue
+		}
 		if runes[i] != '`' {
 			seg.WriteRune(runes[i])
 			i++
@@ -670,6 +716,9 @@ func stripInlineMarkup(s string) string {
 		i = j + k
 	}
 	flush()
+	if unescape {
+		return restoreEscapes(out.String())
+	}
 	return out.String()
 }
 

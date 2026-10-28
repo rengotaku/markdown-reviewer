@@ -337,7 +337,7 @@ func reanchorOne(
 // or the candidate still fails to resolve to newIdx; the caller falls back
 // to rebuildAt in that case.
 func rebuildPreservingSnippet(a Anchor, newCanonical string, newLines []string, newStacks [][]string, newIdx int) (Anchor, bool) {
-	if !strings.Contains(stripInlineMarkup(newLines[newIdx]), a.Snippet) {
+	if !lineContainsSnippet(newLines[newIdx], a.Snippet) {
 		return a, false
 	}
 	headingPath := a.HeadingPath
@@ -409,7 +409,7 @@ func findLineByFingerprint(newLines []string, fingerprint string) (int, bool) {
 func occurrenceAtLine(lines []string, stacks [][]string, targetIdx int, snippet string, headingPath []string) int {
 	occ := 0
 	for i := 0; i < targetIdx && i < len(lines); i++ {
-		if !strings.Contains(stripInlineMarkup(lines[i]), snippet) {
+		if !lineContainsSnippet(lines[i], snippet) {
 			continue
 		}
 		if len(headingPath) > 0 && !headingSuffixMatch(stacks[i], headingPath) {
