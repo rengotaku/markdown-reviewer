@@ -20,10 +20,26 @@ describe("preambleLineOffset (#234)", () => {
 
 describe("computeLineNumbers (#234)", () => {
   it("numbers each top-level block by its first source line", () => {
-    const body = "# Title\n\nfirst paragraph\n\n- a\n- b\n\nlast\n";
+    const body = "# Title\n\nfirst paragraph\n\n```\ncode\n```\n\nlast\n";
     expect(computeLineNumbers(body, body)).toEqual({
-      lines: [1, 3, 5, 8],
+      lines: [1, 3, 5, 9],
       blockCount: 4,
+    });
+  });
+
+  it("numbers every list item, nested ones included (#368)", () => {
+    const body = "- a\n  - a1\n  - a2\n- b\n\nlast\n";
+    expect(computeLineNumbers(body, body)).toEqual({
+      lines: [1, 2, 3, 4, 6],
+      blockCount: 5,
+    });
+  });
+
+  it("numbers every table row, skipping the delimiter row (#368)", () => {
+    const body = "| x | y |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |\n";
+    expect(computeLineNumbers(body, body)).toEqual({
+      lines: [1, 3, 4],
+      blockCount: 3,
     });
   });
 

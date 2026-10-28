@@ -6,8 +6,13 @@
      the line-number gutter (#234) always fits — including 5-digit numbers —
      without the text shifting when the numbers are toggled. Reserving it
      unconditionally is what keeps that toggle from moving the text at all. */
-  padding: 20px 48px 40px 60px;
+  padding: 20px 48px 40px var(--editor-padding-left);
+  --editor-padding-left: 60px;
   box-sizing: border-box;
+  /* Containing block for the gutter of list items and table rows (#368):
+     their numbers and dots are positioned from the editor's left edge so
+     they share the top-level blocks' column at any nesting depth. */
+  position: relative;
   outline: none;
   font-size: 1rem;
   line-height: 1.6;
@@ -576,18 +581,29 @@
   --diff-dash: none;
 }
 
+/* List items and table rows (#368) read the same variables, but they nest:
+   reset them on every item/row so an unchanged child doesn't inherit its
+   parent's dot. */
+.ProseMirror :is(li, tr) {
+  --diff-dot: none;
+  --diff-dash: none;
+}
+
 /* Match DiffView add color (rgba(46,160,67,...)) — solid alpha so the dot
    reads clearly against paper backgrounds. */
-.ProseMirror > .diff-gutter-add {
+.ProseMirror > .diff-gutter-add,
+.ProseMirror :is(li, tr).diff-gutter-add {
   --diff-dot: radial-gradient(circle closest-side, rgb(46, 160, 67) calc(100% - 1px), transparent);
 }
 
 /* GitHub-style "modified" blue. Distinct from add-green and del-red. */
-.ProseMirror > .diff-gutter-mod {
+.ProseMirror > .diff-gutter-mod,
+.ProseMirror :is(li, tr).diff-gutter-mod {
   --diff-dot: radial-gradient(circle closest-side, rgb(9, 105, 218) calc(100% - 1px), transparent);
 }
 
-.ProseMirror > .diff-gutter-del-above {
+.ProseMirror > .diff-gutter-del-above,
+.ProseMirror :is(li, tr).diff-gutter-del-above {
   --diff-dash: linear-gradient(rgb(248, 81, 73), rgb(248, 81, 73));
 }
 
@@ -705,10 +721,75 @@
   --line-number-line-height: 1.55em;
 }
 
-/* Tables have no padding of their own — the first line of text sits inside
-   the first cell, below its border and padding (1px + 2px), and uses the
-   cell's own line-height. */
-.ProseMirror > table.line-number-gutter {
-  --block-padding-top: 3px;
+/* List items and table rows (#368). Lists and tables are labelled per item
+   and per row rather than once per block, and the line number and the diff
+   dot/dash share one pseudo-element here.
+
+   - Horizontal: neither the item/row nor anything between it and
+     .ProseMirror is positioned, so `left` resolves against .ProseMirror and
+     the box lands in the same column as the top-level blocks' gutter
+     however deeply the item is nested. This also keeps a row's number from
+     being clipped by the table's own horizontal scroll (#152).
+   - Vertical: `top` is left at auto, so the box sits at its static
+     position — the item's or row's first line.
+   - Items use ::before: an ::after's static position is after the item's
+     content, i.e. below a multi-line or nested item. Rows use ::after
+     instead: in Chromium a ::before in a table row pushes every cell of the
+     row right (25px measured), even when it is absolutely positioned, while
+     an ::after leaves the cells alone and still sits on the row's line.
+
+   The box runs from the editor's left edge to the dot's right edge
+   (padding-left - 11px). The number is right-aligned 26px from the text,
+   as on top-level blocks; the dot and dash are backgrounds at its right. */
+.ProseMirror li {
+  --line-number-line-height: 1.6em;
+}
+
+.ProseMirror li:is(
+    .line-number-gutter,
+    .diff-gutter-add,
+    .diff-gutter-mod,
+    .diff-gutter-del-above
+  )::before,
+.ProseMirror tr:is(
+    .line-number-gutter,
+    .diff-gutter-add,
+    .diff-gutter-mod,
+    .diff-gutter-del-above
+  )::after {
+  content: attr(data-line-number);
+  position: absolute;
+  left: 0;
+  width: calc(var(--editor-padding-left) - 11px);
+  height: var(--line-number-line-height);
+  box-sizing: border-box;
+  padding-right: 15px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  color: #9aa0a6;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  user-select: none;
+  pointer-events: none;
+  background-image: var(--diff-dash), var(--diff-dot);
+  background-size: 7px 3px, 9px 9px;
+  background-position: right 1px top 0, right center;
+  background-repeat: no-repeat;
+}
+
+/* A row's text sits inside its cells, below the 1px border and 2px padding,
+   and uses the cells' own line-height. */
+.ProseMirror tr {
   --line-number-line-height: calc(1.3 * 0.875rem);
+}
+
+.ProseMirror tr:is(
+    .line-number-gutter,
+    .diff-gutter-add,
+    .diff-gutter-mod,
+    .diff-gutter-del-above
+  )::after {
+  margin-top: 3px;
 }

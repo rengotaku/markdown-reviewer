@@ -120,7 +120,7 @@ describe("DiffGutter", () => {
     });
     const painted = nodeAt(ed, ".diff-gutter-mod");
     expect(painted).toHaveLength(1);
-    expect(painted[0].tagName.toLowerCase()).toBe("ul");
+    expect(painted[0].tagName.toLowerCase()).toBe("li");
   });
 
   it("still degrades when the mismatch is not just the trailing empty paragraph", () => {
@@ -176,5 +176,26 @@ describe("DiffGutter — doc changes (#270)", () => {
 
     ed.commands.insertContentAt(ed.state.doc.content.size, "<p>third</p>");
     expect(nodeAt(ed, ".diff-gutter-add")).toHaveLength(0);
+  });
+});
+
+describe("DiffGutter — list items and table rows (#368)", () => {
+  it("marks the changed list item, not the whole list", () => {
+    const ed = makeEditor("<ul><li><p>a</p></li><li><p>b</p></li><li><p>c</p></li></ul>");
+    ed.commands.setDiffGutter({ marks: [{ blockIndex: 2, kind: "mod" }], blockCount: 3 });
+    const painted = nodeAt(ed, ".diff-gutter-mod");
+    expect(painted).toHaveLength(1);
+    expect(painted[0].tagName.toLowerCase()).toBe("li");
+    expect(painted[0].textContent).toBe("c");
+  });
+
+  it("counts a nested item right after its parent", () => {
+    const ed = makeEditor(
+      "<ul><li><p>a</p><ul><li><p>a1</p></li></ul></li><li><p>b</p></li></ul>"
+    );
+    ed.commands.setDiffGutter({ marks: [{ blockIndex: 1, kind: "add" }], blockCount: 3 });
+    const painted = nodeAt(ed, ".diff-gutter-add");
+    expect(painted).toHaveLength(1);
+    expect(painted[0].textContent).toBe("a1");
   });
 });

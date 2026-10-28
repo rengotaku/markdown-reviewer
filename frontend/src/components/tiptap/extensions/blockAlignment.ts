@@ -1,8 +1,9 @@
 import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
 
 // Shared helper for DiffGutter/LineNumberGutter: both plugins receive a
-// payload indexed by markdown-it's top-level block order and need to find
-// the matching ProseMirror node to decorate.
+// payload indexed by markdown-it's unit order (top-level blocks, with lists
+// and tables split into items and rows — #368) and need to find the matching
+// ProseMirror node to decorate.
 //
 // Since #261, blank lines are represented as real empty paragraph nodes in
 // the doc (BlankLines.ts inserts them on load; typing Enter/Backspace adds
@@ -31,28 +32,61 @@ export interface ContentBlock {
   node: ProseMirrorNode;
 }
 
+const LIST_TYPES = new Set(["bulletList", "orderedList", "taskList"]);
+
 /**
- * contentBlocks returns doc's top-level children in order, skipping blank
- * -line paragraphs, so index i lines up with markdown-it's i-th block.
+ * Walks the units the gutters label, in document order (#368): each
+ * top-level child except blank-line paragraphs, with lists replaced by their
+ * items (an item followed by the items of its directly nested lists) and
+ * tables by their rows. This must produce the same units in the same order
+ * as gutterUnitRanges() does on the markdown side.
+ */
+function forEachUnit(doc: ProseMirrorNode, visit: (offset: number, node: ProseMirrorNode) => void) {
+  doc.forEach((node, offset) => {
+    if (isBlankLineParagraph(node)) return;
+    if (LIST_TYPES.has(node.type.name)) {
+      forEachListItem(node, offset, visit);
+    } else if (node.type.name === "table") {
+      node.forEach((row, rowOffset) => visit(offset + 1 + rowOffset, row));
+    } else {
+      visit(offset, node);
+    }
+  });
+}
+
+function forEachListItem(
+  list: ProseMirrorNode,
+  listOffset: number,
+  visit: (offset: number, node: ProseMirrorNode) => void
+) {
+  list.forEach((item, itemOffset) => {
+    const offset = listOffset + 1 + itemOffset;
+    visit(offset, item);
+    item.forEach((child, childOffset) => {
+      if (LIST_TYPES.has(child.type.name)) forEachListItem(child, offset + 1 + childOffset, visit);
+    });
+  });
+}
+
+/**
+ * contentBlocks returns the gutter units of doc in order (see forEachUnit),
+ * so index i lines up with markdown-it's i-th unit.
  */
 export function contentBlocks(doc: ProseMirrorNode): ContentBlock[] {
   const blocks: ContentBlock[] = [];
-  doc.forEach((node, offset) => {
-    if (isBlankLineParagraph(node)) return;
-    blocks.push({ offset, node });
-  });
+  forEachUnit(doc, (offset, node) => blocks.push({ offset, node }));
   return blocks;
 }
 
 /**
  * Number of blocks contentBlocks() would return, without building the array.
  * The gutter plugins only need the count on their per-keystroke path (#270),
- * where allocating one object per top-level block is the thing being avoided.
+ * where allocating one object per unit is the thing being avoided.
  */
 export function contentBlockCount(doc: ProseMirrorNode): number {
   let n = 0;
-  doc.forEach((node) => {
-    if (!isBlankLineParagraph(node)) n += 1;
+  forEachUnit(doc, () => {
+    n += 1;
   });
   return n;
 }
