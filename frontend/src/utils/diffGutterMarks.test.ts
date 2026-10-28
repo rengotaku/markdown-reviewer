@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   topLevelBlockRanges,
+  gutterUnitRanges,
   computeDiffGutterMarks,
 } from "./diffGutterMarks";
 import { splitPreamble } from "@/utils/frontmatter";
@@ -128,6 +129,130 @@ describe("computeDiffGutterMarks", () => {
     expect(computeDiffGutterMarks(baseline, current)).toEqual({
       marks: [],
       blockCount: 0,
+      groupSizes: [],
     });
+  });
+});
+
+describe("gutterUnitRanges (#368)", () => {
+  it("splits lists into items, nested items right after their parent", () => {
+    const body = ["# H", "", "- a", "  - a1", "- b", "", "after", ""].join("\n");
+    expect(gutterUnitRanges(body)).toEqual([
+      { type: "heading_open", start: 0, end: 1 },
+      { type: "list_item_open", start: 2, end: 4 },
+      { type: "list_item_open", start: 3, end: 4 },
+      { type: "list_item_open", start: 4, end: 5 },
+      { type: "paragraph_open", start: 6, end: 7 },
+    ]);
+  });
+
+  it("splits tables into rows; the header row also covers the delimiter row", () => {
+    const body = ["| x |", "|---|", "| 1 |", "| 2 |", ""].join("\n");
+    expect(gutterUnitRanges(body)).toEqual([
+      { type: "tr_open", start: 0, end: 2 },
+      { type: "tr_open", start: 2, end: 3 },
+      { type: "tr_open", start: 3, end: 4 },
+    ]);
+  });
+
+  it("keeps a list inside a blockquote as part of the blockquote", () => {
+    expect(gutterUnitRanges("> - a\n> - b\n")).toEqual([
+      { type: "blockquote_open", start: 0, end: 2 },
+    ]);
+  });
+});
+
+describe("computeDiffGutterMarks — list items and table rows (#368)", () => {
+  it("marks the edited item, not the first item of the list", () => {
+    const before = "- a\n- b\n- c\n";
+    const after = "- a\n- b\n- C\n";
+    expect(computeDiffGutterMarks(before, after).marks).toEqual([
+      { blockIndex: 2, kind: "mod" },
+    ]);
+  });
+
+  it("marks each added item separately", () => {
+    const before = "- a\n- c\n";
+    const after = "- a\n- b\n- c\n- d\n";
+    expect(computeDiffGutterMarks(before, after).marks).toEqual([
+      { blockIndex: 1, kind: "add" },
+      { blockIndex: 3, kind: "add" },
+    ]);
+  });
+
+  it("marks a new nested item as add without touching its parent", () => {
+    const before = "- a\n- b\n";
+    const after = "- a\n  - a1\n- b\n";
+    expect(computeDiffGutterMarks(before, after).marks).toEqual([
+      { blockIndex: 1, kind: "add" },
+    ]);
+  });
+
+  it("marks the edited table row", () => {
+    const before = "| x |\n|---|\n| 1 |\n| 2 |\n";
+    const after = "| x |\n|---|\n| 1 |\n| 3 |\n";
+    expect(computeDiffGutterMarks(before, after).marks).toEqual([
+      { blockIndex: 2, kind: "mod" },
+    ]);
+  });
+
+  it("attributes a delimiter-row change to the header row", () => {
+    const before = "| x |\n|---|\n| 1 |\n";
+    const after = "| x |\n|:-:|\n| 1 |\n";
+    expect(computeDiffGutterMarks(before, after).marks).toEqual([
+      { blockIndex: 0, kind: "mod" },
+    ]);
+  });
+
+  it("marks an item appended to a list followed by a blank line as add", () => {
+    const before = "- a\n- b\n\nafter\n";
+    const after = "- a\n- b\n- c\n\nafter\n";
+    expect(computeDiffGutterMarks(before, after).marks).toEqual([
+      { blockIndex: 2, kind: "add" },
+    ]);
+  });
+
+  it("puts the dash for a deleted last item on the next block, not on the item above", () => {
+    const before = "- a\n- b\n\nafter\n";
+    const after = "- a\n\nafter\n";
+    expect(computeDiffGutterMarks(before, after).marks).toEqual([
+      { blockIndex: 1, delAbove: true },
+    ]);
+  });
+
+  it("marks every rewritten item of a run as mod, with no dash", () => {
+    const before = "- a\n- b\n  - b1\n";
+    const after = "- A\n- B\n  - B1\n";
+    expect(computeDiffGutterMarks(before, after).marks).toEqual([
+      { blockIndex: 0, kind: "mod" },
+      { blockIndex: 1, kind: "mod" },
+      { blockIndex: 2, kind: "mod" },
+    ]);
+  });
+
+  it("marks every rewritten table row of a run as mod, with no dash", () => {
+    const before = "| x |\n|---|\n| 1 |\n| 2 |\n";
+    const after = "| x |\n|---|\n| 3 |\n| 4 |\n";
+    expect(computeDiffGutterMarks(before, after).marks).toEqual([
+      { blockIndex: 1, kind: "mod" },
+      { blockIndex: 2, kind: "mod" },
+    ]);
+  });
+
+  it("splits a hunk into a rewritten item and a new one", () => {
+    const before = "- a\n";
+    const after = "- A\n- b\n";
+    expect(computeDiffGutterMarks(before, after).marks).toEqual([
+      { blockIndex: 0, kind: "mod" },
+      { blockIndex: 1, kind: "add" },
+    ]);
+  });
+
+  it("puts a deleted item's dash on the item that follows it", () => {
+    const before = "- a\n- b\n- c\n";
+    const after = "- a\n- c\n";
+    expect(computeDiffGutterMarks(before, after).marks).toEqual([
+      { blockIndex: 1, delAbove: true },
+    ]);
   });
 });

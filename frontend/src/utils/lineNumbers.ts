@@ -1,4 +1,4 @@
-import { topLevelBlockRanges } from "@/utils/diffGutterMarks";
+import { gutterUnits } from "@/utils/diffGutterMarks";
 import type { LineNumberPayload } from "@/components/tiptap/extensions/LineNumberGutter";
 
 /**
@@ -16,19 +16,21 @@ export function preambleLineOffset(raw: string, body: string): number {
 }
 
 /**
- * computeLineNumbers maps each top-level Markdown block to the 1-indexed
- * source line it starts on, for the editor's line-number gutter (#234).
+ * computeLineNumbers maps each gutter unit (a top-level block, or a list
+ * item / table row — see gutterUnitRanges, #368) to the 1-indexed source
+ * line it starts on, for the editor's line-number gutter (#234).
  *
  * `raw` is the file as stored (hint comment + frontmatter + body) and `body`
  * is what the editor actually renders; the preamble is added back in so the
  * numbers match the file on disk, not the body-only offset.
  */
 export function computeLineNumbers(raw: string, body: string): LineNumberPayload {
-  const ranges = topLevelBlockRanges(body);
+  const { ranges, groupSizes } = gutterUnits(body);
   if (ranges.length === 0) return { lines: [], blockCount: 0 };
   const offset = preambleLineOffset(raw, body);
   return {
     lines: ranges.map((r) => offset + r.start + 1),
     blockCount: ranges.length,
+    groupSizes,
   };
 }
