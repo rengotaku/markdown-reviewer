@@ -765,3 +765,65 @@ func TestReanchorOnSave_NotIngestedNoOp(t *testing.T) {
 		t.Fatalf("expected no-op (changed=false) for a non-ingested file")
 	}
 }
+
+// TestReanchor_SaveAddsEscapes (#370): saving in the editor rewrites `[新]` as
+// `\[新\]`. The anchor must keep resolving to the same line with its rendered
+// snippet, and a rewritten line must get a rendered (unescaped) snippet.
+func TestReanchor_SaveAddsEscapes(t *testing.T) {
+	oldBody := "# T\n\n| a | 各行に [新] を付ける |\n\nfoo [a]\n"
+	newBody := "# T\n\n| a | 各行に \\[新\\] を付ける |  |\n\nbar \\[a\\]\n"
+
+	keep := Anchor{HeadingPath: []string{"# T"}, Snippet: "各行に [新] を付ける"}
+	moved := Anchor{HeadingPath: []string{"# T"}, Snippet: "foo [a]"}
+	for _, a := range []*Anchor{&keep, &moved} {
+		fp, ok := FingerprintAt(oldBody, *a)
+		if !ok {
+			t.Fatalf("precondition: %q should resolve against old body", a.Snippet)
+		}
+		a.LineFingerprint = fp
+	}
+	review := Review{Version: 1, Comments: []Comment{
+		{ID: "c-001", Scope: "inline", Body: "x", Anchor: &keep},
+		{ID: "c-002", Scope: "inline", Body: "y", Anchor: &moved},
+	}}
+	out, _ := ReanchorReview(review, oldBody, newBody)
+
+	if got := resolvedLine(t, newBody, *out.Comments[0].Anchor); got != 3 {
+		t.Fatalf("escaped table cell: want line 3, got %d (anchor=%+v)", got, *out.Comments[0].Anchor)
+	}
+	if s := out.Comments[0].Anchor.Snippet; s != keep.Snippet {
+		t.Fatalf("snippet should stay rendered, got %q", s)
+	}
+	rebuilt := *out.Comments[1].Anchor
+	if got := resolvedLine(t, newBody, rebuilt); got != 5 {
+		t.Fatalf("rewritten line: want line 5, got %d (anchor=%+v)", got, rebuilt)
+	}
+	if rebuilt.Snippet != "bar [a]" {
+		t.Fatalf("rebuilt snippet should be rendered text, got %q", rebuilt.Snippet)
+	}
+}
+
+// TestReanchor_EscapedCodeKeepsProseOccurrence (#370): a fenced `a \[x\]`
+// before the prose `a [x]` must not bump the prose anchor's occurrence on an
+// unrelated save.
+func TestReanchor_EscapedCodeKeepsProseOccurrence(t *testing.T) {
+	oldBody := "# T\n\n```text\na \\[x\\]\n```\n\na [x]\n\nend\n"
+	newBody := "# T\n\n```text\na \\[x\\]\n```\n\na [x]\n\nend changed\n"
+
+	a := Anchor{HeadingPath: []string{"# T"}, Snippet: "a [x]"}
+	fp, ok := FingerprintAt(oldBody, a)
+	if !ok {
+		t.Fatal("precondition: anchor should resolve against old body")
+	}
+	a.LineFingerprint = fp
+	review := Review{Version: 1, Comments: []Comment{{ID: "c-001", Scope: "inline", Body: "x", Anchor: &a}}}
+	out, _ := ReanchorReview(review, oldBody, newBody)
+
+	got := *out.Comments[0].Anchor
+	if got.Occurrence != 0 {
+		t.Fatalf("occurrence must stay 0, got %d", got.Occurrence)
+	}
+	if line := resolvedLine(t, newBody, got); line != 7 {
+		t.Fatalf("want line 7, got %d", line)
+	}
+}

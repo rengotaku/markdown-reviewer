@@ -572,3 +572,25 @@ func TestResolveAnchor_BackslashEscapes(t *testing.T) {
 		t.Fatalf("display fallback: want line 5, got %v ok=%v anchor=%+v", lr, ok, a)
 	}
 }
+
+// TestResolveAnchor_EscapedCodeDoesNotShadowProse (#370): an escape inside a
+// fence is literal, so the fenced `a \[x\]` must not count as an occurrence of
+// the prose `a [x]` that follows it (the frontend does not count it either).
+func TestResolveAnchor_EscapedCodeDoesNotShadowProse(t *testing.T) {
+	content := "# T\n\n```text\na \\[x\\]\n```\n\na [x]\n\n    b \\[y\\]\n"
+
+	lr, ok := ResolveAnchor(content, Anchor{Snippet: "a [x]", HeadingPath: []string{"# T"}})
+	if !ok || lr[0] != 7 {
+		t.Fatalf("prose: want line 7, got %v ok=%v", lr, ok)
+	}
+	if _, ok := ResolveAnchor(content, Anchor{Snippet: "a [x]", Occurrence: 1}); ok {
+		t.Fatal("the fenced line must not be a second occurrence")
+	}
+	// Indented code keeps the backslash too.
+	if _, ok := ResolveAnchor(content, Anchor{Snippet: "b [y]"}); ok {
+		t.Fatal("indented code must not match the unescaped snippet")
+	}
+	if lr, ok := ResolveAnchor(content, Anchor{Snippet: `b \[y\]`}); !ok || lr[0] != 9 {
+		t.Fatalf("indented code literal: want line 9, got %v ok=%v", lr, ok)
+	}
+}

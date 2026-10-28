@@ -343,12 +343,13 @@ func ResolveAnchor(content string, a Anchor) (lineRange [2]int, ok bool) {
 	}
 	stacks := headingStacks(content)
 	lines := strings.Split(content, "\n")
+	code := codeLines(lines)
 	seen := 0
 	for i, line := range lines {
 		// Snippet/heading_path are authored from the frontend's ProseMirror
 		// textContent, which renders inline marks away. Strip the same marks
 		// here so a code span / emphasis in the canonical line still matches.
-		if !lineContainsSnippet(line, a.Snippet) {
+		if !strings.Contains(renderedLine(line, code[i]), a.Snippet) {
 			continue
 		}
 		if len(a.HeadingPath) > 0 && !headingSuffixMatch(stacks[i], a.HeadingPath) {
@@ -421,9 +422,10 @@ func ResolveAnchorForDisplay(content string, a Anchor) (anchor Anchor, lineRange
 		return a, [2]int{}, false
 	}
 	lines := strings.Split(content, "\n")
+	code := codeLines(lines)
 	match := -1
 	for i, line := range lines {
-		if !lineContainsSnippet(line, a.Snippet) {
+		if !strings.Contains(renderedLine(line, code[i]), a.Snippet) {
 			continue
 		}
 		if match >= 0 {
@@ -631,14 +633,27 @@ func stripInlineMarkup(s string) string { return stripInline(s, false) }
 // acts as an emphasis/link/code delimiter.
 func stripInlineMarkupUnescaped(s string) string { return stripInline(s, true) }
 
-// lineContainsSnippet reports whether line's rendered text contains snippet.
-// The line is tried both as-is and with backslash escapes resolved: in prose
-// the editor renders `\[` as `[`, but inside a fenced code block the backslash
-// is literal and stays in the frontend's text, and a single line does not know
-// which of the two it is.
-func lineContainsSnippet(line, snippet string) bool {
-	return strings.Contains(stripInlineMarkup(line), snippet) ||
-		strings.Contains(stripInlineMarkupUnescaped(line), snippet)
+// renderedLine returns line's text as the editor renders it, which is what
+// snippets are authored from: inline markup is stripped, and backslash escapes
+// are resolved in prose (`\[` → `[`) but kept in code, where the editor shows
+// them as typed. inCode comes from codeLines.
+func renderedLine(line string, inCode bool) string {
+	if inCode {
+		return stripInlineMarkup(line)
+	}
+	return stripInlineMarkupUnescaped(line)
+}
+
+// codeLines reports, per line, whether it belongs to a fenced or indented code
+// block, using the same fence tracking as headingStacks.
+func codeLines(lines []string) []bool {
+	out := make([]bool, len(lines))
+	var fence fenceState
+	for i, line := range lines {
+		inFence := fence.step(line)
+		out[i] = inFence || (strings.TrimSpace(line) != "" && !fence.indentAllowsBlock(leadingIndent(line)))
+	}
+	return out
 }
 
 // escapeBase maps an escaped ASCII punctuation character to a rune in the
