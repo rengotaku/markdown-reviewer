@@ -111,7 +111,12 @@ export function AgentStatusIndicator({
         aria-live="polite"
         data-testid="editor-agent-status"
         data-state={status.state}
-        sx={SLOT_SX}
+        // Focusable so a keyboard reader can open the tooltip the words moved to.
+        tabIndex={0}
+        sx={[
+          SLOT_SX,
+          { "&:focus-visible": { outline: "2px solid", outlineColor: "primary.main" } },
+        ]}
       >
         {dot(color, pulse, hollow)}
         <Box component="span" sx={VISUALLY_HIDDEN_SX}>

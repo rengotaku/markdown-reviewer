@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { AgentStatusIndicator } from "./AgentStatusIndicator";
 
 describe("AgentStatusIndicator", () => {
@@ -90,6 +91,23 @@ describe("AgentStatusIndicator", () => {
     const tip = await screen.findByRole("tooltip");
     expect(tip).toHaveTextContent(/Claude 返信中 0:4[23] · 送信 3 件/);
     expect(tip).toHaveTextContent("送信先: s");
+  });
+
+  // The tooltip itself opens on :focus-visible, which jsdom can't evaluate;
+  // that part is checked in a real browser.
+  it("can be reached from the keyboard", async () => {
+    render(
+      <AgentStatusIndicator
+        status={{ state: "idle", agent_id: "claude", session_name: "s" }}
+        busySince={null}
+        newReplyCount={0}
+        onShowReplies={vi.fn()}
+      />
+    );
+    const indicator = screen.getByTestId("editor-agent-status");
+    expect(indicator).toHaveAttribute("tabindex", "0");
+    await userEvent.setup().tab();
+    expect(indicator).toHaveFocus();
   });
 
   it("offers the new replies once the turn is over", () => {
