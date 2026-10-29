@@ -94,6 +94,14 @@ const RAIL_FIELD_MAX_ROWS = 12;
 /** #378: frames a card being written in keeps trying to lift into the pane
  *  while the body's bottom spacer catches up with its height. */
 const LIFT_MAX_FRAMES = 10;
+/** #378: a card never grows taller than the pane it sits in, so a pane
+ *  shorter than RAIL_CARD_MAX_HEIGHT (a low window, a zoomed page) can still
+ *  show its whole frame once lifted, the form reached by scrolling inside it.
+ *  0 (pane not measured yet) leaves the layout's height alone. */
+function cardMaxHeight(layoutHeight: number, paneHeight: number): number {
+  if (paneHeight <= 0) return layoutHeight;
+  return Math.min(layoutHeight, Math.max(0, paneHeight - 2 * RAIL_GAP));
+}
 /** #378: the reply/edit form's buttons. In a card they are pinned to the
  *  bottom of whatever scrolls the card, so a body and thread taller than the
  *  card's 320px can't push them out of reach below the field. */
@@ -1728,6 +1736,13 @@ function AlignedCommentRail({
     scheduleMeasurePane();
   }, [comments.length, anchorTops, scheduleMeasurePane]);
 
+  // #378: new anchor measurements place the cards where the body's scroll
+  // put them, so lifts applied before them are reflected in the DOM again.
+  const unreflectedLiftRef = useRef(0);
+  useEffect(() => {
+    unreflectedLiftRef.current = 0;
+  }, [anchorTops]);
+
   useEffect(() => {
     window.addEventListener("resize", scheduleMeasurePane);
     return () => window.removeEventListener("resize", scheduleMeasurePane);
@@ -1781,11 +1796,18 @@ function AlignedCommentRail({
         const pane = rail.getBoundingClientRect();
         const top = card.getBoundingClientRect().top - pane.top;
         const border = card.offsetHeight - card.clientHeight;
-        const height = Math.min(card.scrollHeight, RAIL_CARD_MAX_HEIGHT) + border;
-        remaining = liftIntoPane(top, top + height, pane.height);
+        const height =
+          cardMaxHeight(Math.min(card.scrollHeight, RAIL_CARD_MAX_HEIGHT), pane.height) +
+          border;
+        // A lift already applied moves the card only once the rail re-measures
+        // the anchors; until then the card's rect is that much too low.
+        const stale = unreflectedLiftRef.current;
+        remaining = liftIntoPane(top - stale, top - stale + height, pane.height);
       }
       if (remaining <= 0) return;
-      remaining -= scrollBody(remaining);
+      const moved = scrollBody(remaining);
+      unreflectedLiftRef.current += moved;
+      remaining -= moved;
       if (remaining > 0.5 && ++frames < LIFT_MAX_FRAMES) {
         liftRafRef.current = requestAnimationFrame(step);
       }
@@ -1983,7 +2005,7 @@ function AlignedCommentRail({
             key={c.id}
             comment={c}
             top={placed.top}
-            maxHeight={placed.maxHeight}
+            maxHeight={cardMaxHeight(placed.maxHeight, paneBox.height)}
             hidden={hidden}
             selected={c.id === selectedId}
             onSelect={onSelect}
