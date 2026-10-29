@@ -172,7 +172,9 @@ func Run(ctx context.Context) error {
 		}
 		// Drain the goroutine so the test (and any caller) can rely on
 		// Run() not leaving a server-side goroutine alive after return.
-		<-errCh
+		if err := <-errCh; err != nil {
+			return fmt.Errorf("server: %w", err)
+		}
 		slog.Info("server stopped")
 		return nil
 	case err := <-errCh:

@@ -1785,6 +1785,24 @@ describe("CommentSidePane sent to AI (#366)", () => {
     expect(within(cardOf("c2")).queryByTestId("comment-awaiting-ai")).toBeNull();
   });
 
+  it("stops showing it on a comment the AI has answered (#372)", () => {
+    renderPane({
+      comments: [
+        comment("c1", { replies: [{ author: "ai", body: "反映しました" }] }),
+        comment("c2", {
+          replies: [
+            { author: "ai", body: "反映しました" },
+            { author: "alice", body: "まだ違う" },
+          ],
+        }),
+      ],
+      agentReplying: true,
+      agentSentIds: new Set(["c1", "c2"]),
+    });
+    expect(within(cardOf("c1")).queryByTestId("comment-awaiting-ai")).toBeNull();
+    expect(within(cardOf("c2")).getByTestId("comment-awaiting-ai")).toBeInTheDocument();
+  });
+
   it("shows neither once the AI is done", () => {
     renderPane({
       comments: [comment("c1"), comment("c2")],

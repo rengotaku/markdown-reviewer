@@ -50,6 +50,7 @@ import { useToast } from "@/hooks/useToast";
 import { markdownBodySx } from "./markdownBodySx";
 import { contextLabel } from "@/utils/commentContext";
 import { isAiAuthored } from "@/utils/commentPresentation";
+import { awaitsAiReply } from "@/utils/agentActivity";
 import { CommentAuthor } from "./CommentAuthor";
 import { CommentId } from "./CommentId";
 import {
@@ -1099,7 +1100,7 @@ function CommentCard({
   // written after it says so instead, or it would wait on a reply that the
   // AI, which never read it, is not writing.
   const sentToAi = agentActivity.sentIds?.has(c.id) ?? false;
-  const awaitingAi = agentActivity.replying && sentToAi && !resolved;
+  const awaitingAi = agentActivity.replying && sentToAi && !resolved && awaitsAiReply(c);
   const unsentToAi = agentActivity.replying && !sentToAi && !resolved;
 
   const [{ replyOpen, replyBody, editOpen, editBody }, updateDraft] = useCardDraft(c.id);

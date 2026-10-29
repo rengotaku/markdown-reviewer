@@ -1,4 +1,4 @@
-.PHONY: install build build-mr build-frontend run run-binary run-server run-frontend stop status \
+.PHONY: install lint-install build build-mr build-frontend run run-binary run-server run-frontend stop status \
 	lint lint-frontend lint-fix format format-check \
 	test test-frontend test-frontend-coverage test-cov test-cov-check test-watch coverage \
 	migrate migrate-diff migrate-apply migrate-hash \
@@ -65,8 +65,19 @@ status:
 	@lsof -i :$(PORT) >/dev/null 2>&1 && echo "markdown-reviewer (Go): running (:$(PORT))" || echo "markdown-reviewer (Go): stopped"
 	@lsof -i :$(FRONTEND_PORT) >/dev/null 2>&1 && echo "markdown-reviewer (Vite): running (:$(FRONTEND_PORT))" || echo "markdown-reviewer (Vite): stopped"
 
-## lint: Run golangci-lint
+# The one place the golangci-lint version lives. CI installs it (lint-install)
+# and lint refuses any other version, so a newer linter on a developer machine
+# cannot report issues CI never sees, or the other way round.
+GOLANGCI_LINT_VERSION := v2.15.0
+
+## lint-install: Install the pinned golangci-lint into GOPATH/bin (used by CI)
+lint-install:
+	curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/$(GOLANGCI_LINT_VERSION)/install.sh | sh -s -- -b "$$(go env GOPATH)/bin" $(GOLANGCI_LINT_VERSION)
+
+## lint: Run golangci-lint (fails unless it is the pinned version)
 lint:
+	@v=$$(golangci-lint version --short 2>/dev/null) || { echo "golangci-lint not found. want $(GOLANGCI_LINT_VERSION)" >&2; exit 1; }; \
+	[ "v$${v#v}" = "$(GOLANGCI_LINT_VERSION)" ] || { echo "golangci-lint v$${v#v} found, want $(GOLANGCI_LINT_VERSION) (pinned in Makefile)" >&2; exit 1; }
 	golangci-lint run
 
 ## lint-frontend: Run frontend linter
