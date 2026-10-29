@@ -56,6 +56,8 @@ import { CommentId } from "./CommentId";
 import {
   isPlacedInPane,
   layoutCommentRail,
+  liftIntoPane,
+  RAIL_CARD_MAX_HEIGHT,
   RAIL_GAP,
   revealAnchorTop,
   type RailItem,
@@ -89,6 +91,19 @@ const BODY_PREVIEW_LIMIT = 200;
 /** #355: reply/edit fields in the pane scroll inside themselves past this
  *  many rows, so a pasted log can't push their submit buttons out of view. */
 const RAIL_FIELD_MAX_ROWS = 12;
+/** #378: frames a card being written in keeps trying to lift into the pane
+ *  while the body's bottom spacer catches up with its height. */
+const LIFT_MAX_FRAMES = 10;
+/** #378: the reply/edit form's buttons. In a card they are pinned to the
+ *  bottom of whatever scrolls the card, so a body and thread taller than the
+ *  card's 320px can't push them out of reach below the field. */
+const FORM_ACTIONS_SX = {
+  display: "flex",
+  justifyContent: "flex-end",
+  gap: 0.5,
+  mt: 0.5,
+  py: 0.5,
+} as const;
 
 /** #364: every card action sits in the header row, so the icons are kept
  *  small enough that six of them fit beside the id and badges. */
@@ -419,6 +434,10 @@ interface Props {
    *  document (0 when it doesn't, or when the rail isn't shown), so the
    *  caller can extend the body's scroll range by that much (#338). */
   onRailOverhangChange?: (px: number) => void;
+  /** Scrolls the document body down by `dy` px, so a rail card being written
+   *  in can be lifted back into the pane (#378). Returns how far it actually
+   *  went — less than `dy` at the end of the body. */
+  onRailScrollBodyBy?: (dy: number) => number;
   /** Ids of anchored comments whose anchor the caller could not resolve in
    *  the live document (#328). The server's own `orphan` flag is computed
    *  from the raw markdown lines, so it can say "anchored" for a comment the
@@ -535,6 +554,7 @@ export function CommentSidePane({
   anchorTops = {},
   docBox = null,
   onRailOverhangChange,
+  onRailScrollBodyBy,
   unresolvedIds = EMPTY_IDS,
   railMode = "aligned",
   onRailModeChange,
@@ -947,6 +967,7 @@ export function CommentSidePane({
             docBox={docBox}
             onOverhangChange={onRailOverhangChange}
             revealRef={railRevealRef}
+            onScrollBodyBy={onRailScrollBodyBy}
             selectedId={selectedId ?? null}
             onSelect={onSelect}
             onDeselect={onDeselect}
@@ -1405,7 +1426,7 @@ function CommentCard({
             autoFocus={focusForm}
             inputProps={{ "data-testid": "comment-edit-input" }}
           />
-          <Box sx={{ display: "flex", justifyContent: "flex-end", gap: 0.5, mt: 0.5 }}>
+          <Box sx={[FORM_ACTIONS_SX, stickyRowSx("bottom", true)]}>
             <Button size="small" onClick={() => updateDraft({ editOpen: false })}>
               キャンセル
             </Button>
@@ -1471,9 +1492,7 @@ function CommentCard({
                 autoFocus={focusForm}
                 inputProps={{ "data-testid": "comment-reply-input" }}
               />
-              <Box
-                sx={{ display: "flex", justifyContent: "flex-end", gap: 0.5, mt: 0.5 }}
-              >
+              <Box sx={[FORM_ACTIONS_SX, stickyRowSx("bottom", true)]}>
                 <Button size="small" onClick={() => updateDraft({ replyOpen: false })}>
                   キャンセル
                 </Button>
@@ -1653,6 +1672,9 @@ interface AlignedRailProps {
   /** #332: show a count icon per line instead of each non-selected card. */
   iconMode?: boolean;
   revealRef?: MutableRefObject<RailReveal | null>;
+  /** #378: scrolls the document body down by `dy` px, which moves the rail
+   *  with it, and returns how far it actually went. */
+  onScrollBodyBy?: (dy: number) => number;
 }
 
 /** Lays anchored cards out down the rail, level with the paragraph each is
@@ -1677,11 +1699,13 @@ function AlignedCommentRail({
   onOpenDetail,
   iconMode = false,
   revealRef,
+  onScrollBodyBy,
 }: AlignedRailProps) {
   const railRef = useRef<HTMLDivElement | null>(null);
   const [paneBox, setPaneBox] = useState({ top: 0, height: 0, measured: false });
   const [cardHeights, setCardHeights] = useState<Record<string, number>>({});
   const rafRef = useRef<number | null>(null);
+  const liftRafRef = useRef<number | null>(null);
 
   const scheduleMeasurePane = useCallback(() => {
     if (rafRef.current !== null) return;
@@ -1712,13 +1736,70 @@ function AlignedCommentRail({
   useEffect(
     () => () => {
       if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+      if (liftRafRef.current !== null) cancelAnimationFrame(liftRafRef.current);
     },
     []
   );
 
-  const handleHeightChange = useCallback((id: string, height: number) => {
-    setCardHeights((prev) => (prev[id] === height ? prev : { ...prev, [id]: height }));
+  // #378: a card being written in grows with its field. #339 placed it in the
+  // pane when it was selected, but a reply form opened afterwards pushes its
+  // bottom — and the buttons — below the pane, and near the document's end
+  // nothing scrolls it back. While a field inside the selected card has
+  // focus, every growth lifts the card back into the pane by scrolling the
+  // body, by an amount measured once from the DOM after the grown height has
+  // been laid out. The card itself only moves after the rail re-measures the
+  // scrolled anchors, so its rect can't be re-read to see how far it went;
+  // the body reports what it actually scrolled instead. The bottom spacer
+  // (#338) that makes room for the scroll follows the card's height a render
+  // later, so whatever the end of the body cut short is retried on the next
+  // frames.
+  const selectedIdRef = useRef(selectedId);
+  const scrollBodyRef = useRef(onScrollBodyBy);
+  useEffect(() => {
+    selectedIdRef.current = selectedId;
+    scrollBodyRef.current = onScrollBodyBy;
+  }, [selectedId, onScrollBodyBy]);
+  const scheduleLift = useCallback((id: string) => {
+    if (liftRafRef.current !== null) cancelAnimationFrame(liftRafRef.current);
+    let remaining: number | null = null;
+    let frames = 0;
+    const step = () => {
+      liftRafRef.current = null;
+      const rail = railRef.current;
+      const scrollBody = scrollBodyRef.current;
+      if (!rail || !scrollBody) return;
+      if (remaining === null) {
+        const card = rail.querySelector<HTMLElement>(
+          `[data-testid="comment-rail-card"][data-comment-id="${CSS.escape(id)}"]`
+        );
+        const active = document.activeElement;
+        if (!card || !(active instanceof HTMLTextAreaElement) || !card.contains(active)) {
+          return;
+        }
+        // The shell's height is clamped to the last measured one until the
+        // rail re-renders, so the grown height is read from its content.
+        const pane = rail.getBoundingClientRect();
+        const top = card.getBoundingClientRect().top - pane.top;
+        const border = card.offsetHeight - card.clientHeight;
+        const height = Math.min(card.scrollHeight, RAIL_CARD_MAX_HEIGHT) + border;
+        remaining = liftIntoPane(top, top + height, pane.height);
+      }
+      if (remaining <= 0) return;
+      remaining -= scrollBody(remaining);
+      if (remaining > 0.5 && ++frames < LIFT_MAX_FRAMES) {
+        liftRafRef.current = requestAnimationFrame(step);
+      }
+    };
+    liftRafRef.current = requestAnimationFrame(step);
   }, []);
+
+  const handleHeightChange = useCallback(
+    (id: string, height: number) => {
+      setCardHeights((prev) => (prev[id] === height ? prev : { ...prev, [id]: height }));
+      if (id === selectedIdRef.current) scheduleLift(id);
+    },
+    [scheduleLift]
+  );
 
   // #332: a newly selected comment's cached height may be stale — measured
   // when it was last a card (say, with its reply form open), before icon mode
@@ -1862,6 +1943,19 @@ function AlignedCommentRail({
     <Box
       ref={railRef}
       sx={{ position: "relative", flex: 1, minHeight: 0, overflow: "hidden" }}
+      // #378: the browser scrolls this box to bring a focused field's caret
+      // into view, though it clips rather than scrolls — that slid every card
+      // off its paragraph. Cards are placed for a scrollTop of 0, so it stays
+      // there; a card is brought into view by scrolling the body instead.
+      onScroll={(e) => {
+        e.currentTarget.scrollTop = 0;
+      }}
+      // #378: the reply form opens at its two-row minimum, so the first lines
+      // typed don't grow the card — lift it as soon as its field takes focus.
+      onFocus={(e) => {
+        const id = selectedIdRef.current;
+        if (id && e.target instanceof HTMLTextAreaElement) scheduleLift(id);
+      }}
       data-testid="comment-rail-aligned"
     >
       {layout.placed.map((placed) => {

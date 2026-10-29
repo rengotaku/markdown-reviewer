@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach, onTestFinished } from "vitest";
 import { useState } from "react";
-import { render, screen, within, waitFor, act } from "@testing-library/react";
+import { render, screen, within, waitFor, act, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { CommentDetailDialog, CommentSidePane } from "./CommentSidePane";
 import type { CommentJSON } from "@/api";
@@ -767,6 +767,14 @@ describe("CommentSidePane rail (#298)", () => {
     const rail = screen.getByTestId("comment-rail-aligned");
     expect(within(rail).getAllByTestId("comment-item")).toHaveLength(1);
     expect(within(rail).getByTestId("comment-id")).toHaveTextContent("c1");
+  });
+
+  it("puts the rail back at scrollTop 0 when the browser scrolls it to show a caret (#378)", () => {
+    renderPane({ anchorTops: { c1: 10 }, comments: [comment("c1")] });
+    const rail = screen.getByTestId("comment-rail-aligned");
+    rail.scrollTop = 40;
+    fireEvent.scroll(rail);
+    expect(rail.scrollTop).toBe(0);
   });
 
   it("renders anchored comments inside the aligned rail container", () => {
