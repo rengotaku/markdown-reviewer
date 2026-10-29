@@ -107,6 +107,7 @@ func (h *Handler) Routes(staticHandler http.Handler) http.Handler {
 		api.POST("/agents/register/*path", h.RegisterAgent)
 		api.POST("/agents/send/*path", h.SendAgent)
 		api.GET("/agents/status/*path", h.StatusAgent)
+		api.GET("/summaries/*path", h.Summaries)
 	}
 
 	r.NoRoute(gin.WrapH(staticHandler))

@@ -129,10 +129,7 @@ export async function getConfig(): Promise<ConfigResponse> {
   return apiClient.get("api/config").json<ConfigResponse>();
 }
 
-export async function listDir(
-  path: string,
-  root?: string
-): Promise<DirListResponse> {
+export async function listDir(path: string, root?: string): Promise<DirListResponse> {
   const pathParam = path ? `path=${encodePath(path)}` : "";
   const rootParam = rootQuery(root, pathParam ? "&" : "?");
   const search = pathParam ? `?${pathParam}${rootParam}` : rootQuery(root, "?");
@@ -140,15 +137,10 @@ export async function listDir(
 }
 
 export async function listFiles(root?: string): Promise<FileListResponse> {
-  return apiClient
-    .get(`api/files${rootQuery(root, "?")}`)
-    .json<FileListResponse>();
+  return apiClient.get(`api/files${rootQuery(root, "?")}`).json<FileListResponse>();
 }
 
-export async function readFile(
-  path: string,
-  root?: string
-): Promise<FileReadResponse> {
+export async function readFile(path: string, root?: string): Promise<FileReadResponse> {
   return apiClient
     .get(`api/files/${encodePath(path)}${rootQuery(root, "?")}`)
     .json<FileReadResponse>();
@@ -176,10 +168,7 @@ export async function writeFile(
     .json<FileReadResponse>();
 }
 
-export async function statFile(
-  path: string,
-  root?: string
-): Promise<FileStatResponse> {
+export async function statFile(path: string, root?: string): Promise<FileStatResponse> {
   return apiClient
     .get(`api/stat/${encodePath(path)}${rootQuery(root, "?")}`)
     .json<FileStatResponse>();
@@ -222,9 +211,7 @@ export interface StatBatchResponse {
  * the page (issue #174). Requests over STAT_BATCH_LIMIT files are split, and
  * the results are concatenated in request order.
  */
-export async function statBatch(
-  files: StatBatchTarget[]
-): Promise<StatBatchResult[]> {
+export async function statBatch(files: StatBatchTarget[]): Promise<StatBatchResult[]> {
   const chunks: StatBatchTarget[][] = [];
   for (let i = 0; i < files.length; i += STAT_BATCH_LIMIT) {
     chunks.push(files.slice(i, i + STAT_BATCH_LIMIT));
@@ -246,10 +233,7 @@ export async function statBatch(
  * ingestFile puts a draft file under managed review (creates its entry under
  * ~/.config/reviewer). Idempotent — re-ingesting returns state="review".
  */
-export async function ingestFile(
-  path: string,
-  root?: string
-): Promise<IngestResponse> {
+export async function ingestFile(path: string, root?: string): Promise<IngestResponse> {
   return apiClient
     .post(`api/ingest/${encodePath(path)}${rootQuery(root, "?")}`)
     .json<IngestResponse>();
@@ -350,6 +334,8 @@ export interface AgentStatusResponse {
   state: AgentState;
   session_name?: string;
   agent_id?: string;
+  /** Set on the poll that stored a new AI work summary (#374). */
+  summary_id?: string;
 }
 
 /** State of the session a send would go to. Never sends anything. */
@@ -363,4 +349,31 @@ export async function fetchAgentStatus(
       timeout: 4000,
     })
     .json<AgentStatusResponse>();
+}
+
+/** One AI work summary: the final reply of a turn started by a send. */
+export interface SummaryItem {
+  id: string;
+  sent_at: string;
+  done_at: string;
+  agent_id: string;
+  session_name: string;
+  text: string;
+}
+
+export interface SummariesResponse {
+  summaries: SummaryItem[];
+}
+
+/** Stored AI work summaries for a file, newest first. */
+export async function getSummaries(
+  root: string | undefined,
+  path: string
+): Promise<SummariesResponse> {
+  return apiClient
+    .get(`api/summaries/${encodePath(path)}${rootQuery(root, "?")}`, {
+      retry: 0,
+      timeout: 4000,
+    })
+    .json<SummariesResponse>();
 }
