@@ -262,9 +262,10 @@ func TestEvents_ReadyGate_CanceledBeforeReady_NoResponse(t *testing.T) {
 	case resp := <-respCh:
 		_ = resp.Body.Close()
 		t.Fatal("expected the canceled request to fail, but a response arrived")
-	case <-errCh:
+	case err := <-errCh:
 		// Expected: the client-side request errors out because the server
 		// never wrote a response before the context was canceled.
+		require.ErrorIs(t, err, context.Canceled)
 	case <-time.After(2 * time.Second):
 		t.Fatal("request neither errored nor returned a response after cancel")
 	}
