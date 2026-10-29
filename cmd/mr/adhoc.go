@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"markdown-reviewer/internal/files"
 )
 
 // adhocTimeout bounds the registration call. The server is on localhost and
@@ -100,4 +102,35 @@ func lookupAdhoc(base string) (file adhocFile, found bool, err error) {
 		return adhocFile{}, false, nil
 	}
 	return file, true, nil
+}
+
+// currentAdhocFor returns the ad-hoc slot's (root, rel) for path without
+// changing the slot, for `mr open --print`: the slot must already hold path.
+// An empty slot or a different occupant is an error that names what the slot
+// holds and how to replace it deliberately, because registering would purge
+// the occupant's review comments (issue #240's PurgeRoot).
+func currentAdhocFor(base, path string) (root, rel string, err error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", "", err
+	}
+	if resolved, e := filepath.EvalSymlinks(abs); e == nil {
+		abs = resolved
+	}
+	current, found, err := lookupAdhoc(base)
+	if err != nil {
+		return "", "", err
+	}
+	if !found {
+		return "", "", fmt.Errorf("%s is outside every configured root and the one-off review slot is empty; not registering it for --print (drop --print to open it, or add --replace-slot to register it and print the URL)", abs)
+	}
+	held := filepath.Join(current.Dir, current.Base)
+	heldResolved := held
+	if resolved, e := filepath.EvalSymlinks(held); e == nil {
+		heldResolved = resolved
+	}
+	if held != abs && heldResolved != abs {
+		return "", "", fmt.Errorf("the one-off review slot holds %s, not %s; not replacing it for --print (that discards the comments on the file the slot holds now). Drop --print to open it, or add --replace-slot to replace the slot and print the URL", held, abs)
+	}
+	return files.AdhocRootName, current.Base, nil
 }

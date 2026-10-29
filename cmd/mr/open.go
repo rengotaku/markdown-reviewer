@@ -24,7 +24,7 @@ const baseURLEnv = "MARKDOWN_REVIEWER_BASE_URL"
 func cmdOpen(args []string) error {
 	pos, flags := parseArgs(args)
 	if len(pos) < 1 {
-		return fmt.Errorf("usage: mr open <path> [<extra-path>...] [--comment ID] [--print]")
+		return fmt.Errorf("usage: mr open <path> [<extra-path>...] [--comment ID] [--print [--replace-slot]]")
 	}
 	base := baseURL(launchdPort)
 
@@ -46,7 +46,16 @@ func cmdOpen(args []string) error {
 		// slot instead of refusing (issue #240). The original resolvePath
 		// error is dropped on purpose — registerAdhoc's failure says more
 		// about what to do next than "not under any configured root" does.
-		root, rel, err = registerAdhoc(base, pos[0])
+		//
+		// --print is the "just give me the URL" mode, so by default it must
+		// not evict whatever the slot holds: it reuses the slot only when it
+		// already holds this very file, and refuses otherwise.
+		// --replace-slot opts back into registering.
+		if flags["print"] != "" && flags["replace-slot"] == "" {
+			root, rel, err = currentAdhocFor(base, pos[0])
+		} else {
+			root, rel, err = registerAdhoc(base, pos[0])
+		}
 		if err != nil {
 			return err
 		}

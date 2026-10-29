@@ -32,6 +32,8 @@ mr reply    <path> <id> <text> [--author NAME]   # スレッド返信（既定 a
 mr apply    <path> [<json-file>|-] [--author NAME] [--force]  # 本文の修正と返信を 1 回で反映
 mr resolve  <path> <id>              # resolved にする
 mr reopen   <path> <id>              # resolved を open に戻す
+mr comment add <path> --snippet TEXT [--heading H]... [--occurrence N] [--author NAME] [--force] <text>  # アンカー付きコメントを作る
+mr open     <path> [<extra-path>...] [--comment ID] [--print [--replace-slot]]  # Web UI で開く（--print: URL のみ）
 ```
 
 ルートは `REVIEW_ROOTS` 環境変数、無ければ launchd plist から自動解決する。
@@ -57,6 +59,37 @@ AI のツール呼び出しは 1 回ごとにセッションの文脈全体を�
 - 本文を書く前に、修正前の本文を revision として残し（残せなければ何も書かない）、コメントのアンカーを張り直し、書いた本文を revision（author は `--author`、既定 `ai`）として残す
 - 最後に新しい本文で `last_read` を記録するので、続けて `mr reply` / `mr comments` を実行しても drift 扱いにならない
 - resolve はしない。`edits` / `replies` はどちらかが空でもよい（両方空はエラー）
+
+### `mr comment add`（アンカー付きコメントを作る）
+
+```
+mr comment add <path> --snippet TEXT [--heading H]... [--occurrence N] [--author NAME] [--force] <text>
+```
+
+- `--snippet` は対象の文（描画後テキスト）。`**x**` や `` `x` `` などのインライン記法は CLI が剥がして
+  から照合するので、本文の行をそのまま渡してもよい（ただし行頭のブロック記号は付けない方が安全）
+- `--heading` は複数回指定でき、見出しパスを親から順に並べる。各値は **`#` 付きの描画後見出し**
+  （例: `--heading '# 設計' --heading '## 認証'`）。省略すると見出しで絞らない
+- `--heading` の末尾に Pandoc 風の属性ブロック（`{color="purple_bg"}` など）が付いているとエラー。
+  なお本文の見出しにこの属性ブロックが付いている場合、サーバも画面も属性の文字列を含めた見出しとして
+  照合するため、属性を除いた `--heading` では一致しない。その場合は何も書かずに理由を表示するので、
+  `--heading` を外して `--snippet` と `--occurrence` だけで指す
+- `--occurrence` は 0 始まり（既定 0）。負の値はエラー
+- `--author` の既定は `ai`（`mr reply` と同じ）。作成するコメントは `scope: inline`・`status: open`
+- 作成前に本文に対してアンカーを解決し、解決できなければ何も書かずに exit 1（snippet が本文に何回
+  出るかを併せて表示する）。`POST /api/comments` が 422 で拒否するのと同じ基準で、行指紋
+  （`line_fingerprint`）も同じ処理で付ける
+- `mr reply` と同じ書き込みガード（前回読んだ後に本文が変わっていれば止まる。`--force` で解除）
+- ルート外のファイルは `mr open` で anonymous スロットに入っているときだけ使える（他のサブコマンドと同じ）
+- 成功すると `added c-NNN (lines 12-12)` のように作成したコメント id と解決した行範囲を 1 行で出す
+
+### `mr open --print`（URL だけ出す）
+
+`--print` は URL を出すだけのモードで、anonymous スロットを入れ替えない。`<path>` が設定済みルートの
+外にあるときは、スロットが既に `<path>` を保持していればその URL を出し、空または別のファイルが
+入っていれば何も登録せず exit 1 で止まる（エラーにスロットの中身を表示する）。入れ替えてよいときは
+`--replace-slot` を付ける（`--print` を外した通常の `mr open` は従来どおり入れ替える。入れ替えると
+スロット内の旧ファイルのコメントは破棄される）。
 
 ## ベース URL
 
@@ -89,6 +122,7 @@ hint URL は環境変数 `MARKDOWN_REVIEWER_BASE_URL` で固定でき、未設�
 > 取り消し線 `~~x~~` → `x`、リンク `[text](url)` → `text` のように記法を剥がした文字列を使う
 > （コードスパン内部は literal。例: `` `_watchlist.md` `` は `_watchlist.md` のまま）。
 > バックスラッシュのエスケープも描画後の文字で書く（`\[新\]` → `[新]`）。エディタは保存時に `[` `_` `*` などをエスケープするが、照合も本文の行ではエスケープを外した形で行う。コードブロック（フェンス・インデント）の中の `\` は literal なので、そのまま書く。
+> CLI で起票するなら `mr comment add`（記法の除去・解決の確認・行指紋の付与をまとめて行う）を使う。
 > 正典本文の生 Markdown をそのままコピーすると記法が残り、**照合に失敗して `orphan` になる**。
 > 見出しに記法が含まれる場合に特に注意。位置解決は行番号ベースではなく snippet 一致なので、
 > 本文の軽微な編集には耐えるが、アンカーした**そのテキスト自体**が書き換わると orphan 化する。
@@ -372,6 +406,47 @@ Response は `PUT /api/files` と同じ形: `{ "path": "...", "content": "...", 
 | 404 | 正典ファイルが存在しない、または `id` に該当する revision がない（未 ingest・履歴なしを含む） |
 
 ---
+
+## エディタが描画できる記法
+
+Web UI のエディタ（TipTap + `tiptap-markdown`）が描画し、保存時に Markdown へ書き戻せる記法。
+実装で確認できたものだけを挙げる。ここに無い記法は、描画されずソースの文字として見えるか、
+書き戻しで形が変わることがある。
+
+| 記法 | 書き方 | 備考 |
+|------|--------|------|
+| 見出し・段落・強調・取り消し線・インラインコード | `#` 〜 `######` / `**x**` / `*x*` / `~~x~~` / `` `x` `` | StarterKit |
+| 引用・箇条書き・番号付きリスト・水平線・改行 | `>` / `-` / `1.` / `---` | StarterKit |
+| 表 | GFM のパイプ表 | 列幅のドラッグ変更はできない |
+| タスクリスト | `- [ ] x` / `- [x] x` | 入れ子可 |
+| コードブロック | ```` ```言語 ```` のフェンス | 言語付きは色付け（下記） |
+| mermaid の図 | ```` ```mermaid ```` のフェンス | 下記 |
+| リンク | `[text](url)` / `<https://…>` / 素の `https://…` | 素の URL は書き戻しでもそのまま残る |
+| frontmatter | ファイル先頭の `---` で囲んだ YAML | 本文には入らず、エディタの上に読み取り専用の表で表示。保存時はそのまま戻す |
+| 生の HTML | `<br/>`・HTML コメント・`<div>…</div>` など | 描画はされず、ソースの文字として表示し、そのまま書き戻す（意図的） |
+
+**mermaid**: ```` ```mermaid ```` のフェンスに図のソースを書く（フェンス内を空にすると "Empty mermaid block"）。
+
+````
+```mermaid
+graph TD
+    A[Start] --> B[End]
+```
+````
+
+図の種類はエディタ側で制限していない。ソースをそのまま `mermaid`（`^11.14`）に渡して SVG にするので、
+その版が対応する図が描ける。構文エラーのときは図の代わりにエラー文を表示する。ブロックの
+ホバーで図とソースを切り替えて編集できる。
+
+**コードブロックの色付け**: 言語名が次のものだけ色が付く。それ以外の言語名・言語なしは色の無い
+コードブロックとして描画する。
+`bash` `css` `diff` `dockerfile` `go` `ini` `javascript` `json` `markdown` `python` `ruby` `sql`
+`typescript` `xml` `yaml`、および別名 `sh` `shell` `zsh` `console`（bash）/ `js` `jsx`（javascript）/
+`ts` `tsx`（typescript）/ `py` / `rb` / `yml` / `html`（xml）/ `toml` `hcl` `tf` `terraform` `dotenv`（ini）/
+`md` / `patch` / `psql` `mysql` / `docker`。
+
+画像（`![alt](url)`）を描画する拡張は登録されていない。見出しの属性ブロック `{...}` も解釈せず、
+見出しの文字列の一部として扱う。
 
 ## AI 向けの使い方
 

@@ -386,6 +386,23 @@ func FingerprintAt(content string, a Anchor) (fingerprint string, ok bool) {
 	return fp, true
 }
 
+// StampFingerprint sets a's LineFingerprint from the line it resolves to in
+// content, always overwriting any caller-supplied value (Orphan is likewise
+// reset to false: a freshly created anchor is never orphan). a may be nil, or
+// fail to resolve — both leave LineFingerprint empty. Shared by the HTTP
+// handler and `mr comment add` so both create anchors the same way (#287).
+func StampFingerprint(content string, a *Anchor) {
+	if a == nil {
+		return
+	}
+	a.Orphan = false
+	if fp, ok := FingerprintAt(content, *a); ok {
+		a.LineFingerprint = fp
+	} else {
+		a.LineFingerprint = ""
+	}
+}
+
 // ResolveAnchorForDisplay resolves like ResolveAnchor but falls back to the
 // snippet alone when the heading gate rejects every line and the snippet still
 // occurs exactly once: that line is then the only thing the anchor can mean, so

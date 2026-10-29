@@ -226,15 +226,7 @@ func (h *Handler) CreateComment(c *gin.Context) {
 // (unset Anchor field) or fail to resolve (already an orphan at creation
 // time) — both leave LineFingerprint empty, matching pre-#287 behavior.
 func stampFingerprint(content string, a *reviewstore.Anchor) {
-	if a == nil {
-		return
-	}
-	a.Orphan = false
-	if fp, ok := reviewstore.FingerprintAt(content, *a); ok {
-		a.LineFingerprint = fp
-	} else {
-		a.LineFingerprint = ""
-	}
+	reviewstore.StampFingerprint(content, a)
 }
 
 // UpdateRequest is the body for PATCH /api/comments/*path?id=... Either field
