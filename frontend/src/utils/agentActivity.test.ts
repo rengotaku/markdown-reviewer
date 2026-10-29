@@ -5,6 +5,7 @@ import {
   agentLabel,
   applySent,
   applyStatus,
+  awaitsAiReply,
   emptyTracking,
   newAiReplies,
   replyCounts,
@@ -146,6 +147,17 @@ describe("applyStatus", () => {
     expect(next.key).toBe(key);
     expect(next.sentByUs).toBe(false);
     expect(next.baseline).toBeNull();
+  });
+});
+
+describe("awaitsAiReply (#372)", () => {
+  it("waits only while the reader has the last word", () => {
+    expect(awaitsAiReply({ ...comment("c1", []), author: "kishira" })).toBe(true);
+    expect(awaitsAiReply({ ...comment("c1", ["ai"]), author: "kishira" })).toBe(false);
+    expect(
+      awaitsAiReply({ ...comment("c1", ["ai", "kishira"]), author: "kishira" })
+    ).toBe(true);
+    expect(awaitsAiReply({ ...comment("c1", []), author: "ai" })).toBe(false);
   });
 });
 

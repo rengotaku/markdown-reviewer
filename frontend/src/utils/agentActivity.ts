@@ -47,6 +47,15 @@ export function openCommentIds(comments: ReadonlyArray<CommentJSON>): Set<string
   return new Set(comments.filter((c) => c.status !== "resolved").map((c) => c.id));
 }
 
+/** The thread ends with the reader, so a reply from the AI is still due (#372).
+ *  One whose last word is the AI's — answered during this send or before it —
+ *  has nothing left for the AI to write. */
+export function awaitsAiReply(c: CommentJSON): boolean {
+  const replies = c.replies ?? [];
+  const last = replies.length > 0 ? replies[replies.length - 1].author : c.author;
+  return !isAiAuthored(last);
+}
+
 /** Open comments written after the last send. Null when this editor hasn't
  *  sent for the file yet, so nothing is known about what the AI has read. */
 export function unsentCount(
