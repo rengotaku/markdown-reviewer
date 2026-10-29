@@ -1813,3 +1813,48 @@ describe("CommentSidePane sent to AI (#366)", () => {
     expect(screen.queryByTestId("comment-unsent-to-ai")).toBeNull();
   });
 });
+
+describe("CommentSidePane opening a thread (#376)", () => {
+  it("unfolds the last reply and leaves earlier ones folded", () => {
+    const long = "あ".repeat(250);
+    renderPane({
+      comments: [
+        comment("c1", {
+          replies: [
+            { author: "alice", body: long },
+            { author: "ai", body: long },
+          ],
+        }),
+      ],
+      selectedId: "c1",
+    });
+    const bodies = screen.getAllByTestId("comment-reply-body");
+    expect(bodies).toHaveLength(2);
+    expect(bodies[0]).toHaveAttribute("data-collapsed", "true");
+    expect(bodies[1]).toHaveAttribute("data-collapsed", "false");
+  });
+
+  it("closes the detail view once the comment is resolved", async () => {
+    const user = userEvent.setup();
+    const handlers = renderPane({ comments: [comment("c1")], selectedId: "c1" });
+    await user.click(screen.getByRole("button", { name: "open comment detail" }));
+    expect(screen.getByTestId("comment-detail-dialog")).toBeInTheDocument();
+
+    await user.click(screen.getByTestId("comment-detail-resolve-toggle"));
+    expect(handlers.onResolveToggle).toHaveBeenCalledWith("c1", "resolved");
+    await waitFor(() => expect(screen.queryByTestId("comment-detail-dialog")).toBeNull());
+  });
+
+  it("keeps the detail view open when reopening", async () => {
+    const user = userEvent.setup();
+    const handlers = renderPane({
+      comments: [comment("c1", { status: "resolved" })],
+      selectedId: "c1",
+    });
+    await user.click(screen.getByTestId("comment-filter-all"));
+    await user.click(screen.getByRole("button", { name: "open comment detail" }));
+    await user.click(screen.getByTestId("comment-detail-resolve-toggle"));
+    expect(handlers.onResolveToggle).toHaveBeenCalledWith("c1", "open");
+    expect(screen.getByTestId("comment-detail-dialog")).toBeInTheDocument();
+  });
+});

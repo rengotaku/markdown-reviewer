@@ -1,8 +1,7 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 import Box from "@mui/material/Box";
 import ButtonBase from "@mui/material/ButtonBase";
 import Tooltip from "@mui/material/Tooltip";
-import Typography from "@mui/material/Typography";
 import type { AgentStatusResponse } from "@/api";
 import { agentLabel } from "@/utils/agentActivity";
 import { pulseSx } from "./pulseSx";
@@ -22,6 +21,34 @@ function useElapsed(since: number | null): string {
   }, [since]);
   return since === null ? "" : formatElapsed(now - since);
 }
+
+/** #376: the indicator is a fixed-size dot. Its words change length with the
+ *  state ("待機中" → "返信中 1:08 · 送信 4 件"), which shifted everything to
+ *  its right; they now live in the tooltip and, for assistive tech, in a
+ *  visually hidden live region. */
+/** Same as MUI's visuallyHidden: read by screen readers, never drawn. */
+const VISUALLY_HIDDEN_SX = {
+  border: 0,
+  clip: "rect(0 0 0 0)",
+  height: "1px",
+  margin: "-1px",
+  overflow: "hidden",
+  padding: 0,
+  position: "absolute",
+  whiteSpace: "nowrap",
+  width: "1px",
+} as const;
+
+const SLOT_SX = {
+  width: 20,
+  height: 20,
+  flexShrink: 0,
+  ml: 0.5,
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  borderRadius: "50%",
+} as const;
 
 interface Props {
   status: AgentStatusResponse | null;
@@ -47,49 +74,56 @@ export function AgentStatusIndicator({
   const name = agentLabel(status.agent_id);
   const session = status.session_name ? `送信先: ${status.session_name}` : "送信先";
 
-  const dot = (color: string, pulse = false, hollow = false) => (
+  // `ring` sets new replies apart from idle, which shares the green.
+  const dot = (color: string, pulse = false, hollow = false, ring = false) => (
     <Box
       component="span"
+      aria-hidden="true"
       sx={[
         { width: 8, height: 8, borderRadius: "50%", flexShrink: 0 },
         hollow ? { border: "1.5px solid", borderColor: color } : { bgcolor: color },
+        ring ? { outline: "2px solid", outlineColor: color, outlineOffset: "2px" } : {},
         pulse ? pulseSx : {},
       ]}
     />
   );
-  // `ticker` is outside what assistive tech announces: the live region should
-  // speak once per state change, not every second while the timer runs.
+  const tip = (heading: string, detail: string) => (
+    <>
+      <Box component="span" sx={{ fontWeight: 500 }}>
+        {heading}
+      </Box>
+      <br />
+      {detail}
+    </>
+  );
+  // The elapsed ticker shows in the tooltip only: the live region should speak
+  // once per state change, not every second while the timer runs.
   const label = (
     text: string,
     color: string,
-    marker: ReactNode,
     title: string,
-    ticker?: string,
-    suffix?: string
+    { pulse = false, hollow = false, ticker = "", suffix = "" } = {}
   ) => (
-    <Tooltip title={title}>
-      <Typography
-        variant="caption"
+    <Tooltip title={tip([text, ticker, suffix].filter(Boolean).join(" "), title)}>
+      <Box
+        component="span"
         role="status"
         aria-live="polite"
         data-testid="editor-agent-status"
         data-state={status.state}
-        sx={{
-          color,
-          flexShrink: 0,
-          whiteSpace: "nowrap",
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 0.75,
-          ml: 0.5,
-          fontVariantNumeric: "tabular-nums",
-        }}
+        // Focusable so a keyboard reader can open the tooltip the words moved to.
+        tabIndex={0}
+        sx={[
+          SLOT_SX,
+          { "&:focus-visible": { outline: "2px solid", outlineColor: "primary.main" } },
+        ]}
       >
-        {marker}
-        {text}
-        {ticker && <span aria-hidden="true">{ticker}</span>}
-        {suffix && <span data-testid="editor-agent-sent-count">{suffix}</span>}
-      </Typography>
+        {dot(color, pulse, hollow)}
+        <Box component="span" sx={VISUALLY_HIDDEN_SX}>
+          {text}
+          {suffix && <span data-testid="editor-agent-sent-count"> {suffix}</span>}
+        </Box>
+      </Box>
     </Tooltip>
   );
 
@@ -97,32 +131,28 @@ export function AgentStatusIndicator({
     return label(
       `${name} 返信中`,
       "warning.main",
-      dot("warning.main", true),
       `${session}（処理中。いま送信ボタンを押すとコマンドのコピーになります）`,
-      elapsed,
-      sentCount === null ? undefined : `· 送信 ${sentCount} 件`
+      {
+        pulse: true,
+        ticker: elapsed,
+        suffix: sentCount === null ? "" : `· 送信 ${sentCount} 件`,
+      }
     );
   }
   if (newReplyCount > 0) {
+    const text = `${name} の返信 ${newReplyCount} 件`;
     return (
-      <Tooltip title="クリックで最初の新しい返信へ移動">
+      <Tooltip title={tip(text, "クリックで最初の新しい返信へ移動")}>
         <ButtonBase
           onClick={onShowReplies}
           data-testid="editor-agent-new-replies"
-          sx={{
-            ml: 0.5,
-            gap: 0.75,
-            flexShrink: 0,
-            borderRadius: 0.5,
-            typography: "caption",
-            color: "success.main",
-            textDecoration: "underline",
-            textUnderlineOffset: 2,
-            "&:focus-visible": { outline: "2px solid", outlineColor: "primary.main" },
-          }}
+          aria-label={text}
+          sx={[
+            SLOT_SX,
+            { "&:focus-visible": { outline: "2px solid", outlineColor: "primary.main" } },
+          ]}
         >
-          {dot("success.main")}
-          {`${name} の返信 ${newReplyCount} 件`}
+          {dot("success.main", false, false, true)}
         </ButtonBase>
       </Tooltip>
     );
@@ -131,22 +161,16 @@ export function AgentStatusIndicator({
     return label(
       `${name} 未接続`,
       "text.secondary",
-      dot("text.secondary", false, true),
-      "このファイルの送信先セッションが見つかりません。送信ボタンはコマンドをコピーします"
+      "このファイルの送信先セッションが見つかりません。送信ボタンはコマンドをコピーします",
+      { hollow: true }
     );
   }
   if (status.state === "background") {
     return label(
       `${name} 裏で処理中`,
       "info.main",
-      dot("info.main"),
       `${session}（応答は終わり、バックグラウンドの処理が残っています。送信できます）`
     );
   }
-  return label(
-    `${name} 待機中`,
-    "text.secondary",
-    dot("success.main"),
-    `${session}（入力待ち）`
-  );
+  return label(`${name} 待機中`, "success.main", `${session}（入力待ち）`);
 }
