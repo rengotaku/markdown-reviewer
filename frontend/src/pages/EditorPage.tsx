@@ -38,6 +38,7 @@ import {
   ConfirmDialog,
   CommentSidePane,
   CommentComposerPopover,
+  CountBadge,
   DiffView,
   NameTooltip,
 } from "@/components";
@@ -3268,21 +3269,12 @@ export function EditorPage() {
                     AI へ送信
                   </Box>
                   {unsentToAi !== null && unsentToAi > 0 && (
-                    <Box
-                      component="span"
-                      data-testid="editor-unsent-count"
-                      sx={{
-                        ml: 0.75,
-                        px: 0.75,
-                        borderRadius: 1,
-                        bgcolor: "background.paper",
-                        color: "primary.main",
-                        fontSize: "0.7rem",
-                        lineHeight: 1.6,
-                      }}
-                    >
-                      未送信 {unsentToAi}
-                    </Box>
+                    <CountBadge
+                      count={unsentToAi}
+                      label="未送信"
+                      variant="outlined"
+                      testId="editor-unsent-count"
+                    />
                   )}
                 </Button>
               </Box>

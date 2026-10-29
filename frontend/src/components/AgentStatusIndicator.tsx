@@ -70,7 +70,18 @@ export function AgentStatusIndicator({
   onShowReplies,
 }: Props) {
   const elapsed = useElapsed(busySince);
-  if (!status) return null;
+  // #379: the slot keeps its 20px before the status first arrives, so the dot
+  // showing up after a send doesn't push the header along.
+  if (!status) {
+    return (
+      <Box
+        component="span"
+        aria-hidden="true"
+        data-testid="editor-agent-status-placeholder"
+        sx={SLOT_SX}
+      />
+    );
+  }
   const name = agentLabel(status.agent_id);
   const session = status.session_name ? `送信先: ${status.session_name}` : "送信先";
 
