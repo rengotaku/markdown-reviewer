@@ -13,10 +13,12 @@
 //	                                                             replies in one call
 //	mr resolve  <path> <id> [--force]  mark a comment resolved
 //	mr reopen   <path> <id> [--force]  reopen a resolved comment
-//	mr open     <path> [<extra-path>...] [--comment ID] [--print]  open the file in the web UI
+//	mr open     <path> [<extra-path>...] [--comment ID] [--print [--replace-slot]]  open the file in the web UI
 //	mr revisions <path> [--json]  list revision history, newest first
 //	mr restore  <path> <id> [--author NAME]  restore the canonical body to
 //	                                          revision id (default author "external")
+//	mr comment add <path> --snippet TEXT [--heading H]... [--occurrence N]
+//	                      [--author NAME] [--force] <text>  create an anchored comment
 //	mr diff     <path> [--since ID] [--since-last-read]  unified diff against a
 //	                                                       prior revision (default:
 //	                                                       last_read's baseline)
@@ -82,6 +84,8 @@ func main() {
 		err = cmdRestore(args)
 	case "diff":
 		err = cmdDiff(args)
+	case "comment":
+		err = cmdComment(args)
 	case "-h", "--help", "help":
 		usage()
 		return
@@ -107,7 +111,9 @@ Usage:
   mr apply    <path> [<json-file>|-] [--author NAME] [--force]  body edits + replies in one call
   mr resolve  <path> <id> [--force]    mark a comment resolved
   mr reopen   <path> <id> [--force]    reopen a resolved comment
-  mr open     <path> [<extra-path>...] [--comment ID] [--print]  open the file in the web UI (--print: URL only)
+  mr open     <path> [<extra-path>...] [--comment ID] [--print [--replace-slot]]  open the file in the web UI (--print: URL only)
+  mr comment add <path> --snippet TEXT [--heading H]... [--occurrence N] [--author NAME] [--force] <text>
+                                       create an anchored comment (default author "ai")
   mr revisions <path> [--json]         list revision history, newest first
   mr restore  <path> <id> [--author NAME]  restore the canonical body to revision id (default author "external")
   mr diff     <path> [--since ID] [--since-last-read]  unified diff against a prior revision (default: last_read's baseline)
@@ -120,6 +126,14 @@ alongside <path> via repeated ?open= params. Extras must share <path>'s root;
 a mismatched or unresolvable extra is dropped with a warning, and at most one
 positional argument total may sit outside every configured root (the one-off
 slot only holds one file).
+"mr open --print" never replaces the one-off slot: it prints the URL only when
+the slot already holds <path>, and otherwise exits non-zero naming the file the
+slot holds; add --replace-slot (or drop --print) to replace it deliberately.
+mr comment add: --snippet and each --heading are the rendered text (inline
+markup removed; headings keep their "## " prefix, parent first, no {...}
+attribute block). --occurrence is 0-based. Nothing is written when the anchor
+does not resolve against the body.
+Renderable syntax (mermaid, tables, task lists, ...): see "エディタが描画できる記法" in GET /api/help.
 --since ID: only comments after ID (e.g. --since c-008).
 --unanswered: only comments whose latest activity is not from the AI.
 mr apply reads {"edits":[{"old":"..","new":".."}],"replies":[{"id":"c-001","body":".."}]}
@@ -327,19 +341,32 @@ func statusVerb(status string) string {
 // Everything else (--all, --json) is boolean, so positional/flag order stays
 // free without the flag package's stricter model and without mistaking a
 // positional path for a flag value.
-var valueFlags = map[string]bool{"author": true, "since": true, "root": true, "comment": true}
+var valueFlags = map[string]bool{
+	"author": true, "since": true, "root": true, "comment": true,
+	"snippet": true, "heading": true, "occurrence": true,
+}
 
 // parseArgs splits args into positionals and flags. A flag is "--name"; it is
 // boolean (stored as "true") unless it is in valueFlags, in which case the next
-// token is taken as its value.
+// token is taken as its value. A repeated value flag keeps its last value; use
+// parseArgsMulti when every occurrence matters (mr comment add --heading).
 func parseArgs(args []string) (positional []string, flags map[string]string) {
+	positional, flags, _ = parseArgsMulti(args)
+	return positional, flags
+}
+
+// parseArgsMulti is parseArgs that also returns every value of each value
+// flag, in command-line order.
+func parseArgsMulti(args []string) (positional []string, flags map[string]string, multi map[string][]string) {
 	flags = map[string]string{}
+	multi = map[string][]string{}
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		if len(a) > 2 && a[:2] == "--" {
 			name := a[2:]
 			if valueFlags[name] && i+1 < len(args) {
 				flags[name] = args[i+1]
+				multi[name] = append(multi[name], args[i+1])
 				i++
 			} else {
 				flags[name] = "true"
@@ -348,5 +375,5 @@ func parseArgs(args []string) (positional []string, flags map[string]string) {
 		}
 		positional = append(positional, a)
 	}
-	return positional, flags
+	return positional, flags, multi
 }

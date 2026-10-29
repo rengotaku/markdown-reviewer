@@ -44,7 +44,8 @@ mr reply    <path> <id> <text> [--author NAME] [--force] # スレッド返信（
 mr apply    <path> [<json-file>|-] [--author NAME] [--force]  # 本文の修正と返信を 1 回で（JSON: edits / replies）
 mr resolve  <path> <id> [--force]                        # resolved にする
 mr reopen   <path> <id> [--force]                        # resolved を open に戻す
-mr open     <path> [<extra-path>...] [--comment ID] [--print]  # Web UI で開く（--print: URL のみ出力）
+mr open     <path> [<extra-path>...] [--comment ID] [--print [--replace-slot]]  # Web UI で開く（--print: URL のみ出力）
+mr comment add <path> --snippet TEXT [--heading H]... [--occurrence N] [--author NAME] [--force] <text>  # アンカー付きコメントを作る（既定 author=ai）
 mr revisions <path> [--json]                              # 履歴一覧（新しい順・id / 日時 / author）
 mr restore  <path> <id> [--author NAME]                   # その版へ書き戻す（既定 author=external）
 mr diff     <path> [--since ID] [--since-last-read]       # 前回 mr で読んだ時（既定）/ 指定 revision との差分
@@ -56,11 +57,26 @@ mr diff     <path> [--since ID] [--since-last-read]       # 前回 mr で読ん�
 
 人間に「この画面を見てほしい」と伝えるときは `mr open <path> --print` の URL を貼る（deeplink を手で組まない）。特定のコメント1件を指したいときは `mr open <path> --comment <id> --print` で、そのコメントへ自動スクロールするリンクを貼れる（`id` は `mr comments <path> --json` で確認できる）。指定した `id` がそのファイルに存在しない場合はエラーになる。
 
+`mr open --print` は anonymous スロットを入れ替えない。`<path>` がルート外のとき、スロットが既に同じファイルを保持していればその URL を出し、空または別のファイルが入っていれば何も登録せず exit 1 で止まる（エラーにスロットの中身が出る）。入れ替えてよいときだけ `--replace-slot` を付ける（`--print` なしの `mr open` は従来どおり入れ替える）。
+
 `<path>` の後ろに追加パスを並べると、それらを背景タブとして開いた状態の URL になる（`?open=<rel>` を繰り返し）。追加パスは `<path>` と同じルート配下であること。別ルート・ルート外のパスは警告のうえ無視され、`<path>` だけの URL になる。ルート外（anonymous スロット行き）のパスは全体で1つまで（`<path>` 自身がルート外の場合を含む）で、2つ目以降を渡すとエラーで終了する。
 
-### コメントを API で自作するときの注意（anchor 契約）
+### コメントを自作するとき（`mr comment add`）
 
-`POST /api/comments` で `anchor` を指定する場合、`heading_path` と `snippet` は**描画後テキスト**（`` `x` `` → `x`、`**x**` → `x` のようにインライン記法を剥がした形）で書く。生 Markdown をコピーすると照合に失敗して orphan になる。詳細は `GET /api/help`。
+```
+mr comment add <path> --snippet '対象の文' [--heading '## 見出し']... [--occurrence N] [--author NAME] '<コメント本文>'
+```
+
+anchor は `heading_path` と `snippet` を**描画後テキスト**（`` `x` `` → `x`、`**x**` → `x` のようにインライン記法を剥がした形）で持つ。`mr comment add` は記法を自分で剥がし、作成前に本文へ解決できるか確かめ、解決できなければ何も書かずに exit 1 で止まる（snippet が本文に何回出るかも表示）。
+
+- `--heading` は `#` 付きで、親から順に複数回指定する（例: `--heading '# 設計' --heading '## 認証'`）。末尾に `{color="..."}` のような属性ブロックがあるとエラー。本文の見出しに属性ブロックが付いているときは、属性の文字列も見出しの一部として照合されるので `--heading` を外して `--snippet` と `--occurrence` で指す
+- `--occurrence` は 0 始まり（既定 0）。同じ見出し配下で同じ snippet が何個目か
+- 書き込みガード・`--force` は `mr reply` と同じ。成功すると `added c-NNN (lines N-M)` を出す
+- HTTP で作るなら `POST /api/comments` でも同じ契約（詳細は `GET /api/help`）
+
+### エディタが描画できる記法
+
+mermaid（```` ```mermaid ```` フェンス）・表・タスクリスト・言語付きコードブロックの色付け・frontmatter など、描画できる記法の一覧は `GET /api/help` の「エディタが描画できる記法」を参照。
 
 ## このリポジトリで作業する Claude へ
 
