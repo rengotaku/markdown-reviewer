@@ -87,7 +87,8 @@ export function newAiReplies(
 const sameStatus = (a: AgentStatusResponse | null, b: AgentStatusResponse | null) =>
   a?.state === b?.state &&
   a?.session_name === b?.session_name &&
-  a?.agent_id === b?.agent_id;
+  a?.agent_id === b?.agent_id &&
+  a?.summary_id === b?.summary_id;
 
 /** Folds one polled status into the tracking. Returns `prev` itself when
  *  nothing visible changed, so a steady state doesn't re-render the editor. */

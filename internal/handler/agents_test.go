@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -100,4 +101,53 @@ func TestAgentStatusHandler(t *testing.T) {
 	request := httptest.NewRequest(http.MethodGet, "/api/agents/status/a.md", nil)
 	request.Header.Set("Origin", "https://unrelated.example")
 	require.Equal(t, http.StatusForbidden, serve(h, request).Code)
+}
+
+type summaryAdapter struct {
+	at time.Time
+	recordingAdapter
+}
+
+func (a *summaryAdapter) Summary(_ context.Context, _ agent.Session, since time.Time) (string, time.Time, bool, error) {
+	return "## done\n\nbody", a.at, a.at.After(since), nil
+}
+
+func TestStatusStoresSummaryAndSummariesAPI(t *testing.T) {
+	t.Setenv("REVIEWER_CONFIG_DIR", t.TempDir())
+	h, root := setupFilesHandler(t)
+	require.NoError(t, os.WriteFile(filepath.Join(root, "a.md"), []byte("# A"), 0600))
+
+	empty := serve(h, httptest.NewRequest(http.MethodGet, "/api/summaries/a.md", nil))
+	require.Equal(t, http.StatusOK, empty.Code)
+	require.JSONEq(t, `{"summaries":[]}`, empty.Body.String())
+
+	adapter := &summaryAdapter{recordingAdapter: recordingAdapter{root: root}, at: time.Now().Add(time.Hour)}
+	h.SetAgentSender(agent.New(adapter))
+	require.Equal(t, http.StatusOK, serve(h, httptest.NewRequest(http.MethodPost, "/api/agents/send/a.md", nil)).Code)
+	first := serve(h, httptest.NewRequest(http.MethodGet, "/api/agents/status/a.md", nil))
+	require.Equal(t, http.StatusOK, first.Code)
+	// The poll that stored it says so, so the editor refetches the list.
+	require.Contains(t, first.Body.String(), `"summary_id":"s-`)
+	// The second poll must not store it again, nor claim a new one.
+	second := serve(h, httptest.NewRequest(http.MethodGet, "/api/agents/status/a.md", nil))
+	require.Equal(t, http.StatusOK, second.Code)
+	require.NotContains(t, second.Body.String(), "summary_id")
+
+	rec := serve(h, httptest.NewRequest(http.MethodGet, "/api/summaries/a.md", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	var body struct {
+		Summaries []struct {
+			ID      string `json:"id"`
+			AgentID string `json:"agent_id"`
+			Text    string `json:"text"`
+			SentAt  string `json:"sent_at"`
+			DoneAt  string `json:"done_at"`
+		} `json:"summaries"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.Len(t, body.Summaries, 1)
+	require.Equal(t, "test-ai", body.Summaries[0].AgentID)
+	require.Equal(t, "## done\n\nbody", body.Summaries[0].Text)
+	require.NotEmpty(t, body.Summaries[0].SentAt)
+	require.NotEmpty(t, body.Summaries[0].DoneAt)
 }

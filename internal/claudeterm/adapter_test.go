@@ -6,7 +6,9 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -130,5 +132,60 @@ func TestOpenerIdentity(t *testing.T) {
 	t.Setenv("CLAUDE_PID", "123")
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
 	_, ok = OpenerIdentity()
+	require.False(t, ok)
+}
+
+func writeTranscript(t *testing.T, adapter *Adapter, session string, lines ...string) {
+	t.Helper()
+	dir := filepath.Join(filepath.Dir(adapter.dir), "projects", "-work-proj")
+	require.NoError(t, os.MkdirAll(dir, 0700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, session+".jsonl"), []byte(strings.Join(lines, "\n")+"\n"), 0600))
+}
+
+func TestSummaryReadsFinalReply(t *testing.T) {
+	adapter, _ := fixture(t)
+	since := time.Date(2026, 10, 29, 1, 0, 0, 0, time.UTC)
+	big := strings.Repeat("x", 3<<20) // one line well past bufio.Scanner's default cap
+	writeTranscript(t, adapter, "sess",
+		`{"type":"assistant","timestamp":"2026-10-29T00:30:00.000Z","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"before"}]}}`,
+		// Read past before the answer, so the reader must cope with it.
+		`{"type":"assistant","timestamp":"2026-10-29T00:40:00.500Z","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"`+big+`"}]}}`,
+		`{"type":"user","timestamp":"2026-10-29T01:01:00.000Z","message":{"content":"hi"}}`,
+		`{"type":"assistant","timestamp":"2026-10-29T01:02:00.000Z","message":{"stop_reason":"tool_use","content":[{"type":"text","text":"working"}]}}`,
+		`{"type":"assistant","isSidechain":true,"timestamp":"2026-10-29T01:03:00.000Z","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"sub"}]}}`,
+		`{"type":"assistant","timestamp":"2026-10-29T01:04:00.000Z","message":{"stop_reason":"end_turn","content":[{"type":"thinking","thinking":"hm"},{"type":"text","text":"first"},{"type":"text","text":"second"}]}}`,
+		`{"type":"assistant","timestamp":"2026-10-29T01:06:00Z","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"last"}]}}`,
+		`not json`,
+	)
+	text, at, ok, err := adapter.Summary(context.Background(), agent.Session{ID: "sess"}, since)
+	require.NoError(t, err)
+	require.True(t, ok)
+	// The turn that answered the send, not the later ones (another file's
+	// send, or the reader typing in the terminal) (#374 review).
+	require.Equal(t, "first\n\nsecond", text)
+	require.Equal(t, time.Date(2026, 10, 29, 1, 4, 0, 0, time.UTC), at)
+}
+
+func TestSummaryJoinsTextAndSkipsOthers(t *testing.T) {
+	adapter, _ := fixture(t)
+	writeTranscript(t, adapter, "s2",
+		`{"type":"assistant","timestamp":"2026-10-29T01:04:00.000Z","message":{"stop_reason":"end_turn","content":[{"type":"thinking","thinking":"hm"},{"type":"text","text":"first"},{"type":"text","text":"second"}]}}`,
+		`{"type":"assistant","isSidechain":true,"timestamp":"2026-10-29T01:09:00.000Z","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"sub"}]}}`,
+		`{"type":"assistant","timestamp":"2026-10-29T01:10:00.000Z","message":{"stop_reason":"tool_use","content":[{"type":"text","text":"mid"}]}}`,
+	)
+	text, _, ok, err := adapter.Summary(context.Background(), agent.Session{ID: "s2"}, time.Date(2026, 10, 29, 1, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, "first\n\nsecond", text)
+}
+
+func TestSummaryNoMatch(t *testing.T) {
+	adapter, _ := fixture(t)
+	_, _, ok, err := adapter.Summary(context.Background(), agent.Session{ID: "missing"}, time.Time{})
+	require.NoError(t, err)
+	require.False(t, ok)
+	writeTranscript(t, adapter, "old", `{"type":"assistant","timestamp":"2026-10-29T00:00:00Z","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"a"}]}}`)
+	_, _, ok, err = adapter.Summary(context.Background(), agent.Session{ID: "old"}, time.Date(2026, 10, 29, 1, 0, 0, 0, time.UTC))
+	require.NoError(t, err)
 	require.False(t, ok)
 }

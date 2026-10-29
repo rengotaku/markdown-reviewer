@@ -271,3 +271,11 @@ describe("statBatch", () => {
     expect(calls).toBe(0);
   });
 });
+
+describe("getSummaries", () => {
+  it("returns the summaries list for a file", async () => {
+    const { getSummaries } = await import("./files");
+    const res = await getSummaries("mock-root", "docs/intro.md");
+    expect(res.summaries).toEqual([]);
+  });
+});

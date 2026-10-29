@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Session is a live session normalized by an adapter. Instance identifies the
@@ -67,10 +68,12 @@ type Sender interface {
 	Register(context.Context, string, Identity) bool
 	Send(context.Context, string) Result
 	Status(context.Context, string) Status
+	TakeSummary(context.Context, string) (Summary, bool)
 }
 
 type Service struct {
 	owners    map[string]Identity
+	pending   map[string]pending
 	storePath string
 	adapters  []Adapter
 	mu        sync.Mutex
@@ -219,10 +222,12 @@ func (s *Service) Send(ctx context.Context, path string) Result {
 		result.Reason = "busy"
 		return result
 	}
+	sentAt := time.Now()
 	err := chosen.adapter.Send(ctx, chosen.session, result.Command)
 	switch {
 	case err == nil:
 		result.Sent, result.Reason = true, ""
+		s.remember(path, chosen, sentAt)
 	case errors.Is(err, ErrBusy):
 		result.Reason = "busy"
 	case errors.Is(err, ErrNoSession):

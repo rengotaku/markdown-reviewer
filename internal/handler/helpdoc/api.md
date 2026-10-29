@@ -440,3 +440,11 @@ AppleScript: https://iterm2.com/documentation-scripting.html
 iTerm2 の入力は `internal/terminal/iterm` に分離する。
 対応先を追加する際はアダプターを実装し、`internal/agentsetup` にアダプターの生成と
 CLI の起動元検出を一組登録する。HTTP ハンドラーと画面に AI 固有の条件分岐は追加しない。
+
+### `GET /api/summaries/*path?root=<name>`
+
+`send` のあと、送り先セッションの応答が終わると、その回の最後の応答文（会話ログの本文そのまま）を
+sidecar の `summaries.jsonl` に追記する（最大 50 件、古いものから捨てる）。追記は `GET /api/agents/status`
+を呼んだとき（エディタが数秒おきに呼ぶ）に行う。pending（どこへいつ送ったか）はメモリだけに持ち、サーバ再起動で消える。
+このエンドポイントは保存済みの要約を新しい順に返す: `{"summaries":[{"id":"s-1788000000000","sent_at":"...","done_at":"...","agent_id":"claude","session_name":"...","text":"..."}]}`。
+ファイルが無ければ空配列。`claude` 以外のアダプタは要約を返さない。

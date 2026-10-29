@@ -3,6 +3,8 @@
 package claudeterm
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -13,6 +15,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"markdown-reviewer/internal/agent"
 	"markdown-reviewer/internal/terminal"
@@ -42,6 +45,8 @@ func New(writer terminal.Writer) *Adapter {
 	}
 	return &Adapter{dir: filepath.Join(dir, "sessions"), process: processTTY, writer: writer}
 }
+
+var _ agent.Summarizer = (*Adapter)(nil)
 
 func (*Adapter) ID() string { return "claude" }
 
@@ -157,4 +162,104 @@ func processTTY(ctx context.Context, s metadata) (string, bool) {
 		return "", true
 	}
 	return "/dev/" + fields[0], true
+}
+
+// transcriptLine is the part of a conversation-log line needed to find the
+// final reply of a turn.
+type transcriptLine struct {
+	Timestamp string `json:"timestamp"`
+	Type      string `json:"type"`
+	Message   struct {
+		StopReason string          `json:"stop_reason"`
+		Content    json.RawMessage `json:"content"`
+	} `json:"message"`
+	IsSidechain bool `json:"isSidechain"`
+}
+
+// Summary returns the text of the first final reply (assistant, end_turn, not
+// a subagent) logged after since: the turn that answered the send. A send is
+// only delivered to an idle session, so no earlier turn ends after since, while
+// later ones belong to other work (another file's send, or the reader typing
+// in the terminal) and must not be stored as this file's summary. The log path is found by globbing for the
+// session id rather than by reconstructing the project directory name.
+func (a *Adapter) Summary(_ context.Context, session agent.Session, since time.Time) (string, time.Time, bool, error) {
+	if session.ID == "" || strings.ContainsAny(session.ID, `/\*?[`) {
+		return "", time.Time{}, false, nil
+	}
+	pattern := filepath.Join(filepath.Dir(a.dir), "projects", "*", session.ID+".jsonl")
+	matches, err := filepath.Glob(pattern)
+	if err != nil || len(matches) == 0 {
+		return "", time.Time{}, false, nil
+	}
+	var (
+		bestText string
+		bestAt   time.Time
+		found    bool
+	)
+	for _, name := range matches {
+		text, at, ok, err := firstFinalReply(name, since)
+		if err != nil {
+			return "", time.Time{}, false, err
+		}
+		if ok && (!found || at.Before(bestAt)) {
+			bestText, bestAt, found = text, at, true
+		}
+	}
+	return bestText, bestAt, found, nil
+}
+
+func firstFinalReply(name string, since time.Time) (string, time.Time, bool, error) {
+	f, err := os.Open(name)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", time.Time{}, false, nil
+		}
+		return "", time.Time{}, false, err
+	}
+	defer func() { _ = f.Close() }()
+	// bufio.Reader (not Scanner): one line can be several MB, so read whole
+	// lines with no fixed token cap.
+	r := bufio.NewReader(f)
+	for {
+		raw, readErr := r.ReadBytes('\n')
+		if len(bytes.TrimSpace(raw)) > 0 {
+			if t, ts, ok := parseFinalReply(raw); ok && ts.After(since) {
+				return t, ts, true, nil
+			}
+		}
+		if readErr == io.EOF {
+			return "", time.Time{}, false, nil
+		}
+		if readErr != nil {
+			return "", time.Time{}, false, readErr
+		}
+	}
+}
+
+func parseFinalReply(raw []byte) (string, time.Time, bool) {
+	var line transcriptLine
+	if json.Unmarshal(raw, &line) != nil || line.Type != "assistant" || line.IsSidechain || line.Message.StopReason != "end_turn" {
+		return "", time.Time{}, false
+	}
+	ts, err := time.Parse(time.RFC3339Nano, line.Timestamp)
+	if err != nil {
+		return "", time.Time{}, false
+	}
+	var blocks []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if json.Unmarshal(line.Message.Content, &blocks) != nil {
+		return "", time.Time{}, false
+	}
+	var parts []string
+	for _, b := range blocks {
+		if b.Type == "text" && b.Text != "" {
+			parts = append(parts, b.Text)
+		}
+	}
+	if len(parts) == 0 {
+		return "", time.Time{}, false
+	}
+	return strings.Join(parts, "\n\n"), ts, true
 }

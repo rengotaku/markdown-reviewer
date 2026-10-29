@@ -14,6 +14,7 @@ export {
   createRevision,
   sendReviewCommand,
   fetchAgentStatus,
+  getSummaries,
   restoreRevision,
   type ConfigResponse,
   type DirEntry as DirEntryApi,
@@ -35,6 +36,8 @@ export {
   type SendReviewResponse,
   type AgentState,
   type AgentStatusResponse,
+  type SummaryItem,
+  type SummariesResponse,
 } from "./files";
 export {
   listComments,

@@ -27,6 +27,7 @@ export const handlers = [
   http.post(`${API_BASE}/api/agents/send/*`, () =>
     HttpResponse.json({ sent: false, reason: "no_session" })
   ),
+  http.get(`${API_BASE}/api/summaries/*`, () => HttpResponse.json({ summaries: [] })),
   http.get(`${API_BASE}/api/agents/status/*`, () => HttpResponse.json({ state: "none" })),
   http.post(`${API_BASE}/api/v1/auth/login`, async ({ request }) => {
     const body = (await request.json()) as { email: string; password: string };

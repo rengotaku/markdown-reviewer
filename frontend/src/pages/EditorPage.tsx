@@ -52,6 +52,8 @@ import { useServerEvents } from "@/hooks/useServerEvents";
 import { useAgentStatus } from "@/hooks/useAgentStatus";
 import { openCommentIds, unsentCount } from "@/utils/agentActivity";
 import { AgentStatusIndicator } from "@/components/AgentStatusIndicator";
+import { AgentSummaryButton } from "@/components/AgentSummaryButton";
+import { useSummaries } from "@/hooks/useSummaries";
 import { useServerConnection } from "@/hooks/useServerConnection";
 import { useConfirm } from "@/hooks/useConfirm";
 import { selectionMarkdownOf } from "@/components/tiptap/toolbar/selectionCopy";
@@ -405,6 +407,14 @@ export function EditorPage() {
     !reviewActive || commentsLoadedForPath === activePath
   );
   const agentBusy = agentActivity.status?.state === "busy";
+  // #374: the AI's final reply for each send, readable from the header.
+  const agentSummaries = useSummaries(
+    activePath,
+    activeFileRoot,
+    agentBusy,
+    agentActivity.status?.summary_id
+  );
+  const commentIdSet = useMemo(() => new Set(comments.map((c) => c.id)), [comments]);
   const newAgentReplyCount = [...agentActivity.newReplies.values()].reduce(
     (a, b) => a + b,
     0
@@ -3317,6 +3327,20 @@ export function EditorPage() {
               />
             )}
           </Box>
+          {/* #374: outside the shrinking status box, so a narrow header clips
+              the status text but never the button and its unread badge. */}
+          {activeFile && (
+            <Box sx={{ display: "flex", alignItems: "center", flexShrink: 0 }}>
+              <AgentSummaryButton
+                summaries={agentSummaries.summaries}
+                lastSeenId={agentSummaries.lastSeenId}
+                busySince={agentBusy ? agentActivity.busySince : null}
+                commentIds={commentIdSet}
+                onOpen={agentSummaries.markRead}
+                onShowComment={handleSelectComment}
+              />
+            </Box>
+          )}
           {/* #119 case 4: shown only after the SSE channel has connected at
               least once and then dropped, so a poll-based fallback is
               actually in play — never flashes on initial mount / in
