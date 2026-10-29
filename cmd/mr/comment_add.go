@@ -36,6 +36,9 @@ func cmdComment(args []string) error {
 // not resolve against the current body (#347), so nothing is written for a
 // comment that would show up as "位置不明".
 func cmdCommentAdd(args []string) error {
+	if err := checkCommentAddFlags(args); err != nil {
+		return err
+	}
 	pos, flags, multi := parseArgsMulti(args)
 	if len(pos) != 2 {
 		return fmt.Errorf("%s", commentAddUsage)
@@ -56,7 +59,7 @@ func cmdCommentAdd(args []string) error {
 		}
 		occurrence = n
 	}
-	headings, err := normalizeHeadings(multi["heading"])
+	literalHeadings, headings, err := normalizeHeadings(multi["heading"])
 	if err != nil {
 		return err
 	}
@@ -74,13 +77,22 @@ func cmdCommentAdd(args []string) error {
 	}
 	content := string(data)
 
+	// The documented contract is rendered text, which may itself contain
+	// markdown-looking characters (a code span rendering as `**value**`), so
+	// the literal form is tried first and wins. Only when it does not resolve
+	// is the input read as raw markdown and its inline markup removed — the
+	// other order would silently re-anchor `**value**` onto a plain "value"
+	// line elsewhere in the body.
+	literal := reviewstore.Anchor{Snippet: snippet, HeadingPath: literalHeadings, Occurrence: occurrence}
 	anchor := reviewstore.Anchor{
 		Snippet:     reviewstore.StripInlineMarkup(snippet),
 		HeadingPath: headings,
 		Occurrence:  occurrence,
 	}
-	lr, ok := reviewstore.ResolveAnchor(content, anchor)
-	if !ok {
+	lr, ok := reviewstore.ResolveAnchor(content, literal)
+	if ok {
+		anchor = literal
+	} else if lr, ok = reviewstore.ResolveAnchor(content, anchor); !ok {
 		return unresolvedAnchorError(content, anchor)
 	}
 	reviewstore.StampFingerprint(content, &anchor)
@@ -106,23 +118,63 @@ func cmdCommentAdd(args []string) error {
 	return nil
 }
 
-// normalizeHeadings strips inline markup from each --heading and rejects the
-// forms that can never match a rendered heading. The anchor's heading_path
-// keeps each heading's `#` prefix (the level is part of the match), so a
-// heading given without it is refused with the form to use.
-func normalizeHeadings(raw []string) ([]string, error) {
-	out := make([]string, 0, len(raw))
+// normalizeHeadings validates each --heading and returns it twice: as given
+// (the rendered-text contract, tried first) and with inline markup stripped
+// (the raw-markdown fallback). It rejects the forms that can never match a
+// rendered heading. The anchor's heading_path keeps each heading's `#` prefix
+// (the level is part of the match), so a heading given without it is refused
+// with the form to use.
+func normalizeHeadings(raw []string) (literal, stripped []string, err error) {
+	literal = make([]string, 0, len(raw))
+	stripped = make([]string, 0, len(raw))
 	for _, h := range raw {
 		if attrBlockRe.MatchString(h) {
-			return nil, fmt.Errorf("--heading %q ends with an attribute block ({...}); pass the heading text without the attribute block", h)
+			return nil, nil, fmt.Errorf("--heading %q ends with an attribute block ({...}); pass the heading text without the attribute block", h)
 		}
+		l := strings.TrimSpace(h)
 		n := strings.TrimSpace(reviewstore.StripInlineMarkup(h))
-		if !atxHeadingRe.MatchString(n) {
-			return nil, fmt.Errorf("--heading %q must be the rendered heading with its # prefix, e.g. \"## Title\"", h)
+		if !atxHeadingRe.MatchString(n) || !atxHeadingRe.MatchString(l) {
+			return nil, nil, fmt.Errorf("--heading %q must be the rendered heading with its # prefix, e.g. \"## Title\"", h)
 		}
-		out = append(out, n)
+		literal = append(literal, l)
+		stripped = append(stripped, n)
 	}
-	return out, nil
+	return literal, stripped, nil
+}
+
+// commentAddFlags are the only flags mr comment add accepts; true marks the
+// ones that take a value.
+var commentAddFlags = map[string]bool{
+	"snippet": true, "heading": true, "occurrence": true, "author": true, "force": false,
+}
+
+// checkCommentAddFlags rejects what parseArgs would silently drop: an unknown
+// flag, the --name=value form, and a value flag with no value (a trailing
+// `--heading` or one followed by another flag). Each of those would otherwise
+// lose part of the anchor and still write the comment onto the first match.
+func checkCommentAddFlags(args []string) error {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if len(a) <= 2 || a[:2] != "--" {
+			continue
+		}
+		name := a[2:]
+		if strings.Contains(name, "=") {
+			return fmt.Errorf("%q: use \"--name value\", not \"--name=value\"\n%s", a, commentAddUsage)
+		}
+		takesValue, known := commentAddFlags[name]
+		if !known {
+			return fmt.Errorf("unknown flag %q\n%s", a, commentAddUsage)
+		}
+		if !takesValue {
+			continue
+		}
+		if i+1 >= len(args) || strings.HasPrefix(args[i+1], "--") {
+			return fmt.Errorf("%s needs a value\n%s", a, commentAddUsage)
+		}
+		i++
+	}
+	return nil
 }
 
 // unresolvedAnchorError explains why nothing was written: how many times the

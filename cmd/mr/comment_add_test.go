@@ -240,3 +240,51 @@ func TestParseArgsMulti_RepeatedHeading(t *testing.T) {
 		t.Errorf("pos=%v flags=%v multi=%v", pos, flags, multi)
 	}
 }
+
+// A rendered snippet can itself look like markdown: a code span renders as
+// `**value**`. It must anchor on that line, not be stripped to "value" and
+// re-anchored onto an earlier plain "value" line.
+func TestCommentAdd_RenderedSnippetIsMatchedLiterallyFirst(t *testing.T) {
+	root := withRoots(t)
+	t.Setenv("REVIEWER_CONFIG_DIR", t.TempDir())
+	path := filepath.Join(root, "doc.md")
+	if err := os.WriteFile(path, []byte("value\n\n`**value**`\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := reviewstore.Ingest("works", "doc.md"); err != nil {
+		t.Fatal(err)
+	}
+	out, err := captureStdout(t, func() error {
+		return cmdComment([]string{"add", path, "--snippet", "**value**", "x"})
+	})
+	if err != nil {
+		t.Fatalf("cmdComment: %v", err)
+	}
+	if !strings.Contains(out, "lines 3-3") {
+		t.Errorf("stdout = %q, want lines 3-3 (the code span line)", out)
+	}
+	if got := storedComments(t)[0].Anchor.Snippet; got != "**value**" {
+		t.Errorf("snippet = %q, want the literal rendered text", got)
+	}
+}
+
+// Flags parseArgs would silently drop must be refused before anything is
+// written, or the anchor loses its heading / occurrence and lands on the
+// first match.
+func TestCommentAdd_MalformedFlagsWriteNothing(t *testing.T) {
+	p := setupCommentAdd(t)
+	cases := map[string][]string{
+		"trailing --heading":         {"add", p, "--snippet", "same line", "x", "--heading"},
+		"--heading followed by flag": {"add", p, "--heading", "--snippet", "same line", "x"},
+		"--occurrence=1":             {"add", p, "--snippet", "same line", "--occurrence=1", "x"},
+		"unknown flag":               {"add", p, "--snippet", "same line", "--line", "1", "x"},
+	}
+	for name, args := range cases {
+		if err := cmdComment(args); err == nil {
+			t.Errorf("%s: want error, got nil", name)
+		}
+	}
+	if n := len(storedComments(t)); n != 0 {
+		t.Errorf("comments = %d, want 0", n)
+	}
+}
