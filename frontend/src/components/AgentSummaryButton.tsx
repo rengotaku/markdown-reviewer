@@ -14,6 +14,7 @@ import {
   summaryTitle,
   unreadSummaryCount,
 } from "@/utils/summaries";
+import { CountBadge } from "./CountBadge";
 import { markdownBodySx } from "./markdownBodySx";
 import { pulseSx } from "./pulseSx";
 
@@ -110,27 +111,7 @@ export function AgentSummaryButton({
       >
         <NotesIcon sx={{ fontSize: 15 }} />
         要約
-        {unread > 0 && (
-          <Box
-            component="span"
-            data-testid="agent-summary-badge"
-            sx={{
-              minWidth: 16,
-              height: 16,
-              px: 0.5,
-              borderRadius: 8,
-              bgcolor: "primary.main",
-              color: "primary.contrastText",
-              fontSize: 10,
-              fontWeight: 700,
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            {unread}
-          </Box>
-        )}
+        {unread > 0 && <CountBadge count={unread} testId="agent-summary-badge" />}
       </ButtonBase>
       <Popover
         open={open}

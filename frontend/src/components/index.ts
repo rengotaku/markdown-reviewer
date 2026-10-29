@@ -4,6 +4,7 @@ export { ToastViewport } from "./ToastViewport";
 export { ConfirmDialog } from "./ConfirmDialog";
 export { CommentSidePane } from "./CommentSidePane";
 export { CommentComposerPopover } from "./CommentComposerPopover";
+export { CountBadge } from "./CountBadge";
 export { DiffView } from "./DiffView";
 export { NameTooltip } from "./NameTooltip";
 export { LinkPreviewCard } from "./LinkPreviewCard";

@@ -13,7 +13,10 @@ describe("AgentStatusIndicator", () => {
         onShowReplies={vi.fn()}
       />
     );
-    expect(container).toBeEmptyDOMElement();
+    // #379: the empty slot holds the dot's place so the header doesn't shift.
+    expect(screen.getByTestId("editor-agent-status-placeholder")).toBeEmptyDOMElement();
+    expect(screen.queryByTestId("editor-agent-status")).toBeNull();
+    expect(container.childElementCount).toBe(1);
   });
 
   it.each([
