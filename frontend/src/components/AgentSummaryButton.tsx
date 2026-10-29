@@ -226,6 +226,10 @@ export function AgentSummaryButton({
                   wordBreak: "break-word",
                 },
                 markdownBodySx,
+                // #376: a summary's table keeps one line per cell and scrolls
+                // sideways (markdownBodySx already makes the table scroll),
+                // rather than wrapping each cell into a tall narrow column.
+                { "& th, & td": { whiteSpace: "nowrap", wordBreak: "normal" } },
               ]}
               dangerouslySetInnerHTML={{ __html: html }}
             />

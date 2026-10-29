@@ -41,11 +41,10 @@ describe("AgentStatusIndicator", () => {
       />
     );
     const indicator = screen.getByTestId("editor-agent-status");
-    expect(indicator).toHaveTextContent(/Claude 返信中\s*0:4[23]/);
-    // The ticking timer stays out of the live region's announcement.
-    expect(indicator.querySelector('[aria-hidden="true"]')).toHaveTextContent(
-      /^0:4[23]$/
-    );
+    expect(indicator).toHaveTextContent("Claude 返信中");
+    // The ticking timer stays out of the live region's announcement; it shows
+    // in the tooltip (#376).
+    expect(indicator).not.toHaveTextContent(/0:4[23]/);
     expect(screen.queryByTestId("editor-agent-new-replies")).toBeNull();
   });
 
@@ -76,6 +75,23 @@ describe("AgentStatusIndicator", () => {
     expect(screen.queryByTestId("editor-agent-sent-count")).toBeNull();
   });
 
+  it("shows the words in the tooltip, not beside the dot (#376)", async () => {
+    render(
+      <AgentStatusIndicator
+        status={{ state: "busy", agent_id: "claude", session_name: "s" }}
+        busySince={Date.now() - 42_000}
+        newReplyCount={0}
+        sentCount={3}
+        onShowReplies={vi.fn()}
+      />
+    );
+    const indicator = screen.getByTestId("editor-agent-status");
+    fireEvent.mouseOver(indicator);
+    const tip = await screen.findByRole("tooltip");
+    expect(tip).toHaveTextContent(/Claude 返信中 0:4[23] · 送信 3 件/);
+    expect(tip).toHaveTextContent("送信先: s");
+  });
+
   it("offers the new replies once the turn is over", () => {
     const onShow = vi.fn();
     render(
@@ -87,7 +103,7 @@ describe("AgentStatusIndicator", () => {
       />
     );
     const link = screen.getByTestId("editor-agent-new-replies");
-    expect(link).toHaveTextContent("Claude の返信 2 件");
+    expect(link).toHaveAccessibleName("Claude の返信 2 件");
     fireEvent.click(link);
     expect(onShow).toHaveBeenCalledOnce();
   });

@@ -186,6 +186,7 @@ function CollapsibleText({
   measureOverflow = false,
   clampDisabled = false,
   stickyToggle = false,
+  defaultExpanded = false,
 }: {
   text: string;
   testid: string;
@@ -197,8 +198,10 @@ function CollapsibleText({
    *  for a card's own body — a reply's toggle only ever shows in a selected
    *  card, whose action row is already pinned there and would cover it. */
   stickyToggle?: boolean;
+  /** #376: start unfolded — the last reply of a thread the reader opens. */
+  defaultExpanded?: boolean;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(defaultExpanded);
   const [overflowing, setBodyEl, bodyEl] = useClampOverflow(
     !clampDisabled,
     clampHeight,
@@ -967,7 +970,11 @@ export function CommentSidePane({
           handleDelete(id);
           setDetailId(null);
         }}
-        onResolveToggle={onResolveToggle}
+        onResolveToggle={(id, status) => {
+          onResolveToggle(id, status);
+          // #376: resolving is the end of the thread; reopening keeps it up.
+          if (status === "resolved") setDetailId(null);
+        }}
         onReply={onReply}
         onEdit={onEdit}
         onEditReply={onEditReply}
@@ -1434,7 +1441,7 @@ function CommentCard({
         <>
           {replies > 0 && c.replies && (
             <Box sx={{ mt: 1 }}>
-              {c.replies.map((r, i) => (
+              {c.replies.map((r, i, all) => (
                 <ReplyRow
                   key={i}
                   reply={r}
@@ -1442,6 +1449,7 @@ function CommentCard({
                   commentId={c.id}
                   resolved={resolved}
                   collapsible
+                  expandedByDefault={i === all.length - 1}
                   onEditReply={onEditReply}
                   onDeleteReply={onDeleteReply}
                 />
@@ -2316,7 +2324,7 @@ export function CommentRow({
 
       {c.replies && c.replies.length > 0 && (
         <Box sx={{ mt: 1, pl: 1, borderLeft: "2px solid", borderColor: "divider" }}>
-          {c.replies.map((r, i) => (
+          {c.replies.map((r, i, all) => (
             <ReplyRow
               key={i}
               reply={r}
@@ -2324,6 +2332,7 @@ export function CommentRow({
               commentId={c.id}
               resolved={resolved}
               collapsible
+              expandedByDefault={i === all.length - 1}
               onEditReply={onEditReply}
               onDeleteReply={onDeleteReply}
             />
@@ -2436,6 +2445,8 @@ interface ReplyRowProps {
   resolved: boolean;
   /** Side-pane rows collapse long bodies; the detail dialog shows them in full. */
   collapsible: boolean;
+  /** #376: the thread's last reply opens unfolded, as it is the one to read. */
+  expandedByDefault?: boolean;
   /** Test id for the row container (defaults to the side-pane reply id). */
   outerTestid?: string;
   onEditReply: (id: string, index: number, body: string) => void;
@@ -2498,6 +2509,7 @@ function ReplyRow({
   commentId,
   resolved,
   collapsible,
+  expandedByDefault = false,
   outerTestid = "comment-reply",
   onEditReply,
   onDeleteReply,
@@ -2619,6 +2631,7 @@ function ReplyRow({
           text={r.body}
           testid="comment-reply-body"
           sx={{ wordBreak: "break-word" }}
+          defaultExpanded={expandedByDefault}
         />
       ) : (
         <Typography
