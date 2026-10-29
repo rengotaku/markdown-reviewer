@@ -148,19 +148,22 @@ func TestSummaryReadsFinalReply(t *testing.T) {
 	big := strings.Repeat("x", 3<<20) // one line well past bufio.Scanner's default cap
 	writeTranscript(t, adapter, "sess",
 		`{"type":"assistant","timestamp":"2026-10-29T00:30:00.000Z","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"before"}]}}`,
+		// Read past before the answer, so the reader must cope with it.
+		`{"type":"assistant","timestamp":"2026-10-29T00:40:00.500Z","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"`+big+`"}]}}`,
 		`{"type":"user","timestamp":"2026-10-29T01:01:00.000Z","message":{"content":"hi"}}`,
 		`{"type":"assistant","timestamp":"2026-10-29T01:02:00.000Z","message":{"stop_reason":"tool_use","content":[{"type":"text","text":"working"}]}}`,
 		`{"type":"assistant","isSidechain":true,"timestamp":"2026-10-29T01:03:00.000Z","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"sub"}]}}`,
 		`{"type":"assistant","timestamp":"2026-10-29T01:04:00.000Z","message":{"stop_reason":"end_turn","content":[{"type":"thinking","thinking":"hm"},{"type":"text","text":"first"},{"type":"text","text":"second"}]}}`,
-		`{"type":"assistant","timestamp":"2026-10-29T01:05:00.500Z","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"`+big+`"}]}}`,
 		`{"type":"assistant","timestamp":"2026-10-29T01:06:00Z","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"last"}]}}`,
 		`not json`,
 	)
 	text, at, ok, err := adapter.Summary(context.Background(), agent.Session{ID: "sess"}, since)
 	require.NoError(t, err)
 	require.True(t, ok)
-	require.Equal(t, "last", text)
-	require.Equal(t, time.Date(2026, 10, 29, 1, 6, 0, 0, time.UTC), at)
+	// The turn that answered the send, not the later ones (another file's
+	// send, or the reader typing in the terminal) (#374 review).
+	require.Equal(t, "first\n\nsecond", text)
+	require.Equal(t, time.Date(2026, 10, 29, 1, 4, 0, 0, time.UTC), at)
 }
 
 func TestSummaryJoinsTextAndSkipsOthers(t *testing.T) {

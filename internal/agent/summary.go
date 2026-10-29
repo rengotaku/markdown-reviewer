@@ -7,7 +7,7 @@ import (
 )
 
 // Summarizer is an optional Adapter capability: it returns the text of the
-// session's last final reply that finished after since. ok=false (nil error)
+// session's first final reply that finished after since. ok=false (nil error)
 // means there is no such reply yet, or the transcript cannot be found.
 type Summarizer interface {
 	Summary(ctx context.Context, session Session, since time.Time) (text string, at time.Time, ok bool, err error)

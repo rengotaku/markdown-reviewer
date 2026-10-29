@@ -176,8 +176,11 @@ type transcriptLine struct {
 	IsSidechain bool `json:"isSidechain"`
 }
 
-// Summary returns the text of the last final reply (assistant, end_turn, not
-// a subagent) logged after since. The log path is found by globbing for the
+// Summary returns the text of the first final reply (assistant, end_turn, not
+// a subagent) logged after since: the turn that answered the send. A send is
+// only delivered to an idle session, so no earlier turn ends after since, while
+// later ones belong to other work (another file's send, or the reader typing
+// in the terminal) and must not be stored as this file's summary. The log path is found by globbing for the
 // session id rather than by reconstructing the project directory name.
 func (a *Adapter) Summary(_ context.Context, session agent.Session, since time.Time) (string, time.Time, bool, error) {
 	if session.ID == "" || strings.ContainsAny(session.ID, `/\*?[`) {
@@ -194,18 +197,18 @@ func (a *Adapter) Summary(_ context.Context, session agent.Session, since time.T
 		found    bool
 	)
 	for _, name := range matches {
-		text, at, ok, err := lastFinalReply(name, since)
+		text, at, ok, err := firstFinalReply(name, since)
 		if err != nil {
 			return "", time.Time{}, false, err
 		}
-		if ok && (!found || at.After(bestAt)) {
+		if ok && (!found || at.Before(bestAt)) {
 			bestText, bestAt, found = text, at, true
 		}
 	}
 	return bestText, bestAt, found, nil
 }
 
-func lastFinalReply(name string, since time.Time) (string, time.Time, bool, error) {
+func firstFinalReply(name string, since time.Time) (string, time.Time, bool, error) {
 	f, err := os.Open(name)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -217,20 +220,15 @@ func lastFinalReply(name string, since time.Time) (string, time.Time, bool, erro
 	// bufio.Reader (not Scanner): one line can be several MB, so read whole
 	// lines with no fixed token cap.
 	r := bufio.NewReader(f)
-	var (
-		text  string
-		at    time.Time
-		found bool
-	)
 	for {
 		raw, readErr := r.ReadBytes('\n')
 		if len(bytes.TrimSpace(raw)) > 0 {
 			if t, ts, ok := parseFinalReply(raw); ok && ts.After(since) {
-				text, at, found = t, ts, true
+				return t, ts, true, nil
 			}
 		}
 		if readErr == io.EOF {
-			return text, at, found, nil
+			return "", time.Time{}, false, nil
 		}
 		if readErr != nil {
 			return "", time.Time{}, false, readErr
