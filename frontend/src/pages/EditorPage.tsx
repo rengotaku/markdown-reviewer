@@ -2198,6 +2198,21 @@ export function EditorPage() {
     scroller.scrollBy({ top: delta, behavior: "smooth" });
   };
 
+  // #378: the rail lifts a card being written in back into the pane by
+  // scrolling the body — instantly, since it follows the typing — and is told
+  // how far the body actually went.
+  const scrollBodyBy = useCallback(
+    (dy: number): number => {
+      if (!editor || editor.isDestroyed) return 0;
+      const scroller = findScrollableAncestor(editor.view.dom);
+      if (!scroller) return 0;
+      const before = scroller.scrollTop;
+      scroller.scrollBy({ top: dy, behavior: "instant" });
+      return scroller.scrollTop - before;
+    },
+    [editor]
+  );
+
   const handleJumpToComment = (id: string, { revealCard = false } = {}) => {
     if (!editor || editor.isDestroyed) return;
     const comment = comments.find((c) => c.id === id);
@@ -3636,6 +3651,7 @@ export function EditorPage() {
           anchorTops={anchorTops}
           docBox={docBox}
           onRailOverhangChange={setRailOverhang}
+          onRailScrollBodyBy={scrollBodyBy}
           unresolvedIds={unresolvedIds}
           railMode={commentRailMode}
           onRailModeChange={setCommentRailMode}

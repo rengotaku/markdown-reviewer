@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   isPlacedInPane,
   layoutCommentRail,
+  liftIntoPane,
   RAIL_CARD_MAX_HEIGHT,
   RAIL_GAP,
   revealAnchorTop,
@@ -194,5 +195,25 @@ describe("revealAnchorTop (#339)", () => {
     const placed = { id: "c2", top: 416, maxHeight: RAIL_CARD_MAX_HEIGHT };
     const target = revealAnchorTop(placed, 200, 200);
     expect(target + (placed.top - 200)).toBe(RAIL_GAP);
+  });
+});
+
+describe("liftIntoPane (#378)", () => {
+  it("does nothing while the card fits", () => {
+    expect(liftIntoPane(100, 400, PANE_HEIGHT)).toBe(0);
+  });
+
+  it("lifts a card that grew past the pane's bottom until it fits", () => {
+    // The issue's repro: a card near the document's end, its reply form open.
+    expect(liftIntoPane(482, 680, PANE_HEIGHT)).toBe(680 + RAIL_GAP - PANE_HEIGHT);
+  });
+
+  it("never lifts the card's header out of the pane", () => {
+    // A 320px card in a 200px pane: only the header's headroom is spent.
+    expect(liftIntoPane(50, 370, 200)).toBe(50 - RAIL_GAP);
+  });
+
+  it("does not scroll the other way for a card above the gap", () => {
+    expect(liftIntoPane(2, 700, PANE_HEIGHT)).toBe(0);
   });
 });

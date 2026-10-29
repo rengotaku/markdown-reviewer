@@ -133,3 +133,22 @@ export function revealAnchorTop(
   const lowest = Math.max(gap, paneHeight - gap - RAIL_CARD_MAX_HEIGHT);
   return Math.max(gap, Math.min(centred, lowest)) - offset;
 }
+
+/** How far the body must scroll down for a card being written in to stay
+ *  inside the pane (#378). #339 lifts a card only when it is selected; a
+ *  reply or edit form opened afterwards grows the card past the pane's bottom,
+ *  and near the end of the document nothing else brings it back. `cardTop` and
+ *  `cardBottom` are relative to the pane. The card is lifted until its bottom
+ *  sits `gap` above the pane's bottom, but never so far that its top (the
+ *  header) leaves the pane — in a pane shorter than the card the field stays
+ *  in reach by scrolling inside the card instead. 0 when it already fits. */
+export function liftIntoPane(
+  cardTop: number,
+  cardBottom: number,
+  paneHeight: number,
+  gap: number = RAIL_GAP
+): number {
+  const overflow = cardBottom + gap - paneHeight;
+  const headroom = cardTop - gap;
+  return Math.max(0, Math.min(overflow, headroom));
+}
