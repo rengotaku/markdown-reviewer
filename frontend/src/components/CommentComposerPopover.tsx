@@ -171,6 +171,8 @@ export function CommentComposerPopover({
             flexDirection: "column",
           },
           "& .MuiInputBase-inputMultiline": {
+            // #387: the size the posted body is shown at, not body1.
+            typography: "body2",
             flex: "1 1 auto",
             minHeight: 0,
             overflow: "auto !important",
