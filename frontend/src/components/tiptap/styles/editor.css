@@ -368,11 +368,17 @@
 
    `rem`, not `em`: `em` resolves against the *child's* font-size, so the cap
    would silently double on an `h1` child (2em) and the "fixed cap" would not
-   be fixed. 28rem == 448px == the 32em the cell's own 0.875rem font implies. */
+   be fixed. 28rem == 448px == the 32em the cell's own 0.875rem font implies.
+
+   `min-width: 1px`: an empty paragraph's max-content width is 0px, and
+   Chrome draws no caret in a zero-width box — clicking an empty cell left
+   the user with no visible cursor (#385). Any non-empty block is already
+   wider than 1px, so column widths are unchanged. */
 .ProseMirror th > *,
 .ProseMirror td > * {
   width: max-content;
   max-width: 28rem;
+  min-width: 1px;
 }
 
 .ProseMirror th p,
