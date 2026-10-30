@@ -93,11 +93,12 @@ const BODY_PREVIEW_LIMIT = 200;
  *  many rows, so a pasted log can't push their submit buttons out of view. */
 const RAIL_FIELD_MAX_ROWS = 6;
 /** #387: reply/edit fields write at the size the posted body is shown at
- *  (body2), not MUI's body1 default. The scroll margin keeps the field's
- *  last line clear of the pinned action row when it is scrolled into view. */
+ *  (body2), not MUI's body1 default. The scroll margins keep the field's
+ *  first and last lines clear of the card's pinned header and action row
+ *  when it is scrolled into view. */
 const FIELD_SX = {
   "& .MuiInputBase-input": { typography: "body2" },
-  "& textarea": { scrollMarginBottom: "48px" },
+  "& textarea": { scrollMarginTop: "40px", scrollMarginBottom: "48px" },
 } as const;
 /** #387: a field that grows inside a scrolled card or pane doesn't drag the
  *  scroller along, so the line being typed slid out of view. Bring the field
