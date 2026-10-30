@@ -7,6 +7,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type FormEvent,
   type MutableRefObject,
 } from "react";
 import Box from "@mui/material/Box";
@@ -90,7 +91,22 @@ const BODY_PREVIEW_LIMIT = 200;
 
 /** #355: reply/edit fields in the pane scroll inside themselves past this
  *  many rows, so a pasted log can't push their submit buttons out of view. */
-const RAIL_FIELD_MAX_ROWS = 12;
+const RAIL_FIELD_MAX_ROWS = 6;
+/** #387: reply/edit fields write at the size the posted body is shown at
+ *  (body2), not MUI's body1 default. The scroll margins keep the field's
+ *  first and last lines clear of the card's pinned header and action row
+ *  when it is scrolled into view. */
+const FIELD_SX = {
+  "& .MuiInputBase-input": { typography: "body2" },
+  "& textarea": { scrollMarginTop: "40px", scrollMarginBottom: "48px" },
+} as const;
+/** #387: a field that grows inside a scrolled card or pane doesn't drag the
+ *  scroller along, so the line being typed slid out of view. Bring the field
+ *  back after MUI has resized it for the new text. */
+function keepFieldInView(e: FormEvent<HTMLDivElement>) {
+  const el = e.target as HTMLElement;
+  requestAnimationFrame(() => el.scrollIntoView?.({ block: "nearest" }));
+}
 /** #378: frames a card being written in keeps trying to lift into the pane
  *  while the body's bottom spacer catches up with its height. */
 const LIFT_MAX_FRAMES = 10;
@@ -1429,6 +1445,8 @@ function CommentCard({
             multiline
             minRows={2}
             maxRows={RAIL_FIELD_MAX_ROWS}
+            sx={FIELD_SX}
+            onInput={keepFieldInView}
             fullWidth
             size="small"
             autoFocus={focusForm}
@@ -1495,6 +1513,8 @@ function CommentCard({
                 multiline
                 minRows={2}
                 maxRows={RAIL_FIELD_MAX_ROWS}
+                sx={FIELD_SX}
+                onInput={keepFieldInView}
                 fullWidth
                 size="small"
                 autoFocus={focusForm}
@@ -2410,6 +2430,8 @@ export function CommentRow({
             multiline
             minRows={2}
             maxRows={RAIL_FIELD_MAX_ROWS}
+            sx={FIELD_SX}
+            onInput={keepFieldInView}
             fullWidth
             size="small"
             autoFocus
@@ -2465,6 +2487,8 @@ export function CommentRow({
             multiline
             minRows={2}
             maxRows={RAIL_FIELD_MAX_ROWS}
+            sx={FIELD_SX}
+            onInput={keepFieldInView}
             fullWidth
             size="small"
             autoFocus
@@ -2722,6 +2746,8 @@ function ReplyRow({
             multiline
             minRows={2}
             maxRows={RAIL_FIELD_MAX_ROWS}
+            sx={FIELD_SX}
+            onInput={keepFieldInView}
             fullWidth
             size="small"
             autoFocus
@@ -2970,6 +2996,8 @@ export function CommentDetailDialog({
               multiline
               minRows={2}
               maxRows={RAIL_FIELD_MAX_ROWS}
+              sx={FIELD_SX}
+              onInput={keepFieldInView}
               fullWidth
               size="small"
               inputProps={{ "data-testid": "comment-detail-reply-input" }}
