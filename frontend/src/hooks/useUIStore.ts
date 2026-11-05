@@ -28,6 +28,10 @@ interface UIState {
   sidebarPinned: boolean;
   setSidebarPinned: (pinned: boolean) => void;
   toggleSidebarPinned: () => void;
+  /** Whether the right-hand comment pane is open (#389). Persisted; defaults
+   *  to open. */
+  isCommentPaneOpen: boolean;
+  setCommentPaneOpen: (open: boolean) => void;
   /**
    * Folder path currently highlighted in the sidebar. Used so that opening a
    * toast notification for a newly-detected directory can scroll & expand the
@@ -55,6 +59,8 @@ export const useUIStore = create<UIState>()(
       sidebarPinned: true,
       setSidebarPinned: (pinned) => set({ sidebarPinned: pinned }),
       toggleSidebarPinned: () => set((state) => ({ sidebarPinned: !state.sidebarPinned })),
+      isCommentPaneOpen: true,
+      setCommentPaneOpen: (open) => set({ isCommentPaneOpen: open }),
       selectedDirPath: null,
       setSelectedDirPath: (path) => set({ selectedDirPath: path }),
       sidebarViewMode: "tree",
@@ -68,12 +74,12 @@ export const useUIStore = create<UIState>()(
       // Persist view mode, sidebar width and pin state; the transient dir
       // highlight and the hover-overlay's isSidebarOpen flag intentionally
       // reset each session (#219: re-opening the app should never resume
-      // mid-hover). The comment pane no longer has an open/close state to
-      // persist (#304: it is always shown).
+      // mid-hover). The comment pane's open/close state is persisted (#389).
       partialize: (state) => ({
         sidebarViewMode: state.sidebarViewMode,
         sidebarWidth: state.sidebarWidth,
         sidebarPinned: state.sidebarPinned,
+        isCommentPaneOpen: state.isCommentPaneOpen,
       }),
     }
   )

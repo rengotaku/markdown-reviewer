@@ -97,6 +97,7 @@ describe("useUIStore", () => {
       sidebarViewMode: "recent",
       sidebarWidth: 360,
       sidebarPinned: true,
+      isCommentPaneOpen: true,
     });
   });
 });

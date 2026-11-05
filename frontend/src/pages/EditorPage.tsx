@@ -22,6 +22,7 @@ import SaveIcon from "@mui/icons-material/Save";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import RateReviewOutlinedIcon from "@mui/icons-material/RateReviewOutlined";
 import MenuOpenIcon from "@mui/icons-material/MenuOpen";
+import CommentOutlinedIcon from "@mui/icons-material/CommentOutlined";
 import MenuIcon from "@mui/icons-material/Menu";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import CommentIcon from "@mui/icons-material/Comment";
@@ -228,6 +229,8 @@ export function EditorPage() {
   const setSidebarPinned = useUIStore((s) => s.setSidebarPinned);
   const sidebarWidth = useUIStore((s) => s.sidebarWidth);
   const setSidebarWidth = useUIStore((s) => s.setSidebarWidth);
+  const isCommentPaneOpen = useUIStore((s) => s.isCommentPaneOpen);
+  const setCommentPaneOpen = useUIStore((s) => s.setCommentPaneOpen);
 
   // Pinned => always shown (push layout). Unpinned => shown only while the
   // hover-panel guard has the overlay open.
@@ -415,6 +418,10 @@ export function EditorPage() {
     agentBusy,
     agentActivity.status?.summary_id
   );
+  const openCommentCount = useMemo(
+    () => comments.filter((c) => c.status === "open").length,
+    [comments]
+  );
   const commentIdSet = useMemo(() => new Set(comments.map((c) => c.id)), [comments]);
   const newAgentReplyCount = [...agentActivity.newReplies.values()].reduce(
     (a, b) => a + b,
@@ -466,6 +473,18 @@ export function EditorPage() {
   const flashTimerRef = useRef<number | null>(null);
   // Set by the aligned rail while it is shown (#339); see scrollHighlightIntoView.
   const railRevealRef = useRef<RailReveal | null>(null);
+  // #389: set by the pane's own close/open icons so focus follows to the icon
+  // that replaces the one just pressed (which disappears or is hidden).
+  const paneFocusRef = useRef<string | null>(null);
+  useEffect(() => {
+    const target = paneFocusRef.current;
+    if (!target) return;
+    paneFocusRef.current = null;
+    const id = requestAnimationFrame(() =>
+      document.querySelector<HTMLElement>(`[data-testid="${target}"]`)?.focus()
+    );
+    return () => cancelAnimationFrame(id);
+  }, [isCommentPaneOpen]);
 
   // True when some open tab (any root) already has this root/path — used to
   // decide whether an SSE `comments` event should bump the tab-badge sweep
@@ -1677,7 +1696,7 @@ export function EditorPage() {
   // event) rather than firing the DOM read synchronously from each listener.
   useEffect(() => {
     scheduleAnchorRecalcRef.current();
-  }, [comments, editor, centered]);
+  }, [comments, editor, centered, isCommentPaneOpen]);
   useEffect(() => {
     if (!editor || editor.isDestroyed) return;
     const onUpdate = () => scheduleAnchorRecalcRef.current();
@@ -1837,6 +1856,8 @@ export function EditorPage() {
         undefined;
       if (!commentId) return;
       clearTimers();
+      // #389: the pane may be closed; open it so the card exists to select.
+      setCommentPaneOpen(true);
       setRailSelectedId(commentId);
     };
 
@@ -1899,7 +1920,7 @@ export function EditorPage() {
       dom?.removeEventListener("click", onClick);
       dom?.removeEventListener("keydown", onKeyDown);
     };
-  }, [editor]);
+  }, [editor, setCommentPaneOpen]);
 
   // Mark the selected card's highlight so it's obvious which one a paragraph
   // carrying several comments is being read against (#304: this used to
@@ -2286,6 +2307,9 @@ export function EditorPage() {
    * in its own section.
    */
   const handleSelectComment = (id: string) => {
+    // #389: a shared link, the summary or the new-reply jump must show the
+    // card even when the pane was closed.
+    setCommentPaneOpen(true);
     setRailSelectedId(id);
     setPendingReveal({ id, path: activePath, frames: 0 });
   };
@@ -3348,6 +3372,31 @@ export function EditorPage() {
               />
             </Box>
           )}
+          {/* #389: while the comment pane is closed, this reopens it. Icon
+              only; the badge counts open comments like the summary button's. */}
+          {!isCommentPaneOpen && (
+            <Tooltip title="コメントを開く">
+              <IconButton
+                size="small"
+                onClick={() => {
+                  paneFocusRef.current = "comment-pane-close";
+                  setCommentPaneOpen(true);
+                }}
+                aria-label="コメントを開く"
+                data-testid="comment-pane-open"
+                sx={{ ml: 0.75, flexShrink: 0 }}
+              >
+                <CommentOutlinedIcon fontSize="small" />
+                {openCommentCount > 0 && (
+                  <CountBadge
+                    count={openCommentCount}
+                    label="未解決"
+                    testId="comment-pane-open-badge"
+                  />
+                )}
+              </IconButton>
+            </Tooltip>
+          )}
           {/* #119 case 4: shown only after the SSE channel has connected at
               least once and then dropped, so a poll-based fallback is
               actually in play — never flashes on initial mount / in
@@ -3616,50 +3665,59 @@ export function EditorPage() {
         </Box>
       </Box>
 
+      {/* #389: closing hides the pane instead of unmounting it, so the
+          reply / edit drafts it holds (#334) survive a close and reopen. */}
       <Box
-        component="aside"
-        sx={{
-          width: 320,
-          flexShrink: 0,
-          borderLeft: "1px solid",
-          borderColor: "divider",
-          bgcolor: "background.paper",
-          display: "flex",
-          flexDirection: "column",
-        }}
-      >
-        <CommentSidePane
-          railRevealRef={railRevealRef}
-          root={activeFileRoot}
-          filePath={activePath}
-          comments={comments}
-          reviewActive={reviewActive}
-          onRefresh={refreshComments}
-          canAddComment={canAddComment}
-          onAddComment={handleAddCommentClick}
-          onAddGlobal={handleAddGlobalClick}
-          onDelete={handleDeleteComment}
-          onResolveToggle={handleResolveToggle}
-          onReply={handleReplyComment}
-          onEdit={handleEditComment}
-          onEditReply={handleEditReply}
-          onDeleteReply={handleDeleteReply}
-          onJump={handleJumpToComment}
-          onSelect={handleSelectComment}
-          onDeselect={() => setRailSelectedId(null)}
-          selectedId={railSelectedId}
-          anchorTops={anchorTops}
-          docBox={docBox}
-          onRailOverhangChange={setRailOverhang}
-          onRailScrollBodyBy={scrollBodyBy}
-          unresolvedIds={unresolvedIds}
-          railMode={commentRailMode}
-          onRailModeChange={setCommentRailMode}
-          agentReplying={agentBusy && agentActivity.sentByUs}
-          agentNewReplies={agentActivity.newReplies}
-          agentSentIds={agentActivity.sentIds}
-        />
-      </Box>
+          component="aside"
+          hidden={!isCommentPaneOpen}
+          data-testid="comment-pane"
+          sx={{
+            width: 320,
+            flexShrink: 0,
+            borderLeft: "1px solid",
+            borderColor: "divider",
+            bgcolor: "background.paper",
+            display: isCommentPaneOpen ? "flex" : "none",
+            flexDirection: "column",
+          }}
+        >
+          <CommentSidePane
+            railRevealRef={railRevealRef}
+            root={activeFileRoot}
+            filePath={activePath}
+            comments={comments}
+            reviewActive={reviewActive}
+            onRefresh={refreshComments}
+            paneOpen={isCommentPaneOpen}
+            onClose={() => {
+              paneFocusRef.current = "comment-pane-open";
+              setCommentPaneOpen(false);
+            }}
+            canAddComment={canAddComment}
+            onAddComment={handleAddCommentClick}
+            onAddGlobal={handleAddGlobalClick}
+            onDelete={handleDeleteComment}
+            onResolveToggle={handleResolveToggle}
+            onReply={handleReplyComment}
+            onEdit={handleEditComment}
+            onEditReply={handleEditReply}
+            onDeleteReply={handleDeleteReply}
+            onJump={handleJumpToComment}
+            onSelect={handleSelectComment}
+            onDeselect={() => setRailSelectedId(null)}
+            selectedId={railSelectedId}
+            anchorTops={anchorTops}
+            docBox={docBox}
+            onRailOverhangChange={setRailOverhang}
+            onRailScrollBodyBy={scrollBodyBy}
+            unresolvedIds={unresolvedIds}
+            railMode={commentRailMode}
+            onRailModeChange={setCommentRailMode}
+            agentReplying={agentBusy && agentActivity.sentByUs}
+            agentNewReplies={agentActivity.newReplies}
+            agentSentIds={agentActivity.sentIds}
+          />
+        </Box>
 
       {menuOpen && menuAnchor && (
         <Popper
