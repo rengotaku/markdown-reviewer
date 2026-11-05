@@ -133,15 +133,18 @@ describe("EditorPage comment pane open/close (#389)", () => {
     const close = screen.getByTestId("comment-pane-close");
     expect(close).toHaveTextContent("");
     expect(close).toHaveAttribute("aria-label", "コメントを閉じる");
+    // Look the tooltip up by its text: the sidebar file's tooltip from
+    // opening README.md may still be in the DOM, so "the first tooltip" can
+    // be that one.
     await user.hover(close);
-    expect(await screen.findByRole("tooltip")).toHaveTextContent("コメントを閉じる");
+    expect(await screen.findByRole("tooltip", { name: "コメントを閉じる" })).toBeInTheDocument();
     await user.unhover(close);
 
     await user.click(close);
     const open = screen.getByTestId("comment-pane-open");
     expect(open).toHaveAttribute("aria-label", "コメントを開く");
     await user.hover(open);
-    expect(await screen.findByRole("tooltip")).toHaveTextContent("コメントを開く");
+    expect(await screen.findByRole("tooltip", { name: "コメントを開く" })).toBeInTheDocument();
   });
 });
 
