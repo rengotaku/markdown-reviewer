@@ -19,7 +19,7 @@ describe("GlobalCommentBadges", () => {
 
   it("shows only the orphan badge when only orphan comments exist", () => {
     render(<GlobalCommentBadges globalCount={0} orphanCount={3} onOpen={vi.fn()} />);
-    expect(screen.getByTestId("orphan-comment-badge")).toHaveTextContent("位置不明 3");
+    expect(screen.getByTestId("orphan-comment-badge")).toHaveTextContent(/^3$/);
     expect(screen.queryByTestId("global-comment-badge")).toBeNull();
   });
 

@@ -1,5 +1,6 @@
 import Box from "@mui/material/Box";
 import Chip from "@mui/material/Chip";
+import Tooltip from "@mui/material/Tooltip";
 import PublicIcon from "@mui/icons-material/Public";
 import WarningAmberIcon from "@mui/icons-material/WarningAmber";
 
@@ -11,8 +12,8 @@ interface Props {
   onOpen: (kind: GlobalBadgeKind) => void;
 }
 
-/** One-line row of pressable badges at the top of the comment pane's list
- *  (#316). Global-scope and orphan comments have no live anchor to render
+/** Pressable badges in the comment pane's status row (#316, moved up from a
+ *  row of their own in #390). Global-scope and orphan comments have no live anchor to render
  *  beside in the document body, so instead of permanently occupying space
  *  above the editor (the old DocumentTopComments, #309) they collapse to a
  *  count here — click one to see the full threads in GlobalCommentsDialog.
@@ -23,15 +24,7 @@ export function GlobalCommentBadges({ globalCount, orphanCount, onOpen }: Props)
 
   return (
     <Box
-      sx={{
-        display: "flex",
-        gap: 0.75,
-        px: 1.5,
-        py: 0.75,
-        flexShrink: 0,
-        borderBottom: "1px solid",
-        borderColor: "divider",
-      }}
+      sx={{ display: "flex", gap: 0.5, flexShrink: 0 }}
       data-testid="global-comment-badges"
     >
       {globalCount > 0 && (
@@ -47,19 +40,23 @@ export function GlobalCommentBadges({ globalCount, orphanCount, onOpen }: Props)
         />
       )}
       {orphanCount > 0 && (
-        <Chip
-          icon={<WarningAmberIcon fontSize="small" />}
-          // The warning mark comes from the Chip's icon — repeating it in
-          // the label showed two of them side by side (#318).
-          label={`位置不明 ${orphanCount}`}
-          size="small"
-          color="warning"
-          variant="outlined"
-          onClick={() => onOpen("orphan")}
-          data-testid="orphan-comment-badge"
-          aria-label={`位置不明コメント ${orphanCount} 件`}
-          sx={{ cursor: "pointer" }}
-        />
+        <Tooltip title="位置不明">
+          <Chip
+            icon={<WarningAmberIcon fontSize="small" />}
+            // The warning mark comes from the Chip's icon — repeating it in
+            // the label showed two of them side by side (#318).
+            // The label is the number only; "位置不明" is the tooltip and the
+            // accessible name (#390).
+            label={String(orphanCount)}
+            size="small"
+            color="warning"
+            variant="outlined"
+            onClick={() => onOpen("orphan")}
+            data-testid="orphan-comment-badge"
+            aria-label={`位置不明コメント ${orphanCount} 件`}
+            sx={{ cursor: "pointer" }}
+          />
+        </Tooltip>
       )}
     </Box>
   );

@@ -23,8 +23,8 @@ import Dialog from "@mui/material/Dialog";
 import DialogTitle from "@mui/material/DialogTitle";
 import DialogContent from "@mui/material/DialogContent";
 import DialogActions from "@mui/material/DialogActions";
-import ToggleButton from "@mui/material/ToggleButton";
-import ToggleButtonGroup from "@mui/material/ToggleButtonGroup";
+import Select from "@mui/material/Select";
+import MenuItem from "@mui/material/MenuItem";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import AddCommentIcon from "@mui/icons-material/AddComment";
@@ -38,7 +38,6 @@ import LinkIcon from "@mui/icons-material/Link";
 import ViewAgendaIcon from "@mui/icons-material/ViewAgenda";
 import MenuOpenIcon from "@mui/icons-material/MenuOpen";
 import ViewListIcon from "@mui/icons-material/ViewList";
-import ChatBubbleOutlineIcon from "@mui/icons-material/ChatBubbleOutline";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import type { SxProps, Theme } from "@mui/material/styles";
@@ -64,7 +63,6 @@ import {
   revealAnchorTop,
   type RailItem,
 } from "@/utils/commentRailLayout";
-import { groupIconRailEntries, type IconRailEntry } from "@/utils/commentIconGroups";
 import { GlobalCommentBadges, type GlobalBadgeKind } from "./GlobalCommentBadges";
 import { GlobalCommentsDialog } from "./GlobalCommentsDialog";
 import { AgentActivityContext, type AgentCardActivity } from "./agentActivityContext";
@@ -74,13 +72,6 @@ import { pulseSx } from "./pulseSx";
  *  (first paint, before its ResizeObserver fires) — enough to avoid every
  *  card starting stacked at the same spot before layout settles. */
 const RAIL_DEFAULT_CARD_HEIGHT = 96;
-
-/** Height of one icon in the rail's icon mode (#332). Fixed, so icons need
- *  no measurement: 18px icon + padding + border. */
-const RAIL_ICON_HEIGHT = 28;
-
-/** Characters of each comment's body shown in an icon's hover preview. */
-const ICON_PREVIEW_CHARS = 60;
 
 /** AI-authored comments/replies are read-only to the human reviewer: they can
  *  reply, resolve, and jump to them, but not edit the body or delete them. */
@@ -475,8 +466,7 @@ interface Props {
    *  falling out of the pane entirely. */
   unresolvedIds?: ReadonlySet<string>;
   /** "aligned" (default): cards level with their paragraphs. "list": every
-   *  anchored card in document order in one scrollable column (#333).
-   *  "icons": a count icon per line, only the selected card opened (#332). */
+   *  anchored card in document order in one scrollable column (#333). */
   railMode?: CommentRailMode;
   /** Renders the mode switch when given; without it the pane stays aligned. */
   onRailModeChange?: (mode: CommentRailMode) => void;
@@ -516,8 +506,7 @@ const EMPTY_IDS: ReadonlySet<string> = new Set();
 
 /** A card's half-written reply/edit and whether each form is open (#334).
  *  Held by CommentSidePane per comment, not in CommentCard's own state: a card
- *  unmounts whenever icon mode folds it back into an icon, the status filter
- *  hides it, or the rail mode is switched — and its useState went with it,
+ *  unmounts whenever the status filter hides it, or the rail mode is switched — and its useState went with it,
  *  dropping what was typed without a word. */
 interface CardDraft {
   replyOpen: boolean;
@@ -630,6 +619,11 @@ export function CommentSidePane({
     [comments]
   );
   const resolvedCount = comments.length - openCount;
+  // #390: one button toggles; it shows (and is named after) the mode it
+  // switches to.
+  const nextRailMode: CommentRailMode = railMode === "list" ? "aligned" : "list";
+  const nextRailLabel =
+    nextRailMode === "list" ? "一覧（文書順に全件）に切り替え" : "段落の横に並べる";
   const visible = useMemo(
     () => (filter === "all" ? comments : comments.filter((c) => c.status === filter)),
     [comments, filter]
@@ -768,7 +762,7 @@ export function CommentSidePane({
         }}
       >
         <Typography variant="subtitle2" sx={{ flexGrow: 1 }}>
-          Comments ({openCount}/{comments.length})
+          Comments
         </Typography>
         <Tooltip title="コメントを再取得">
           <IconButton
@@ -784,48 +778,22 @@ export function CommentSidePane({
             already measured full (#196: filter ~225px + two add buttons in a
             295px row). */}
         {onRailModeChange && (
-          <ToggleButtonGroup
-            value={railMode}
-            exclusive
-            size="small"
-            onChange={(_, v) => {
-              if (v !== null) onRailModeChange(v as CommentRailMode);
-            }}
-            aria-label="コメントカードの並べ方"
-            data-testid="comment-rail-mode"
-            sx={{ flexShrink: 0 }}
-          >
-            <ToggleButton
-              value="aligned"
-              aria-label="段落の横に並べる"
-              data-testid="comment-rail-mode-aligned"
-              sx={{ p: 0.5 }}
+          <Tooltip title={nextRailLabel}>
+            <IconButton
+              size="small"
+              onClick={() => onRailModeChange(nextRailMode)}
+              aria-label={nextRailLabel}
+              data-testid="comment-rail-mode-toggle"
+              data-mode={railMode === "list" ? "list" : "aligned"}
+              sx={{ flexShrink: 0 }}
             >
-              <Tooltip title="段落の横に並べる">
-                <ViewAgendaIcon fontSize="small" />
-              </Tooltip>
-            </ToggleButton>
-            <ToggleButton
-              value="icons"
-              aria-label="アイコンだけ"
-              data-testid="comment-rail-mode-icons"
-              sx={{ p: 0.5 }}
-            >
-              <Tooltip title="アイコンだけ（クリックで開く）">
-                <ChatBubbleOutlineIcon fontSize="small" />
-              </Tooltip>
-            </ToggleButton>
-            <ToggleButton
-              value="list"
-              aria-label="一覧"
-              data-testid="comment-rail-mode-list"
-              sx={{ p: 0.5 }}
-            >
-              <Tooltip title="一覧（文書順に全件）">
+              {nextRailMode === "list" ? (
                 <ViewListIcon fontSize="small" />
-              </Tooltip>
-            </ToggleButton>
-          </ToggleButtonGroup>
+              ) : (
+                <ViewAgendaIcon fontSize="small" />
+              )}
+            </IconButton>
+          </Tooltip>
         )}
         {onClose && (
           <Tooltip title="コメントを閉じる">
@@ -842,12 +810,10 @@ export function CommentSidePane({
         )}
       </Box>
 
-      {/* Filter + add actions share one row (#196). They used to occupy two
-          BAR_HEIGHT rows, which cost 37px of comment list for controls that fit
-          side by side once the add buttons drop their labels. The three counts
-          stay visible at once — "how many are still open" is the number this
-          pane exists to show, so the filter is never collapsed into a select.
-          Measured: pane inner width 295px = filter ~225px + two icon buttons. */}
+      {/* Status select, the 全体 / 位置不明 badges and the add actions share one
+          row (#196, #390). The status filter used to be three buttons that
+          filled the row; as a select it leaves room for the badges that had
+          their own row (#316). */}
       <Box
         sx={{
           px: 1.5,
@@ -865,52 +831,40 @@ export function CommentSidePane({
         }}
         data-testid="comment-add-toolbar"
       >
-        <ToggleButtonGroup
+        <Select
           value={filter}
-          exclusive
           size="small"
-          onChange={(_, v) => {
-            if (v !== null) setFilter(v as StatusFilter);
-          }}
-          aria-label="コメントの表示フィルタ"
+          onChange={(e) => setFilter(e.target.value as StatusFilter)}
+          inputProps={{ "aria-label": "コメントの表示フィルタ" }}
           data-testid="comment-status-filter"
           sx={{
             flex: 1,
             minWidth: 0,
-            // Let the three buttons share the space evenly and shrink together
-            // rather than pushing the icon buttons off the row when the counts
-            // grow to two or three digits.
-            // The counts are unbounded, so the label must degrade instead of
-            // spilling into the neighbouring button. Parentheses are dropped
-            // (they cost ~10px and carry no meaning here), and anything that
-            // still doesn't fit is ellipsised rather than overlapping.
-            // Measured at 12px: content box 67px, "すべて 100" ≈ 57px.
-            "& .MuiToggleButton-root": {
-              flex: 1,
-              minWidth: 0,
-              textTransform: "none",
-              whiteSpace: "nowrap",
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              display: "block",
-              textAlign: "center",
-              py: 0.5,
-              px: 0.5,
-              fontSize: "0.75rem",
-              lineHeight: 1.2,
-            },
+            fontSize: "0.75rem",
+            "& .MuiSelect-select": { py: 0.5, pl: 1, pr: "24px !important" },
+            "& .MuiSelect-icon": { right: 2 },
           }}
         >
-          <ToggleButton value="all" data-testid="comment-filter-all">
+          <MenuItem value="all" data-testid="comment-filter-all">
             すべて {comments.length}
-          </ToggleButton>
-          <ToggleButton value="open" data-testid="comment-filter-open">
+          </MenuItem>
+          <MenuItem value="open" data-testid="comment-filter-open">
             未解決 {openCount}
-          </ToggleButton>
-          <ToggleButton value="resolved" data-testid="comment-filter-resolved">
+          </MenuItem>
+          <MenuItem value="resolved" data-testid="comment-filter-resolved">
             解決済 {resolvedCount}
-          </ToggleButton>
-        </ToggleButtonGroup>
+          </MenuItem>
+        </Select>
+        {reviewActive && (
+          <GlobalCommentBadges
+            globalCount={globalComments.length}
+            orphanCount={orphanComments.length}
+            onOpen={(kind) => {
+              setGlobalDialogTab(kind);
+              setGlobalDialogOpen(true);
+            }}
+          />
+        )}
         <Tooltip title="選択範囲にコメントを追加（未取り込みなら自動で取り込む）">
           <span>
             <IconButton
@@ -950,16 +904,6 @@ export function CommentSidePane({
           flexDirection: "column",
         }}
       >
-        {reviewActive && (
-          <GlobalCommentBadges
-            globalCount={globalComments.length}
-            orphanCount={orphanComments.length}
-            onOpen={(kind) => {
-              setGlobalDialogTab(kind);
-              setGlobalDialogOpen(true);
-            }}
-          />
-        )}
         {!reviewActive ? (
           <Box sx={{ p: 2 }}>
             <Typography variant="body2" color="text.secondary">
@@ -1007,7 +951,6 @@ export function CommentSidePane({
         ) : (
           <AlignedCommentRail
             comments={anchored}
-            iconMode={railMode === "icons"}
             anchorTops={anchorTops}
             docBox={docBox}
             onOverhangChange={onRailOverhangChange}
@@ -1719,8 +1662,6 @@ interface AlignedRailProps {
   onEditReply: (id: string, index: number, body: string) => void;
   onDeleteReply: (id: string, index: number) => void;
   onOpenDetail: (id: string) => void;
-  /** #332: show a count icon per line instead of each non-selected card. */
-  iconMode?: boolean;
   revealRef?: MutableRefObject<RailReveal | null>;
   /** See Props.paneOpen (#389). */
   visible?: boolean;
@@ -1749,7 +1690,6 @@ function AlignedCommentRail({
   onEditReply,
   onDeleteReply,
   onOpenDetail,
-  iconMode = false,
   revealRef,
   visible = true,
   onScrollBodyBy,
@@ -1887,61 +1827,10 @@ function AlignedCommentRail({
     [scheduleLift]
   );
 
-  // #332: a newly selected comment's cached height may be stale — measured
-  // when it was last a card (say, with its reply form open), before icon mode
-  // turned it back into an icon. Laid out by that height it would push the
-  // entries below it out of place until its first measurement lands. Forget
-  // it on selection so the card is placed at the default height and measured
-  // afresh. Done during render (React's derived-state pattern) so the stale
-  // value never reaches layout.
-  const [prevSelectedId, setPrevSelectedId] = useState(selectedId);
-  if (selectedId !== prevSelectedId) {
-    setPrevSelectedId(selectedId);
-    if (iconMode && selectedId && Object.hasOwn(cardHeights, selectedId)) {
-      setCardHeights((prev) => {
-        const next = { ...prev };
-        delete next[selectedId];
-        return next;
-      });
-    }
-  }
-
-  // #332: an icon opened from the keyboard is replaced by its card, taking
-  // the focused element with it. Hand focus to the card once it mounts.
-  const [focusCardId, setFocusCardId] = useState<string | null>(null);
-  const selectFromIcon = useCallback(
-    (id: string) => {
-      setFocusCardId(id);
-      onSelect(id);
-    },
-    [onSelect]
-  );
-  const clearFocusCard = useCallback(() => setFocusCardId(null), []);
-
-  // One rail entry per card, or (#332 icon mode) per run of same-line
-  // comments behind one icon. Everything below lays out and counts entries,
-  // then maps back to comments through `ids`.
-  const entries: IconRailEntry[] = useMemo(
-    () =>
-      iconMode
-        ? groupIconRailEntries(
-            comments.map((c) => c.id),
-            anchorTops,
-            selectedId
-          )
-        : comments.map((c) => ({
-            kind: "card" as const,
-            key: c.id,
-            ids: [c.id] as [string],
-          })),
-    [iconMode, comments, anchorTops, selectedId]
-  );
-  const entryByKey = useMemo(() => new Map(entries.map((e) => [e.key, e])), [entries]);
-
   const items: RailItem[] = useMemo(
     () =>
-      entries.map((e, i) => ({
-        id: e.key,
+      comments.map((c, i) => ({
+        id: c.id,
         // `comments` here is already the anchored subset (no global/orphan).
         // #326: a resolved comment paints no persistent decoration by design
         // (CommentHighlight's buildDeco skips `status === "resolved"`), and
@@ -1963,14 +1852,11 @@ function AlignedCommentRail({
         // layoutCommentRail, which leaves the card unplaced rather than
         // misplacing it; it reappears once the caller's measurement produces
         // a real entry.
-        anchorTop: Object.hasOwn(anchorTops, e.ids[0]) ? anchorTops[e.ids[0]] : null,
-        height:
-          e.kind === "icon"
-            ? RAIL_ICON_HEIGHT
-            : (cardHeights[e.key] ?? RAIL_DEFAULT_CARD_HEIGHT),
+        anchorTop: Object.hasOwn(anchorTops, c.id) ? anchorTops[c.id] : null,
+        height: cardHeights[c.id] ?? RAIL_DEFAULT_CARD_HEIGHT,
         order: i,
       })),
-    [entries, anchorTops, cardHeights]
+    [comments, anchorTops, cardHeights]
   );
 
   // #338: cards move with the body, so nothing pins the first one to the
@@ -2003,15 +1889,13 @@ function AlignedCommentRail({
   }, [overhang, onOverhangChange]);
 
   // #339: hand the caller the current layout's answer to "where must this
-  // card's highlight go for the card to stay in view". A comment folded into
-  // an icon (#332) is looked up by its entry, which shares its line.
+  // card's highlight go for the card to stay in view".
   useEffect(() => {
     if (!revealRef) return;
     revealRef.current = (id) => {
       if (!paneBox.measured || !visible || paneStaleRef.current) return undefined;
       if (paneBox.height <= 0) return null;
-      const key = entries.find((e) => e.ids.includes(id))?.key;
-      const placed = layout.placed.find((p) => p.id === key);
+      const placed = layout.placed.find((p) => p.id === id);
       // Not measured or placed yet: the next layout pass may still bring it.
       if (!placed || !Object.hasOwn(anchorTops, id)) return undefined;
       const anchorRel = anchorTops[id] - paneBox.top;
@@ -2020,7 +1904,7 @@ function AlignedCommentRail({
     return () => {
       revealRef.current = null;
     };
-  }, [revealRef, entries, layout, anchorTops, paneBox, visible]);
+  }, [revealRef, layout, anchorTops, paneBox, visible]);
   useEffect(() => () => onOverhangChange?.(0), [onOverhangChange]);
 
   const byId = useMemo(() => new Map(comments.map((c) => [c.id, c])), [comments]);
@@ -2045,23 +1929,9 @@ function AlignedCommentRail({
       data-testid="comment-rail-aligned"
     >
       {layout.placed.map((placed) => {
-        const entry = entryByKey.get(placed.id);
         // Until the pane has measured its own box (height 0) there is no
         // visible range to test against; the pane clips anything outside it.
         const hidden = paneBox.height > 0 && !isPlacedInPane(placed, paneBox.height);
-        if (entry?.kind === "icon") {
-          const members = entry.ids.flatMap((id) => byId.get(id) ?? []);
-          if (members.length === 0) return null;
-          return (
-            <AlignedIcon
-              key={entry.key}
-              comments={members}
-              top={placed.top}
-              hidden={hidden}
-              onSelect={selectFromIcon}
-            />
-          );
-        }
         const c = byId.get(placed.id);
         if (!c) return null;
         return (
@@ -2084,8 +1954,6 @@ function AlignedCommentRail({
             onDeleteReply={onDeleteReply}
             onOpenDetail={onOpenDetail}
             onHeightChange={handleHeightChange}
-            focusOnMount={c.id === focusCardId}
-            onFocused={clearFocusCard}
           />
         );
       })}
@@ -2100,9 +1968,6 @@ interface AlignedCardProps extends CardProps {
    *  but invisible and out of the tab order. */
   hidden?: boolean;
   onHeightChange: (id: string, height: number) => void;
-  /** Take focus once mounted (#332: opened from an icon). */
-  focusOnMount?: boolean;
-  onFocused?: () => void;
 }
 
 /** One card, absolutely positioned at the top the layout gave it. Its own
@@ -2115,19 +1980,9 @@ function AlignedCard({
   maxHeight,
   hidden = false,
   onHeightChange,
-  focusOnMount = false,
-  onFocused,
   ...cardProps
 }: AlignedCardProps) {
   const contentRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!focusOnMount) return;
-    contentRef.current
-      ?.querySelector<HTMLElement>('[data-testid="comment-item"]')
-      ?.focus();
-    onFocused?.();
-  }, [focusOnMount, onFocused]);
 
   useEffect(() => {
     const el = contentRef.current;
@@ -2170,82 +2025,6 @@ function AlignedCard({
         <CommentCard comment={comment} {...cardProps} />
       </Box>
     </Box>
-  );
-}
-
-/** First characters of a comment body for the icon's hover preview — the
- *  raw source, whitespace collapsed (Markdown syntax left as typed). */
-function previewLine(body: string): string {
-  const flat = body.replace(/\s+/g, " ").trim();
-  return flat.length > ICON_PREVIEW_CHARS
-    ? `${flat.slice(0, ICON_PREVIEW_CHARS)}…`
-    : flat;
-}
-
-/** #332: one small icon standing for the comments anchored on one line,
- *  absolutely positioned like a card. Hover previews each body's opening;
- *  clicking selects the first, which then opens as a full card in its place
- *  (the rest stay behind a smaller icon). */
-function AlignedIcon({
-  comments,
-  top,
-  hidden = false,
-  onSelect,
-}: {
-  comments: ReadonlyArray<CommentJSON>;
-  top: number;
-  /** Outside the pane's visible range (#338). */
-  hidden?: boolean;
-  onSelect: (id: string) => void;
-}) {
-  const first = comments[0];
-  return (
-    <Tooltip
-      placement="left"
-      title={
-        <Box component="ul" sx={{ m: 0, pl: 2 }}>
-          {comments.map((c) => (
-            <li key={c.id}>
-              {c.id}: {previewLine(c.body)}
-            </li>
-          ))}
-        </Box>
-      }
-    >
-      <Box
-        component="button"
-        type="button"
-        data-testid="comment-rail-icon"
-        data-comment-ids={comments.map((c) => c.id).join(" ")}
-        aria-label={`コメント ${comments.length} 件を開く`}
-        onClick={() => onSelect(first.id)}
-        sx={{
-          position: "absolute",
-          left: 8,
-          top,
-          visibility: hidden ? "hidden" : undefined,
-          height: RAIL_ICON_HEIGHT,
-          boxSizing: "border-box",
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 0.5,
-          px: 1,
-          border: "1px solid",
-          borderColor: "divider",
-          borderRadius: 1,
-          bgcolor: "background.paper",
-          color: "text.secondary",
-          font: "inherit",
-          fontSize: "0.75rem",
-          cursor: "pointer",
-          opacity: comments.every((c) => c.status === "resolved") ? 0.6 : 1,
-          "&:hover": { bgcolor: "action.hover" },
-        }}
-      >
-        <ChatBubbleOutlineIcon sx={{ fontSize: 16 }} />
-        {comments.length}
-      </Box>
-    </Tooltip>
   );
 }
 

@@ -3,6 +3,7 @@ import Box from "@mui/material/Box";
 import ButtonBase from "@mui/material/ButtonBase";
 import Chip from "@mui/material/Chip";
 import Popover from "@mui/material/Popover";
+import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import NotesIcon from "@mui/icons-material/Notes";
 import type { SummaryItem } from "@/api";
@@ -68,10 +69,10 @@ export function AgentSummaryButton({
     if (detail) backRef.current?.focus();
   }, [detail]);
 
-  if (summaries.length === 0) return null;
-  const open = anchor !== null;
-  const unread = open ? 0 : unreadSummaryCount(summaries, lastSeenId);
-  const sessionName = summaries[0].session_name;
+  const empty = summaries.length === 0;
+  const open = anchor !== null && !empty;
+  const unread = open || empty ? 0 : unreadSummaryCount(summaries, lastSeenId);
+  const sessionName = summaries[0]?.session_name;
 
   const close = () => {
     setAnchor(null);
@@ -84,35 +85,35 @@ export function AgentSummaryButton({
 
   return (
     <>
-      <ButtonBase
-        data-testid="agent-summary-button"
-        aria-haspopup="dialog"
-        aria-expanded={open}
-        aria-label={unread > 0 ? `作業の要約（未読 ${unread} 件）` : "作業の要約"}
-        onClick={(e) => {
-          setSeenAtOpen(lastSeenId);
-          setAnchor(e.currentTarget);
-          onOpen();
-        }}
-        sx={{
-          ml: 0.75,
-          flexShrink: 0,
-          gap: 0.5,
-          px: 1,
-          py: 0.25,
-          borderRadius: 0.5,
-          border: 1,
-          typography: "caption",
-          borderColor: unread > 0 ? "primary.main" : "divider",
-          color: unread > 0 ? "primary.main" : "text.secondary",
-          bgcolor: open ? "action.selected" : "transparent",
-          "&:focus-visible": { outline: "2px solid", outlineColor: "primary.main" },
-        }}
-      >
-        <NotesIcon sx={{ fontSize: 15 }} />
-        要約
-        {unread > 0 && <CountBadge count={unread} testId="agent-summary-badge" />}
-      </ButtonBase>
+      <Tooltip title={empty ? "作業の要約（まだありません）" : "作業の要約"}>
+        <Box component="span" sx={{ ml: 0.75, display: "inline-flex", flexShrink: 0 }}>
+          <ButtonBase
+            data-testid="agent-summary-button"
+            aria-haspopup="dialog"
+            aria-expanded={open}
+            aria-label={unread > 0 ? `作業の要約（未読 ${unread} 件）` : "作業の要約"}
+            disabled={empty}
+            onClick={(e) => {
+              setSeenAtOpen(lastSeenId);
+              setAnchor(e.currentTarget);
+              onOpen();
+            }}
+            sx={{
+              p: 0.5,
+              borderRadius: 0.5,
+              border: 1,
+              borderColor: unread > 0 ? "primary.main" : "divider",
+              color: unread > 0 ? "primary.main" : "text.secondary",
+              bgcolor: open ? "action.selected" : "transparent",
+              "&.Mui-disabled": { opacity: 0.4 },
+              "&:focus-visible": { outline: "2px solid", outlineColor: "primary.main" },
+            }}
+          >
+            <NotesIcon sx={{ fontSize: 18 }} />
+            {unread > 0 && <CountBadge count={unread} testId="agent-summary-badge" />}
+          </ButtonBase>
+        </Box>
+      </Tooltip>
       <Popover
         open={open}
         anchorEl={anchor}

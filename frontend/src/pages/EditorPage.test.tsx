@@ -60,6 +60,21 @@ function renderPage(initialPath = `/${DEFAULT_ROOT}`) {
   );
 }
 
+/** #390: the status filter is a select. */
+function statusCombobox(): HTMLElement {
+  return within(screen.getByTestId("comment-status-filter")).getByRole("combobox");
+}
+
+/** Switches the select to すべて (once) and returns it, so its text reads
+ *  "すべて N". Throws until the pane has rendered, so it works inside waitFor. */
+function allStatusOption(): HTMLElement {
+  if (!/すべて/.test(statusCombobox().textContent ?? "")) {
+    fireEvent.mouseDown(statusCombobox());
+    fireEvent.click(screen.getByTestId("comment-filter-all"));
+  }
+  return statusCombobox();
+}
+
 describe("EditorPage comment pane open/close (#389)", () => {
   afterEach(() => {
     localStorage.clear();
@@ -550,7 +565,7 @@ describe("EditorPage", () => {
     renderPage();
     await user.click(await screen.findByTestId("sidebar-file-README.md"));
     await waitFor(() =>
-      expect(screen.getByTestId("comment-filter-all")).toHaveTextContent("すべて 2")
+      expect(allStatusOption()).toHaveTextContent("すべて 2")
     );
     // Nothing is known about what the AI has read before the first send.
     expect(screen.queryByTestId("editor-unsent-count")).toBeNull();
@@ -617,14 +632,14 @@ describe("EditorPage", () => {
     renderPage();
     await user.click(await screen.findByTestId("sidebar-file-README.md"));
     await waitFor(() =>
-      expect(screen.getByTestId("comment-filter-all")).toHaveTextContent("すべて 2")
+      expect(allStatusOption()).toHaveTextContent("すべて 2")
     );
 
     await user.click(screen.getByTestId("editor-copy-review-command"));
     comments = [...comments, open("c3")];
     await user.click(screen.getByTestId("comment-pane-refresh"));
     await waitFor(() =>
-      expect(screen.getByTestId("comment-filter-all")).toHaveTextContent("すべて 3")
+      expect(allStatusOption()).toHaveTextContent("すべて 3")
     );
     releaseSend();
 
@@ -1887,7 +1902,7 @@ describe("EditorPage comment highlight & rail selection (#304)", () => {
     // measured. Waiting on `comment-context-*` here, before the editor is
     // even installed, would never resolve.
     await waitFor(() =>
-      expect(screen.getByTestId("comment-filter-all")).toHaveTextContent(`すべて 1`)
+      expect(allStatusOption()).toHaveTextContent(`すべて 1`)
     );
     const ed = installEditor("<h2>実績</h2><p>SLA遵守率 98%</p>");
     // Wait for the page to push the comment into the editor as a decoration.
@@ -2183,7 +2198,7 @@ describe("EditorPage comment highlight & rail selection (#304)", () => {
     // waiting for `comment-context-*` here (no editor installed yet) would
     // never resolve.
     await waitFor(() =>
-      expect(screen.getByTestId("comment-filter-all")).toHaveTextContent("すべて 1")
+      expect(allStatusOption()).toHaveTextContent("すべて 1")
     );
     // Content with none of the anchor's text at all — buildDeco resolves no
     // range for it, so no `.comment-mark` decoration is created. Distinct
@@ -2290,9 +2305,8 @@ describe("EditorPage jump to comment (#167)", () => {
     await user.click(screen.getByTestId("sidebar-file-README.md"));
     // The list shows 未解決 by default (#253) and several of these fixtures are
     // resolved, so widen the filter before waiting for their rows.
-    await waitFor(() =>
-      expect(screen.getByTestId("comment-filter-all")).toBeInTheDocument()
-    );
+    await waitFor(() => expect(statusCombobox()).toBeInTheDocument());
+    await user.click(statusCombobox());
     await user.click(screen.getByTestId("comment-filter-all"));
     // Comments are only fetched once the file is under review — wait for the
     // fetch to actually land before touching the editor. This used to wait
@@ -2305,7 +2319,7 @@ describe("EditorPage jump to comment (#167)", () => {
     // need a specific row to exist wait for it themselves after installing
     // their editor.
     await waitFor(() =>
-      expect(screen.getByTestId("comment-filter-all")).toHaveTextContent(
+      expect(allStatusOption()).toHaveTextContent(
         `すべて ${comments.length}`
       )
     );
@@ -2548,7 +2562,7 @@ describe("EditorPage jump to comment (#167)", () => {
       );
 
       const badge = await screen.findByTestId("orphan-comment-badge");
-      expect(badge).toHaveTextContent("位置不明 1");
+      expect(badge).toHaveTextContent(/^1$/);
     });
 
     it("withholds the verdict while the editor still holds another file's document", async () => {

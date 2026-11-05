@@ -7,11 +7,10 @@ import { persist } from "zustand/middleware";
  * in document order in one scrollable column (#333 — brought back after #305
  * removed it, against #304's own "don't remove the mode switch"). A dense
  * document overflows the aligned rail, and the list is where all of it can
- * be read in one pass. "icons" keeps the aligned placement but shows a small
- * per-line count icon instead of each card, opening only the selected one
- * (#332).
+ * be read in one pass. (#332's "icons" mode was dropped in #390; a stored
+ * "icons" is read as "aligned".)
  */
-export type CommentRailMode = "aligned" | "list" | "icons";
+export type CommentRailMode = "aligned" | "list";
 
 interface EditorPrefsState {
   centered: boolean;
@@ -37,6 +36,16 @@ export const useEditorPrefs = create<EditorPrefsState>()(
       commentRailMode: "aligned",
       setCommentRailMode: (mode) => set({ commentRailMode: mode }),
     }),
-    { name: "markdown-reviewer-prefs" }
+    {
+      name: "markdown-reviewer-prefs",
+      merge: (persisted, current) => {
+        const stored = (persisted ?? {}) as Partial<EditorPrefsState>;
+        return {
+          ...current,
+          ...stored,
+          commentRailMode: stored.commentRailMode === "list" ? "list" : "aligned",
+        };
+      },
+    }
   )
 );
