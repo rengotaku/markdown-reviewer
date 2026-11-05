@@ -22,6 +22,9 @@ interface Props {
    *  badge stands apart from the button's own fill either way. */
   variant?: "filled" | "outlined";
   testId?: string;
+  /** "bottom" for a button that already carries a badge at the top-right
+   *  (the send button's green reply count). */
+  placement?: "top" | "bottom";
 }
 
 /** #379: a count laid over its button's top-right corner. Counts used to sit
@@ -29,7 +32,13 @@ interface Props {
  *  — a send clearing "未送信 N", a summary arriving — and shifted everything
  *  beside it. Overlaid, the button keeps its width. The button must be the
  *  positioned ancestor (MUI's ButtonBase is `position: relative`). */
-export function CountBadge({ count, label, variant = "filled", testId }: Props) {
+export function CountBadge({
+  count,
+  label,
+  variant = "filled",
+  testId,
+  placement = "top",
+}: Props) {
   return (
     <Box
       component="span"
@@ -39,7 +48,7 @@ export function CountBadge({ count, label, variant = "filled", testId }: Props) 
           position: "absolute",
           // The header buttons sit 5px below the window's top edge; -4 keeps
           // the badge whole there.
-          top: -4,
+          ...(placement === "top" ? { top: -4 } : { bottom: -4 }),
           right: -6,
           minWidth: 16,
           height: 16,

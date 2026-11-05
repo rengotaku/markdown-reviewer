@@ -33,8 +33,8 @@ function setup(over: Partial<React.ComponentProps<typeof AgentSummaryButton>> = 
 }
 
 describe("AgentSummaryButton", () => {
-  it("renders nothing without summaries", () => {
-    const { container } = render(
+  it("is a text-less, disabled button without summaries, and shows no badge (#390)", () => {
+    render(
       <AgentSummaryButton
         summaries={[]}
         lastSeenId={null}
@@ -44,7 +44,17 @@ describe("AgentSummaryButton", () => {
         onShowComment={vi.fn()}
       />
     );
-    expect(container).toBeEmptyDOMElement();
+    const button = screen.getByTestId("agent-summary-button");
+    expect(button).toBeDisabled();
+    expect(button).toHaveTextContent("");
+    expect(screen.queryByTestId("agent-summary-badge")).toBeNull();
+  });
+
+  it("has an icon only, no 要約 text, once summaries exist (#390)", () => {
+    setup();
+    const button = screen.getByTestId("agent-summary-button");
+    expect(button).toBeEnabled();
+    expect(button).not.toHaveTextContent("要約");
   });
 
   it("shows the unread count as a badge", () => {

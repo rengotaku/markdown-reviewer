@@ -20,7 +20,6 @@ import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import SaveIcon from "@mui/icons-material/Save";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
-import RateReviewOutlinedIcon from "@mui/icons-material/RateReviewOutlined";
 import MenuOpenIcon from "@mui/icons-material/MenuOpen";
 import CommentOutlinedIcon from "@mui/icons-material/CommentOutlined";
 import MenuIcon from "@mui/icons-material/Menu";
@@ -53,7 +52,7 @@ import { useChangedPaths } from "@/hooks/useChangedPaths";
 import { useServerEvents } from "@/hooks/useServerEvents";
 import { useAgentStatus } from "@/hooks/useAgentStatus";
 import { openCommentIds, unsentCount } from "@/utils/agentActivity";
-import { AgentStatusIndicator } from "@/components/AgentStatusIndicator";
+import { AiSendButton } from "@/components/AiSendButton";
 import { AgentSummaryButton } from "@/components/AgentSummaryButton";
 import { useSummaries } from "@/hooks/useSummaries";
 import { useServerConnection } from "@/hooks/useServerConnection";
@@ -3285,79 +3284,36 @@ export function EditorPage() {
               <ListItemText>行番号</ListItemText>
             </MenuItem>
           </Menu>
-          {/* #366: the send button and what became of the send sit together,
-              so the result shows where the click was made. */}
-          <Box sx={{ display: "flex", alignItems: "center", flexShrink: 0 }}>
-            <Tooltip title="AI にコメント確認コマンドを送信（送信できない場合はコピー）">
-              <Box component="span" sx={{ display: "inline-flex", flexShrink: 0 }}>
-                <Button
-                  size="small"
-                  variant="contained"
-                  disableElevation
-                  startIcon={<RateReviewOutlinedIcon fontSize="small" />}
-                  onClick={handleCopyReviewCommand}
-                  disabled={!activeFile}
-                  aria-label="copy review command"
-                  data-testid="editor-copy-review-command"
-                  sx={{ py: 0.25, whiteSpace: "nowrap" }}
-                >
-                  <Box
-                    component="span"
-                    sx={{ "@container (max-width: 600px)": { display: "none" } }}
-                  >
-                    AI へ送信
-                  </Box>
-                  {unsentToAi !== null && unsentToAi > 0 && (
-                    <CountBadge
-                      count={unsentToAi}
-                      label="未送信"
-                      variant="outlined"
-                      testId="editor-unsent-count"
-                    />
-                  )}
-                </Button>
-              </Box>
-            </Tooltip>
-          </Box>
-          {/* Only the status shrinks: a narrow header clips it instead of
-              running into the comment pane, and the send button stays whole. */}
-          <Box
-            sx={{
-              display: "flex",
-              alignItems: "center",
-              flexShrink: 1,
-              minWidth: 0,
-              overflow: "hidden",
+          {/* #366/#390: the send button carries the AI's state and the new-reply
+              badge itself, so the result shows where the click was made. */}
+          <AiSendButton
+            status={activeFile ? agentActivity.status : null}
+            disabled={!activeFile}
+            busySince={agentActivity.busySince}
+            sentCount={
+              agentActivity.sentByUs ? (agentActivity.sentIds?.size ?? null) : null
+            }
+            unsentCount={unsentToAi}
+            newReplyCount={activeFile ? newAgentReplyCount : 0}
+            onSend={handleCopyReviewCommand}
+            onShowReplies={() => {
+              const first = comments.find((c) => agentActivity.newReplies.has(c.id));
+              agentActivity.acknowledge();
+              if (!first) return;
+              handleSelectComment(first.id);
+              // The badge disappears once acknowledged, so hand keyboard
+              // focus to the card. It may only mount after the rail lays
+              // out the selection; give it a few frames, then give up.
+              const selector = `[data-testid="comment-item"][data-comment-id="${CSS.escape(first.id)}"]`;
+              let frames = 0;
+              const focusCard = () => {
+                const card = document.querySelector<HTMLElement>(selector);
+                if (card) card.focus({ preventScroll: true });
+                else if (++frames < 10) requestAnimationFrame(focusCard);
+              };
+              requestAnimationFrame(focusCard);
             }}
-          >
-            {activeFile && (
-              <AgentStatusIndicator
-                status={agentActivity.status}
-                busySince={agentActivity.busySince}
-                sentCount={
-                  agentActivity.sentByUs ? (agentActivity.sentIds?.size ?? null) : null
-                }
-                newReplyCount={newAgentReplyCount}
-                onShowReplies={() => {
-                  const first = comments.find((c) => agentActivity.newReplies.has(c.id));
-                  agentActivity.acknowledge();
-                  if (!first) return;
-                  handleSelectComment(first.id);
-                  // The button disappears once acknowledged, so hand keyboard
-                  // focus to the card. It may only mount after the rail lays
-                  // out the selection; give it a few frames, then give up.
-                  const selector = `[data-testid="comment-item"][data-comment-id="${CSS.escape(first.id)}"]`;
-                  let frames = 0;
-                  const focusCard = () => {
-                    const card = document.querySelector<HTMLElement>(selector);
-                    if (card) card.focus({ preventScroll: true });
-                    else if (++frames < 10) requestAnimationFrame(focusCard);
-                  };
-                  requestAnimationFrame(focusCard);
-                }}
-              />
-            )}
-          </Box>
+          />
           {/* #374: outside the shrinking status box, so a narrow header clips
               the status text but never the button and its unread badge. */}
           {activeFile && (
