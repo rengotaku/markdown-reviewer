@@ -1992,6 +1992,61 @@ describe("EditorPage comment highlight & rail selection (#304)", () => {
     expect(screen.getByTestId("comment-reply-input")).toHaveValue("書きかけ");
   });
 
+  it("cards are placed against the pane's real top after reopening (#389)", async () => {
+    const { user, ed } = await openWithComment(openComment);
+    const PANE_TOP = 74;
+    const rect = (top: number, height: number) =>
+      ({
+        top,
+        bottom: top + height,
+        left: 0,
+        right: 0,
+        width: 0,
+        height,
+        x: 0,
+        y: top,
+        toJSON() {},
+      }) as DOMRect;
+    // A display:none box measures as all zeros, as in a real browser.
+    const pane = screen.getByTestId("comment-pane");
+    screen.getByTestId("comment-rail-aligned").getBoundingClientRect = () =>
+      pane.hidden ? rect(0, 0) : rect(PANE_TOP, 600);
+    const mark = ed.view.dom.querySelector(".comment-mark") as HTMLElement;
+    mark.getBoundingClientRect = () => rect(200, 20);
+
+    await user.click(screen.getByTestId("comment-pane-close"));
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 100));
+    });
+    await user.click(screen.getByTestId("comment-pane-open"));
+
+    await waitFor(() =>
+      expect(
+        window.getComputedStyle(screen.getByTestId("comment-rail-card") as HTMLElement).top
+      ).toBe(`${200 - PANE_TOP}px`)
+    );
+  });
+
+  it("moves focus to the open icon on close and back to the close icon on open (#389)", async () => {
+    const user = await (async () => {
+      const u = userEvent.setup();
+      renderPage();
+      await waitFor(() =>
+        expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
+      );
+      await u.click(screen.getByTestId("sidebar-file-README.md"));
+      await screen.findByTestId("comment-pane");
+      return u;
+    })();
+
+    screen.getByTestId("comment-pane-close").focus();
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(screen.getByTestId("comment-pane-open")).toHaveFocus());
+
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(screen.getByTestId("comment-pane-close")).toHaveFocus());
+  });
+
   it("keyboard Enter on the highlight also selects the card", async () => {
     const { ed } = await openWithComment(openComment);
 

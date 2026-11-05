@@ -473,6 +473,18 @@ export function EditorPage() {
   const flashTimerRef = useRef<number | null>(null);
   // Set by the aligned rail while it is shown (#339); see scrollHighlightIntoView.
   const railRevealRef = useRef<RailReveal | null>(null);
+  // #389: set by the pane's own close/open icons so focus follows to the icon
+  // that replaces the one just pressed (which disappears or is hidden).
+  const paneFocusRef = useRef<string | null>(null);
+  useEffect(() => {
+    const target = paneFocusRef.current;
+    if (!target) return;
+    paneFocusRef.current = null;
+    const id = requestAnimationFrame(() =>
+      document.querySelector<HTMLElement>(`[data-testid="${target}"]`)?.focus()
+    );
+    return () => cancelAnimationFrame(id);
+  }, [isCommentPaneOpen]);
 
   // True when some open tab (any root) already has this root/path — used to
   // decide whether an SSE `comments` event should bump the tab-badge sweep
@@ -1684,7 +1696,7 @@ export function EditorPage() {
   // event) rather than firing the DOM read synchronously from each listener.
   useEffect(() => {
     scheduleAnchorRecalcRef.current();
-  }, [comments, editor, centered]);
+  }, [comments, editor, centered, isCommentPaneOpen]);
   useEffect(() => {
     if (!editor || editor.isDestroyed) return;
     const onUpdate = () => scheduleAnchorRecalcRef.current();
@@ -1908,7 +1920,7 @@ export function EditorPage() {
       dom?.removeEventListener("click", onClick);
       dom?.removeEventListener("keydown", onKeyDown);
     };
-  }, [editor]);
+  }, [editor, setCommentPaneOpen]);
 
   // Mark the selected card's highlight so it's obvious which one a paragraph
   // carrying several comments is being read against (#304: this used to
@@ -3366,7 +3378,10 @@ export function EditorPage() {
             <Tooltip title="コメントを開く">
               <IconButton
                 size="small"
-                onClick={() => setCommentPaneOpen(true)}
+                onClick={() => {
+                  paneFocusRef.current = "comment-pane-close";
+                  setCommentPaneOpen(true);
+                }}
                 aria-label="コメントを開く"
                 data-testid="comment-pane-open"
                 sx={{ ml: 0.75, flexShrink: 0 }}
@@ -3673,7 +3688,11 @@ export function EditorPage() {
             comments={comments}
             reviewActive={reviewActive}
             onRefresh={refreshComments}
-            onClose={() => setCommentPaneOpen(false)}
+            paneOpen={isCommentPaneOpen}
+            onClose={() => {
+              paneFocusRef.current = "comment-pane-open";
+              setCommentPaneOpen(false);
+            }}
             canAddComment={canAddComment}
             onAddComment={handleAddCommentClick}
             onAddGlobal={handleAddGlobalClick}

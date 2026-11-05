@@ -422,6 +422,9 @@ interface Props {
   onRefresh: () => void;
   /** Renders the close icon at the right end of the title row when given (#389). */
   onClose?: () => void;
+  /** False while the pane is hidden (display: none, #389). The aligned rail
+   *  cannot measure a hidden box, so it waits for this to turn true. */
+  paneOpen?: boolean;
   /** Whether the current editor selection can take an anchored comment. */
   canAddComment: boolean;
   /** Both receive the trigger button's rect: the composer opens beside it
@@ -566,6 +569,7 @@ export function CommentSidePane({
   reviewActive,
   onRefresh,
   onClose,
+  paneOpen = true,
   canAddComment,
   onAddComment,
   onAddGlobal,
@@ -1008,6 +1012,7 @@ export function CommentSidePane({
             docBox={docBox}
             onOverhangChange={onRailOverhangChange}
             revealRef={railRevealRef}
+            visible={paneOpen}
             onScrollBodyBy={onRailScrollBodyBy}
             selectedId={selectedId ?? null}
             onSelect={onSelect}
@@ -1717,6 +1722,8 @@ interface AlignedRailProps {
   /** #332: show a count icon per line instead of each non-selected card. */
   iconMode?: boolean;
   revealRef?: MutableRefObject<RailReveal | null>;
+  /** See Props.paneOpen (#389). */
+  visible?: boolean;
   /** #378: scrolls the document body down by `dy` px, which moves the rail
    *  with it, and returns how far it actually went. */
   onScrollBodyBy?: (dy: number) => number;
@@ -1744,6 +1751,7 @@ function AlignedCommentRail({
   onOpenDetail,
   iconMode = false,
   revealRef,
+  visible = true,
   onScrollBodyBy,
 }: AlignedRailProps) {
   const railRef = useRef<HTMLDivElement | null>(null);
@@ -1752,12 +1760,20 @@ function AlignedCommentRail({
   const rafRef = useRef<number | null>(null);
   const liftRafRef = useRef<number | null>(null);
 
+  // #389: true from hiding until the first measurement after showing again.
+  const paneStaleRef = useRef(false);
+  const visibleRef = useRef(visible);
+
   const scheduleMeasurePane = useCallback(() => {
     if (rafRef.current !== null) return;
     rafRef.current = requestAnimationFrame(() => {
       rafRef.current = null;
+      // #389: a display:none box measures as top 0 / height 0; committing
+      // that would place every card at the wrong offset after reopening.
+      if (!visibleRef.current) return;
       const rect = railRef.current?.getBoundingClientRect();
       if (!rect) return;
+      paneStaleRef.current = false;
       setPaneBox((prev) =>
         prev.measured && prev.top === rect.top && prev.height === rect.height
           ? prev
@@ -1772,6 +1788,17 @@ function AlignedCommentRail({
   useEffect(() => {
     scheduleMeasurePane();
   }, [comments.length, anchorTops, scheduleMeasurePane]);
+
+  // #389: hidden -> the stored box is stale (the body reflows while the pane
+  // is away), so mark it unmeasured and let a reveal wait; shown -> measure.
+  useEffect(() => {
+    visibleRef.current = visible;
+    if (!visible) {
+      paneStaleRef.current = true;
+      return;
+    }
+    scheduleMeasurePane();
+  }, [visible, scheduleMeasurePane]);
 
   // #378: new anchor measurements place the cards where the body's scroll
   // put them, so lifts applied before them are reflected in the DOM again.
@@ -1981,7 +2008,7 @@ function AlignedCommentRail({
   useEffect(() => {
     if (!revealRef) return;
     revealRef.current = (id) => {
-      if (!paneBox.measured) return undefined;
+      if (!paneBox.measured || !visible || paneStaleRef.current) return undefined;
       if (paneBox.height <= 0) return null;
       const key = entries.find((e) => e.ids.includes(id))?.key;
       const placed = layout.placed.find((p) => p.id === key);
@@ -1993,7 +2020,7 @@ function AlignedCommentRail({
     return () => {
       revealRef.current = null;
     };
-  }, [revealRef, entries, layout, anchorTops, paneBox]);
+  }, [revealRef, entries, layout, anchorTops, paneBox, visible]);
   useEffect(() => () => onOverhangChange?.(0), [onOverhangChange]);
 
   const byId = useMemo(() => new Map(comments.map((c) => [c.id, c])), [comments]);
