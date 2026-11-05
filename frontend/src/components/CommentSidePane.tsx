@@ -36,6 +36,7 @@ import OpenInFullIcon from "@mui/icons-material/OpenInFull";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import LinkIcon from "@mui/icons-material/Link";
 import ViewAgendaIcon from "@mui/icons-material/ViewAgenda";
+import MenuOpenIcon from "@mui/icons-material/MenuOpen";
 import ViewListIcon from "@mui/icons-material/ViewList";
 import ChatBubbleOutlineIcon from "@mui/icons-material/ChatBubbleOutline";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
@@ -419,6 +420,8 @@ interface Props {
   /** Re-fetch the comment list from the sidecar (e.g. to pick up AI replies
    *  added out-of-band). */
   onRefresh: () => void;
+  /** Renders the close icon at the right end of the title row when given (#389). */
+  onClose?: () => void;
   /** Whether the current editor selection can take an anchored comment. */
   canAddComment: boolean;
   /** Both receive the trigger button's rect: the composer opens beside it
@@ -562,6 +565,7 @@ export function CommentSidePane({
   comments,
   reviewActive,
   onRefresh,
+  onClose,
   canAddComment,
   onAddComment,
   onAddGlobal,
@@ -818,6 +822,19 @@ export function CommentSidePane({
               </Tooltip>
             </ToggleButton>
           </ToggleButtonGroup>
+        )}
+        {onClose && (
+          <Tooltip title="コメントを閉じる">
+            <IconButton
+              size="small"
+              onClick={onClose}
+              aria-label="コメントを閉じる"
+              data-testid="comment-pane-close"
+            >
+              {/* Same glyph as the sidebar's close button, mirrored. */}
+              <MenuOpenIcon fontSize="small" sx={{ transform: "scaleX(-1)" }} />
+            </IconButton>
+          </Tooltip>
         )}
       </Box>
 

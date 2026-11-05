@@ -8,6 +8,7 @@ import StarterKit from "@tiptap/starter-kit";
 import { EditorPage } from "./EditorPage";
 import { useOpenFiles } from "@/hooks/useOpenFiles";
 import { useRecentOpened } from "@/hooks/useRecentOpened";
+import { useUIStore } from "@/hooks/useUIStore";
 import { useToast } from "@/hooks/useToast";
 import { useConfirm } from "@/hooks/useConfirm";
 import { useEditorInstance } from "@/hooks/useEditorInstance";
@@ -59,19 +60,88 @@ function renderPage(initialPath = `/${DEFAULT_ROOT}`) {
   );
 }
 
-describe("EditorPage comment pane always shown (#304)", () => {
-  it("is present as soon as a file is opened, with no way to close it", async () => {
+describe("EditorPage comment pane open/close (#389)", () => {
+  afterEach(() => {
+    localStorage.clear();
+    useUIStore.setState({ isCommentPaneOpen: true });
+  });
+
+  beforeEach(() => {
+    localStorage.clear();
+    useUIStore.setState({ isCommentPaneOpen: true });
+    useOpenFiles.setState({ files: [], activeIdByRoot: {} });
+  });
+
+  async function openReadme() {
     const user = userEvent.setup();
     renderPage();
     await waitFor(() =>
       expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
     );
     await user.click(screen.getByTestId("sidebar-file-README.md"));
+    await screen.findByTestId("comment-pane");
+    return user;
+  }
 
-    expect(await screen.findByTestId("comment-side-pane")).toBeInTheDocument();
+  it("1. is open right after a file is opened with no saved value; the old rail stays gone", async () => {
+    await openReadme();
+    expect(screen.getByTestId("comment-pane-close")).toBeInTheDocument();
+    expect(screen.queryByTestId("comment-pane-open")).not.toBeInTheDocument();
     expect(screen.queryByTestId("editor-toggle-comments")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("comment-pane-close")).not.toBeInTheDocument();
     expect(screen.queryByTestId("comment-rail")).not.toBeInTheDocument();
+  });
+
+  it("2 and 3. close hides the pane and shows the open icon; open shows the pane again", async () => {
+    const user = await openReadme();
+    expect(screen.getByTestId("comment-pane")).toBeVisible();
+
+    await user.click(screen.getByTestId("comment-pane-close"));
+    expect(screen.getByTestId("comment-pane")).not.toBeVisible();
+    expect(screen.getByTestId("comment-pane-open")).toBeInTheDocument();
+    expect(screen.queryByTestId("comment-rail")).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId("comment-pane-open"));
+    expect(screen.getByTestId("comment-pane")).toBeVisible();
+    expect(screen.queryByTestId("comment-pane-open")).not.toBeInTheDocument();
+  });
+
+  it("4. no badge on the open icon when there are no unresolved comments", async () => {
+    const user = await openReadme();
+    await user.click(screen.getByTestId("comment-pane-close"));
+    expect(screen.getByTestId("comment-pane-open")).toBeInTheDocument();
+    expect(screen.queryByTestId("comment-pane-open-badge")).not.toBeInTheDocument();
+  });
+
+  it("6. a saved closed state is restored on load", async () => {
+    localStorage.setItem(
+      "markdown-reviewer-ui",
+      JSON.stringify({ state: { isCommentPaneOpen: false }, version: 1 })
+    );
+    await useUIStore.persist.rehydrate();
+    renderPage();
+    await waitFor(() =>
+      expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
+    );
+    await userEvent.setup().click(screen.getByTestId("sidebar-file-README.md"));
+    expect(await screen.findByTestId("comment-pane-open")).toBeInTheDocument();
+    expect(screen.getByTestId("comment-pane")).not.toBeVisible();
+  });
+
+  it("7. both icons have no text, an aria-label and a tooltip", async () => {
+    const user = await openReadme();
+
+    const close = screen.getByTestId("comment-pane-close");
+    expect(close).toHaveTextContent("");
+    expect(close).toHaveAttribute("aria-label", "コメントを閉じる");
+    await user.hover(close);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("コメントを閉じる");
+    await user.unhover(close);
+
+    await user.click(close);
+    const open = screen.getByTestId("comment-pane-open");
+    expect(open).toHaveAttribute("aria-label", "コメントを開く");
+    await user.hover(open);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("コメントを開く");
   });
 });
 
@@ -1564,6 +1634,7 @@ describe("EditorPage selection menu (#233)", () => {
     useToast.setState({ toasts: [] });
     useConfirm.setState({ pending: null, queue: [] });
     useEditorInstance.setState({ editor: null });
+    useUIStore.setState({ isCommentPaneOpen: true });
     Element.prototype.scrollIntoView = vi.fn();
   });
 
@@ -1884,6 +1955,41 @@ describe("EditorPage comment highlight & rail selection (#304)", () => {
     await waitFor(() =>
       expect(screen.getByTestId("comment-item")).toHaveAttribute("data-selected", "true")
     );
+  });
+
+  it("4. the open icon's badge counts unresolved comments and is absent at 0 (#389)", async () => {
+    const { user } = await openWithComment(openComment);
+    await user.click(screen.getByTestId("comment-pane-close"));
+    expect(screen.getByTestId("comment-pane-open-badge")).toHaveTextContent("1");
+    await user.click(screen.getByTestId("comment-pane-open"));
+  });
+
+  it("5. clicking a highlight while closed opens the pane and selects the card (#389)", async () => {
+    const { user, ed } = await openWithComment(openComment);
+    await user.click(screen.getByTestId("comment-pane-close"));
+    expect(screen.getByTestId("comment-pane")).not.toBeVisible();
+
+    const el = ed.view.dom.querySelector(".comment-mark") as HTMLElement;
+    fireEvent.click(el, { clientX: 10, clientY: 10 });
+
+    await waitFor(() => expect(screen.getByTestId("comment-pane")).toBeVisible());
+    await waitFor(() =>
+      expect(screen.getByTestId("comment-item")).toHaveAttribute("data-selected", "true")
+    );
+    expect(screen.queryByTestId("comment-pane-open")).not.toBeInTheDocument();
+  });
+
+  it("an unsent reply draft survives closing and reopening the pane (#389)", async () => {
+    const { user } = await openWithComment(openComment);
+    await user.click(screen.getByTestId("comment-reply-toggle"));
+    await user.type(await screen.findByTestId("comment-reply-input"), "書きかけ");
+
+    await user.click(screen.getByTestId("comment-pane-close"));
+    expect(screen.getByTestId("comment-pane")).not.toBeVisible();
+    await user.click(screen.getByTestId("comment-pane-open"));
+
+    expect(screen.getByTestId("comment-pane")).toBeVisible();
+    expect(screen.getByTestId("comment-reply-input")).toHaveValue("書きかけ");
   });
 
   it("keyboard Enter on the highlight also selects the card", async () => {
@@ -2430,6 +2536,40 @@ describe("EditorPage jump to comment (#167)", () => {
       }, DEEPLINK_JUMP_WAIT);
       const scrolledEl = scrollSpy.mock.instances[0] as HTMLElement;
       expect(scrolledEl.textContent).toContain("hello world");
+    });
+
+    it("ペインを閉じて保存していても、comment_id 付きで開くとペインが開きカードが選択される (#389)", async () => {
+      const comment: CommentJSON = {
+        id: "c-001",
+        scope: "inline",
+        body: "対象のコメント",
+        status: "open",
+        anchor: { heading_path: ["## Title"], snippet: "hello world", occurrence: 0 },
+        context: { heading_path: ["Title"], line_range: [2, 2] },
+        orphan: false,
+      };
+      await useComments([comment])();
+      useUIStore.setState({ isCommentPaneOpen: false });
+
+      try {
+        renderPage(`/${DEFAULT_ROOT}/README.md?comment_id=c-001`);
+        installFakeEditor("<h2>Title</h2><p>hello world</p>");
+
+        await waitFor(
+          () => expect(screen.getByTestId("comment-pane")).toBeVisible(),
+          DEEPLINK_JUMP_WAIT
+        );
+        await waitFor(
+          () =>
+            expect(screen.getByTestId("comment-item")).toHaveAttribute(
+              "data-selected",
+              "true"
+            ),
+          DEEPLINK_JUMP_WAIT
+        );
+      } finally {
+        useUIStore.setState({ isCommentPaneOpen: true });
+      }
     });
 
     it("ケース 4: 存在しない comment_id", async () => {
