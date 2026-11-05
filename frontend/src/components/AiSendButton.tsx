@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import ButtonBase from "@mui/material/ButtonBase";
@@ -66,6 +66,7 @@ export function AiSendButton({
   onShowReplies,
 }: Props) {
   const elapsed = useElapsed(busySince);
+  const descId = useId();
   const name = status?.agent_id ? agentLabel(status.agent_id) : "";
   const state = status?.state ?? null;
   const isBusy = state === "busy";
@@ -110,6 +111,9 @@ export function AiSendButton({
             onClick={onSend}
             disabled={disabled}
             aria-label="AI へ送信"
+            // The Tooltip labels its span wrapper, not this button, so the
+            // state and the copy-instead-of-send cases are tied on here.
+            aria-describedby={descId}
             data-testid="editor-copy-review-command"
             sx={[
               { minWidth: 0, px: 1, py: 0.5, lineHeight: 0 },
@@ -145,6 +149,9 @@ export function AiSendButton({
           </Button>
         </Box>
       </Tooltip>
+      <Box component="span" id={descId} sx={VISUALLY_HIDDEN_SX}>
+        {title}
+      </Box>
       {state && (
         <Box
           component="span"
@@ -160,7 +167,9 @@ export function AiSendButton({
           )}
         </Box>
       )}
-      {!isBusy && newReplyCount > 0 && (
+      {/* Hidden while the state is unknown too (a failed poll keeps the busy
+          baseline): acknowledging then would drop replies still arriving. */}
+      {state !== null && !isBusy && newReplyCount > 0 && (
         <Tooltip title={`新しい返信 ${newReplyCount} 件（押すと最初の返信へ移動）`}>
           <ButtonBase
             onClick={onShowReplies}

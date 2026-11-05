@@ -35,6 +35,18 @@ describe("AiSendButton (#390)", () => {
     );
   });
 
+  it("ties the state and the copy fallback to the button as its description", () => {
+    setup({ state: "none" });
+    expect(send()).toHaveAccessibleDescription(
+      "コマンドをコピー（送信先のセッションが見つかりません）"
+    );
+  });
+
+  it("hides the new-reply badge while the state is unknown", () => {
+    setup(null, { newReplyCount: 2, busySince: 1 });
+    expect(screen.queryByTestId("editor-agent-new-replies")).not.toBeInTheDocument();
+  });
+
   it("says a background AI can still be sent to", async () => {
     setup({ state: "background", agent_id: "claude" });
     fireEvent.mouseOver(send());
