@@ -111,14 +111,11 @@ function renderDetail(c: CommentJSON) {
   );
 }
 
-/** #390: the status filter is a select; open it and pick an option. */
+/** #394: the status filter is three icon toggles; press one. */
 async function chooseStatus(
   user: ReturnType<typeof userEvent.setup>,
   value: "all" | "open" | "resolved"
 ) {
-  await user.click(
-    within(screen.getByTestId("comment-status-filter")).getByRole("combobox")
-  );
   await user.click(screen.getByTestId(`comment-filter-${value}`));
 }
 
@@ -144,10 +141,11 @@ describe("CommentSidePane", () => {
     // The buttons stay enabled so the click reaches the parent, which shows the
     // "取り込む" prompt instead of silently doing nothing.
     expect(screen.getByTestId("editor-add-comment")).not.toBeDisabled();
-    expect(screen.getByTestId("editor-add-global-comment")).not.toBeDisabled();
+    expect(screen.getByTestId("global-comment-badge")).not.toBeDisabled();
     await user.click(screen.getByTestId("editor-add-comment"));
     expect(handlers.onAddComment).toHaveBeenCalledTimes(1);
-    await user.click(screen.getByTestId("editor-add-global-comment"));
+    // #394: with no global comments the globe goes straight to the composer.
+    await user.click(screen.getByTestId("global-comment-badge"));
     expect(handlers.onAddGlobal).toHaveBeenCalledTimes(1);
   });
 
@@ -219,7 +217,7 @@ describe("CommentSidePane", () => {
     expect(h.onRefresh).toHaveBeenCalledTimes(1);
   });
 
-  it("filters the list by status via the select, whose options carry the counts (#390)", async () => {
+  it("filters the list by status via icon toggles that carry the counts (#394)", async () => {
     const user = userEvent.setup();
     renderPane({
       comments: [
@@ -229,14 +227,25 @@ describe("CommentSidePane", () => {
     });
     // 未解決 by default (#253)
     expect(screen.getAllByTestId("comment-item")).toHaveLength(1);
-    expect(screen.queryByTestId("comment-filter-all")).toBeNull(); // closed select
-    await user.click(
-      within(screen.getByTestId("comment-status-filter")).getByRole("combobox")
+    expect(screen.getByTestId("comment-filter-open")).toHaveAttribute(
+      "aria-pressed",
+      "true"
     );
-    expect(screen.getByTestId("comment-filter-all")).toHaveTextContent("すべて 2");
-    expect(screen.getByTestId("comment-filter-open")).toHaveTextContent("未解決 1");
-    expect(screen.getByTestId("comment-filter-resolved")).toHaveTextContent("解決済 1");
-    await user.keyboard("{Escape}");
+    // All three counts stay visible; the icon's meaning is in the name/tooltip.
+    expect(screen.getByTestId("comment-filter-all")).toHaveTextContent(/^2$/);
+    expect(screen.getByTestId("comment-filter-all")).toHaveAccessibleName(
+      "すべて（2 件）を表示"
+    );
+    expect(screen.getByTestId("comment-filter-open")).toHaveAccessibleName(
+      "未解決（1 件）を表示"
+    );
+    expect(screen.getByTestId("comment-filter-resolved")).toHaveAccessibleName(
+      "解決済み（1 件）を表示"
+    );
+    await user.hover(screen.getByTestId("comment-filter-resolved").firstElementChild!);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(
+      "解決済み（1 件）を表示"
+    );
     await chooseStatus(user, "all");
     await waitFor(() => expect(screen.getAllByTestId("comment-item")).toHaveLength(2));
     await chooseStatus(user, "resolved");
@@ -295,7 +304,7 @@ describe("CommentSidePane", () => {
   describe("global/orphan badges (#316)", () => {
     it("shows only the global badge when there are global comments and no orphans", () => {
       renderPane({ comments: [pinned("g1"), pinned("g2")] });
-      expect(screen.getByTestId("global-comment-badge")).toHaveTextContent("全体 2");
+      expect(screen.getByTestId("global-comment-badge")).toHaveTextContent(/^2$/);
       expect(screen.queryByTestId("orphan-comment-badge")).toBeNull();
     });
 
@@ -338,12 +347,10 @@ describe("CommentSidePane", () => {
         ],
       });
       await chooseStatus(user, "all");
-      expect(
-        within(screen.getByTestId("comment-status-filter")).getByRole("combobox")
-      ).toHaveTextContent("すべて 4");
+      expect(screen.getByTestId("comment-filter-all")).toHaveTextContent(/^4$/);
       const rail = screen.getByTestId("comment-rail-aligned");
       expect(within(rail).getAllByTestId("comment-item")).toHaveLength(1);
-      expect(screen.getByTestId("global-comment-badge")).toHaveTextContent("全体 1");
+      expect(screen.getByTestId("global-comment-badge")).toHaveTextContent(/^1$/);
       // o1 (server orphan) + u1 (caller could not resolve it)
       expect(screen.getByTestId("orphan-comment-badge")).toHaveTextContent(/^2$/);
     });
@@ -355,7 +362,7 @@ describe("CommentSidePane", () => {
       });
       const row = screen.getByTestId("comment-add-toolbar");
       expect(within(row).getByTestId("comment-status-filter")).toBeInTheDocument();
-      expect(within(row).getByTestId("global-comment-badge")).toHaveTextContent("全体 1");
+      expect(within(row).getByTestId("global-comment-badge")).toHaveTextContent(/^1$/);
       const orphan = within(row).getByTestId("orphan-comment-badge");
       expect(orphan).not.toHaveTextContent("位置不明");
       expect(orphan).toHaveAccessibleName(/位置不明/);
@@ -366,9 +373,10 @@ describe("CommentSidePane", () => {
       expect(screen.getByTestId("global-comments-dialog")).toBeInTheDocument();
     });
 
-    it("renders no badges when there are no global or orphan comments", () => {
+    it("keeps only the countless globe when there are no global or orphan comments (#394)", () => {
       renderPane({ comments: [comment("c1")] });
-      expect(screen.queryByTestId("global-comment-badges")).toBeNull();
+      expect(screen.getByTestId("global-comment-badge")).toHaveTextContent(/^$/);
+      expect(screen.queryByTestId("orphan-comment-badge")).toBeNull();
     });
 
     it("opens the dialog with the comment body when a badge is pressed", async () => {
@@ -499,11 +507,11 @@ describe("CommentSidePane", () => {
         ],
       });
       // Default filter is 未解決 (open).
-      expect(screen.getByTestId("global-comment-badge")).toHaveTextContent("全体 1");
+      expect(screen.getByTestId("global-comment-badge")).toHaveTextContent(/^1$/);
       await chooseStatus(user, "resolved");
-      expect(screen.getByTestId("global-comment-badge")).toHaveTextContent("全体 1");
+      expect(screen.getByTestId("global-comment-badge")).toHaveTextContent(/^1$/);
       await chooseStatus(user, "all");
-      expect(screen.getByTestId("global-comment-badge")).toHaveTextContent("全体 2");
+      expect(screen.getByTestId("global-comment-badge")).toHaveTextContent(/^2$/);
     });
   });
 
@@ -511,7 +519,7 @@ describe("CommentSidePane", () => {
     const user = userEvent.setup();
     const h = renderPane();
     await user.click(screen.getByTestId("editor-add-comment"));
-    await user.click(screen.getByTestId("editor-add-global-comment"));
+    await user.click(screen.getByTestId("global-comment-badge"));
     expect(h.onAddComment).toHaveBeenCalled();
     expect(h.onAddGlobal).toHaveBeenCalled();
   });

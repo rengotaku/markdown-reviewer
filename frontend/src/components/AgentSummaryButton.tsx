@@ -86,7 +86,7 @@ export function AgentSummaryButton({
   return (
     <>
       <Tooltip title={empty ? "作業の要約（まだありません）" : "作業の要約"}>
-        <Box component="span" sx={{ ml: 0.75, display: "inline-flex", flexShrink: 0 }}>
+        <Box component="span" sx={{ display: "inline-flex", flexShrink: 0 }}>
           <ButtonBase
             data-testid="agent-summary-button"
             aria-haspopup="dialog"
@@ -98,18 +98,20 @@ export function AgentSummaryButton({
               setAnchor(e.currentTarget);
               onOpen();
             }}
+            // #394: the same round 30×30 icon button as the rest of the
+            // header (it was a 28px outlined square); unread shows as the
+            // primary colour plus the badge, like the comment-pane button.
             sx={{
-              p: 0.5,
-              borderRadius: 0.5,
-              border: 1,
-              borderColor: unread > 0 ? "primary.main" : "divider",
-              color: unread > 0 ? "primary.main" : "text.secondary",
+              p: "5px",
+              borderRadius: "50%",
+              color: unread > 0 ? "primary.main" : "action.active",
               bgcolor: open ? "action.selected" : "transparent",
+              "&:hover": { bgcolor: open ? "action.selected" : "action.hover" },
               "&.Mui-disabled": { opacity: 0.4 },
               "&:focus-visible": { outline: "2px solid", outlineColor: "primary.main" },
             }}
           >
-            <NotesIcon sx={{ fontSize: 18 }} />
+            <NotesIcon sx={{ fontSize: 20 }} />
             {unread > 0 && <CountBadge count={unread} testId="agent-summary-badge" />}
           </ButtonBase>
         </Box>

@@ -60,19 +60,18 @@ function renderPage(initialPath = `/${DEFAULT_ROOT}`) {
   );
 }
 
-/** #390: the status filter is a select. */
+/** #394: the status filter is three icon toggles; this is the group. */
 function statusCombobox(): HTMLElement {
-  return within(screen.getByTestId("comment-status-filter")).getByRole("combobox");
+  return screen.getByTestId("comment-status-filter");
 }
 
-/** Switches the select to すべて (once) and returns it, so its text reads
- *  "すべて N". Throws until the pane has rendered, so it works inside waitFor. */
+/** Switches the filter to すべて and returns its toggle, whose accessible name
+ *  reads "すべて（N 件）を表示". Throws until the pane has rendered, so it works
+ *  inside waitFor. */
 function allStatusOption(): HTMLElement {
-  if (!/すべて/.test(statusCombobox().textContent ?? "")) {
-    fireEvent.mouseDown(statusCombobox());
-    fireEvent.click(screen.getByTestId("comment-filter-all"));
-  }
-  return statusCombobox();
+  const all = screen.getByTestId("comment-filter-all");
+  if (all.getAttribute("aria-pressed") !== "true") fireEvent.click(all);
+  return all;
 }
 
 describe("EditorPage comment pane open/close (#389)", () => {
@@ -565,7 +564,7 @@ describe("EditorPage", () => {
     renderPage();
     await user.click(await screen.findByTestId("sidebar-file-README.md"));
     await waitFor(() =>
-      expect(allStatusOption()).toHaveTextContent("すべて 2")
+      expect(allStatusOption()).toHaveAccessibleName(`すべて（2 件）を表示`)
     );
     // Nothing is known about what the AI has read before the first send.
     expect(screen.queryByTestId("editor-unsent-count")).toBeNull();
@@ -632,14 +631,14 @@ describe("EditorPage", () => {
     renderPage();
     await user.click(await screen.findByTestId("sidebar-file-README.md"));
     await waitFor(() =>
-      expect(allStatusOption()).toHaveTextContent("すべて 2")
+      expect(allStatusOption()).toHaveAccessibleName(`すべて（2 件）を表示`)
     );
 
     await user.click(screen.getByTestId("editor-copy-review-command"));
     comments = [...comments, open("c3")];
     await user.click(screen.getByTestId("comment-pane-refresh"));
     await waitFor(() =>
-      expect(allStatusOption()).toHaveTextContent("すべて 3")
+      expect(allStatusOption()).toHaveAccessibleName(`すべて（3 件）を表示`)
     );
     releaseSend();
 
@@ -1617,7 +1616,7 @@ describe("EditorPage line numbers toggle (#234)", () => {
     const user = userEvent.setup();
     renderPage();
 
-    await user.click(await screen.findByTestId("editor-view-menu"));
+    await user.click(await screen.findByTestId("editor-file-menu"));
     const toggle = await screen.findByTestId("editor-toggle-line-numbers");
     expect(useEditorPrefs.getState().showLineNumbers).toBe(false);
 
@@ -1632,7 +1631,7 @@ describe("EditorPage line numbers toggle (#234)", () => {
     const user = userEvent.setup();
     renderPage();
 
-    await user.click(await screen.findByTestId("editor-view-menu"));
+    await user.click(await screen.findByTestId("editor-file-menu"));
     await user.click(await screen.findByTestId("editor-toggle-line-numbers"));
     expect(localStorage.getItem("markdown-reviewer-prefs")).toContain(
       '"showLineNumbers":true'
@@ -1902,7 +1901,7 @@ describe("EditorPage comment highlight & rail selection (#304)", () => {
     // measured. Waiting on `comment-context-*` here, before the editor is
     // even installed, would never resolve.
     await waitFor(() =>
-      expect(allStatusOption()).toHaveTextContent(`すべて 1`)
+      expect(allStatusOption()).toHaveAccessibleName(`すべて（1 件）を表示`)
     );
     const ed = installEditor("<h2>実績</h2><p>SLA遵守率 98%</p>");
     // Wait for the page to push the comment into the editor as a decoration.
@@ -2198,7 +2197,7 @@ describe("EditorPage comment highlight & rail selection (#304)", () => {
     // waiting for `comment-context-*` here (no editor installed yet) would
     // never resolve.
     await waitFor(() =>
-      expect(allStatusOption()).toHaveTextContent("すべて 1")
+      expect(allStatusOption()).toHaveAccessibleName(`すべて（1 件）を表示`)
     );
     // Content with none of the anchor's text at all — buildDeco resolves no
     // range for it, so no `.comment-mark` decoration is created. Distinct
@@ -2306,7 +2305,6 @@ describe("EditorPage jump to comment (#167)", () => {
     // The list shows 未解決 by default (#253) and several of these fixtures are
     // resolved, so widen the filter before waiting for their rows.
     await waitFor(() => expect(statusCombobox()).toBeInTheDocument());
-    await user.click(statusCombobox());
     await user.click(screen.getByTestId("comment-filter-all"));
     // Comments are only fetched once the file is under review — wait for the
     // fetch to actually land before touching the editor. This used to wait
@@ -2319,8 +2317,8 @@ describe("EditorPage jump to comment (#167)", () => {
     // need a specific row to exist wait for it themselves after installing
     // their editor.
     await waitFor(() =>
-      expect(allStatusOption()).toHaveTextContent(
-        `すべて ${comments.length}`
+      expect(allStatusOption()).toHaveAccessibleName(
+        `すべて（${comments.length} 件）を表示`
       )
     );
     return user;

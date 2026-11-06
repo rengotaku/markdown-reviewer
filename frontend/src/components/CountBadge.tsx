@@ -25,6 +25,13 @@ interface Props {
   /** "bottom" for a button that already carries a badge at the top-right
    *  (the send button's green reply count). */
   placement?: "top" | "bottom";
+  /** "warning" for the 位置不明 count, which is a warning rather than news
+   *  (#394). Applies to the filled variant only. */
+  color?: "primary" | "warning";
+  /** For a button flush against the window's top-right corner (the header's
+   *  comment-pane button, #394): the badge tucks 2px further in on each side
+   *  so the window edge doesn't clip it. */
+  atEdge?: boolean;
 }
 
 /** #379: a count laid over its button's top-right corner. Counts used to sit
@@ -38,6 +45,8 @@ export function CountBadge({
   variant = "filled",
   testId,
   placement = "top",
+  color = "primary",
+  atEdge = false,
 }: Props) {
   return (
     <Box
@@ -48,8 +57,8 @@ export function CountBadge({
           position: "absolute",
           // The header buttons sit 5px below the window's top edge; -4 keeps
           // the badge whole there.
-          ...(placement === "top" ? { top: -4 } : { bottom: -4 }),
-          right: -6,
+          ...(placement === "top" ? { top: atEdge ? -2 : -4 } : { bottom: -4 }),
+          right: atEdge ? -2 : -6,
           minWidth: 16,
           height: 16,
           px: 0.5,
@@ -64,7 +73,7 @@ export function CountBadge({
           pointerEvents: "none",
         },
         variant === "filled"
-          ? { bgcolor: "primary.main", color: "primary.contrastText" }
+          ? { bgcolor: `${color}.main`, color: `${color}.contrastText` }
           : {
               bgcolor: "background.paper",
               color: "primary.main",

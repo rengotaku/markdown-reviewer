@@ -23,12 +23,9 @@ import Dialog from "@mui/material/Dialog";
 import DialogTitle from "@mui/material/DialogTitle";
 import DialogContent from "@mui/material/DialogContent";
 import DialogActions from "@mui/material/DialogActions";
-import Select from "@mui/material/Select";
-import MenuItem from "@mui/material/MenuItem";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import AddCommentIcon from "@mui/icons-material/AddComment";
-import PublicIcon from "@mui/icons-material/Public";
 import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutline";
 import ReplayIcon from "@mui/icons-material/Replay";
 import ReplyIcon from "@mui/icons-material/Reply";
@@ -64,6 +61,7 @@ import {
   type RailItem,
 } from "@/utils/commentRailLayout";
 import { GlobalCommentBadges, type GlobalBadgeKind } from "./GlobalCommentBadges";
+import { StatusFilterToggle, type StatusFilter } from "./StatusFilterToggle";
 import { GlobalCommentsDialog } from "./GlobalCommentsDialog";
 import { AgentActivityContext, type AgentCardActivity } from "./agentActivityContext";
 import { pulseSx } from "./pulseSx";
@@ -123,8 +121,8 @@ const FORM_ACTIONS_SX = {
 
 /** #364: every card action sits in the header row, so the icons are kept
  *  small enough that six of them fit beside the id and badges. */
-const CARD_ICON_SIZE = 14;
-/** #364: the 14px icons are hard to aim at; the one under the pointer turns
+const CARD_ICON_SIZE = 16;
+/** #364: the small card icons (16px since #394) are hard to aim at; the one under the pointer turns
  *  the primary colour so it is clear which action a click will take. */
 const ACTION_HOVER_SX = {
   "& .MuiIconButton-root:not(.Mui-disabled):hover": { color: "primary.main" },
@@ -490,8 +488,6 @@ const NO_NEW_REPLIES: ReadonlyMap<string, number> = new Map();
  *  (not worth waiting for — e.g. a pane with no height). */
 export type RailReveal = (id: string) => number | null | undefined;
 
-type StatusFilter = "all" | "open" | "resolved";
-
 /** See the `docBox` prop. */
 export interface DocBox {
   top: number;
@@ -810,13 +806,14 @@ export function CommentSidePane({
         )}
       </Box>
 
-      {/* Status select, the 全体 / 位置不明 badges and the add actions share one
-          row (#196, #390). The status filter used to be three buttons that
-          filled the row; as a select it leaves room for the badges that had
-          their own row (#316). */}
+      {/* Status filter, the 位置不明 / 全体 buttons and the add action share one
+          row (#196, #390). #394: the right edge matches the title row's (pr
+          0.5) and the gap its 8px, so ⚠ / 🌐 / add sit in the same columns as
+          refresh / mode / close above them. */}
       <Box
         sx={{
-          px: 1.5,
+          pl: 1.5,
+          pr: 0.5,
           // Fixed height matching the editor file tab bar (BAR_HEIGHT = 37px,
           // border-box), so the second-row dividers form one continuous line
           // across the panes (#65, #90).
@@ -825,46 +822,30 @@ export function CommentSidePane({
           boxSizing: "border-box",
           display: "flex",
           alignItems: "center",
-          gap: 0.75,
+          gap: 1,
           borderBottom: "1px solid",
           borderColor: "divider",
         }}
         data-testid="comment-add-toolbar"
       >
-        <Select
+        <StatusFilterToggle
           value={filter}
-          size="small"
-          onChange={(e) => setFilter(e.target.value as StatusFilter)}
-          inputProps={{ "aria-label": "コメントの表示フィルタ" }}
-          data-testid="comment-status-filter"
-          sx={{
-            flex: 1,
-            minWidth: 0,
-            fontSize: "0.75rem",
-            "& .MuiSelect-select": { py: 0.5, pl: 1, pr: "24px !important" },
-            "& .MuiSelect-icon": { right: 2 },
+          onChange={setFilter}
+          allCount={comments.length}
+          openCount={openCount}
+          resolvedCount={resolvedCount}
+        />
+        <Box sx={{ flex: 1 }} />
+        <GlobalCommentBadges
+          globalCount={reviewActive ? globalComments.length : 0}
+          orphanCount={orphanComments.length}
+          showOrphan={reviewActive}
+          onOpen={(kind) => {
+            setGlobalDialogTab(kind);
+            setGlobalDialogOpen(true);
           }}
-        >
-          <MenuItem value="all" data-testid="comment-filter-all">
-            すべて {comments.length}
-          </MenuItem>
-          <MenuItem value="open" data-testid="comment-filter-open">
-            未解決 {openCount}
-          </MenuItem>
-          <MenuItem value="resolved" data-testid="comment-filter-resolved">
-            解決済 {resolvedCount}
-          </MenuItem>
-        </Select>
-        {reviewActive && (
-          <GlobalCommentBadges
-            globalCount={globalComments.length}
-            orphanCount={orphanComments.length}
-            onOpen={(kind) => {
-              setGlobalDialogTab(kind);
-              setGlobalDialogOpen(true);
-            }}
-          />
-        )}
+          onAddGlobal={onAddGlobal}
+        />
         <Tooltip title="選択範囲にコメントを追加（未取り込みなら自動で取り込む）">
           <span>
             <IconButton
@@ -877,20 +858,6 @@ export function CommentSidePane({
               sx={{ flexShrink: 0 }}
             >
               <AddCommentIcon fontSize="small" />
-            </IconButton>
-          </span>
-        </Tooltip>
-        <Tooltip title="ファイル全体に向けたコメントを追加（選択不要・未取り込みなら自動で取り込む）">
-          <span>
-            <IconButton
-              size="small"
-              color="primary"
-              onClick={(e) => onAddGlobal(e.currentTarget.getBoundingClientRect())}
-              aria-label="ファイル全体にコメントを追加"
-              data-testid="editor-add-global-comment"
-              sx={{ flexShrink: 0 }}
-            >
-              <PublicIcon fontSize="small" />
             </IconButton>
           </span>
         </Tooltip>
@@ -2205,7 +2172,7 @@ export function CommentRow({
                   data-testid="comment-edit"
                   sx={{ p: 0.25 }}
                 >
-                  <EditOutlinedIcon sx={{ fontSize: 16 }} />
+                  <EditOutlinedIcon sx={{ fontSize: CARD_ICON_SIZE }} />
                 </IconButton>
               </span>
             </Tooltip>
@@ -2219,7 +2186,7 @@ export function CommentRow({
                   data-testid="comment-delete"
                   sx={{ p: 0.25 }}
                 >
-                  <DeleteOutlineIcon sx={{ fontSize: 16 }} />
+                  <DeleteOutlineIcon sx={{ fontSize: CARD_ICON_SIZE }} />
                 </IconButton>
               </span>
             </Tooltip>
@@ -2345,7 +2312,7 @@ export function CommentRow({
               aria-label="reply to comment"
               data-testid="comment-reply-toggle"
             >
-              <ReplyIcon fontSize="small" />
+              <ReplyIcon sx={{ fontSize: CARD_ICON_SIZE }} />
             </IconButton>
           </span>
         </Tooltip>
@@ -2357,9 +2324,9 @@ export function CommentRow({
             data-testid="comment-resolve-toggle"
           >
             {resolved ? (
-              <ReplayIcon fontSize="small" />
+              <ReplayIcon sx={{ fontSize: CARD_ICON_SIZE }} />
             ) : (
-              <CheckCircleOutlineIcon fontSize="small" />
+              <CheckCircleOutlineIcon sx={{ fontSize: CARD_ICON_SIZE }} />
             )}
           </IconButton>
         </Tooltip>
@@ -2371,7 +2338,7 @@ export function CommentRow({
               aria-label="open comment detail"
               data-testid="comment-open-detail"
             >
-              <OpenInFullIcon fontSize="small" />
+              <OpenInFullIcon sx={{ fontSize: CARD_ICON_SIZE }} />
             </IconButton>
           </Tooltip>
         )}
@@ -2390,7 +2357,7 @@ export function CommentRow({
               aria-label="copy comment link"
               data-testid="comment-copy-link"
             >
-              <LinkIcon fontSize="small" />
+              <LinkIcon sx={{ fontSize: CARD_ICON_SIZE }} />
             </IconButton>
           </span>
         </Tooltip>
@@ -2890,7 +2857,7 @@ export function CommentDetailDialog({
                 aria-label="copy comment link"
                 data-testid="comment-detail-copy-link"
               >
-                <LinkIcon fontSize="small" />
+                <LinkIcon sx={{ fontSize: CARD_ICON_SIZE }} />
               </IconButton>
             </span>
           </Tooltip>
