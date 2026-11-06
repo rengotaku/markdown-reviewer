@@ -5,6 +5,7 @@ import { HTTPError } from "ky";
 import Box from "@mui/material/Box";
 import IconButton from "@mui/material/IconButton";
 import Divider from "@mui/material/Divider";
+import ListSubheader from "@mui/material/ListSubheader";
 import Popper from "@mui/material/Popper";
 import Paper from "@mui/material/Paper";
 import Button from "@mui/material/Button";
@@ -28,7 +29,6 @@ import CommentIcon from "@mui/icons-material/Comment";
 import CompareArrowsIcon from "@mui/icons-material/CompareArrows";
 import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
 import MoreHorizIcon from "@mui/icons-material/MoreHoriz";
-import ArrowDropDownIcon from "@mui/icons-material/ArrowDropDown";
 import CheckIcon from "@mui/icons-material/Check";
 import { TiptapEditor } from "@/components/tiptap/TiptapEditor";
 import {
@@ -428,7 +428,6 @@ export function EditorPage() {
   );
   const unsentToAi = unsentCount(agentActivity.sentIds, comments);
   const [fileMenuAnchor, setFileMenuAnchor] = useState<HTMLElement | null>(null);
-  const [viewMenuAnchor, setViewMenuAnchor] = useState<HTMLElement | null>(null);
 
   // The *currently* active tab's key, read fresh from the store rather than
   // the `activeFile` closure above. Used by the sweep effect to guard
@@ -3162,58 +3161,6 @@ export function EditorPage() {
               </Tooltip>
             )}
           </Box>
-          {/* Outside the box above, which clips when the header is narrow:
-              this menu is the only way to copy or save on demand. */}
-          {activeFile && (
-            <>
-              <Tooltip title="ファイルの操作">
-                <IconButton
-                  size="small"
-                  sx={{ flexShrink: 0 }}
-                  onClick={(e) => setFileMenuAnchor(e.currentTarget)}
-                  aria-label="file actions"
-                  aria-haspopup="menu"
-                  data-testid="editor-file-menu"
-                >
-                  <MoreHorizIcon fontSize="small" />
-                </IconButton>
-              </Tooltip>
-              <Menu
-                anchorEl={fileMenuAnchor}
-                open={fileMenuAnchor !== null}
-                onClose={() => setFileMenuAnchor(null)}
-              >
-                <MenuItem
-                  onClick={() => {
-                    setFileMenuAnchor(null);
-                    void handleCopyMarkdown();
-                  }}
-                  data-testid="editor-copy-markdown"
-                >
-                  <ListItemIcon>
-                    <ContentCopyIcon fontSize="small" />
-                  </ListItemIcon>
-                  <ListItemText>Markdown をコピー</ListItemText>
-                </MenuItem>
-                <MenuItem
-                  disabled={!canSave || isSaving}
-                  onClick={() => {
-                    setFileMenuAnchor(null);
-                    void handleSave();
-                  }}
-                  data-testid="editor-save"
-                >
-                  <ListItemIcon>
-                    <SaveIcon fontSize="small" />
-                  </ListItemIcon>
-                  <ListItemText>今すぐ保存</ListItemText>
-                </MenuItem>
-              </Menu>
-            </>
-          )}
-          {/* No explicit "取り込む" action: a file is ingested transparently the
-              first time the user comments on it (see handleIngest / ingestThenOpen).
-              Ingesting is internal bookkeeping the user shouldn't have to think about. */}
           {/* Always rendered (#194): the button used to disappear whenever the
               file wasn't under review, which moved every icon to its right and
               hid the feature's existence. Now it stays put and unavailability is
@@ -3238,31 +3185,63 @@ export function EditorPage() {
               </IconButton>
             </span>
           </Tooltip>
-          <Button
-            size="small"
-            variant="outlined"
-            color="inherit"
-            endIcon={<ArrowDropDownIcon />}
-            onClick={(e) => setViewMenuAnchor(e.currentTarget)}
-            aria-haspopup="menu"
-            data-testid="editor-view-menu"
-            sx={{
-              flexShrink: 0,
-              minWidth: 0,
-              py: 0,
-              color: "text.secondary",
-              borderColor: "divider",
-            }}
-          >
-            表示
-          </Button>
+          {/* Outside the box above, which clips when the header is narrow:
+              this menu is the only way to copy or save on demand. #394: the
+              表示 menu (a 71px text button) moved in here as its own section,
+              so the header is all 30px icons. */}
+          <Tooltip title="ファイルの操作と表示">
+            <IconButton
+              size="small"
+              sx={{ flexShrink: 0 }}
+              onClick={(e) => setFileMenuAnchor(e.currentTarget)}
+              aria-label="file actions"
+              aria-haspopup="menu"
+              data-testid="editor-file-menu"
+            >
+              <MoreHorizIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
           <Menu
-            anchorEl={viewMenuAnchor}
-            open={viewMenuAnchor !== null}
-            onClose={() => setViewMenuAnchor(null)}
+            anchorEl={fileMenuAnchor}
+            open={fileMenuAnchor !== null}
+            onClose={() => setFileMenuAnchor(null)}
             anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
             transformOrigin={{ vertical: "top", horizontal: "right" }}
+            MenuListProps={{ dense: true }}
           >
+            {activeFile && [
+              <ListSubheader key="file-h" sx={{ lineHeight: "28px" }}>
+                ファイル
+              </ListSubheader>,
+              <MenuItem
+                key="copy"
+                onClick={() => {
+                  setFileMenuAnchor(null);
+                  void handleCopyMarkdown();
+                }}
+                data-testid="editor-copy-markdown"
+              >
+                <ListItemIcon>
+                  <ContentCopyIcon fontSize="small" />
+                </ListItemIcon>
+                <ListItemText>Markdown をコピー</ListItemText>
+              </MenuItem>,
+              <MenuItem
+                key="save"
+                disabled={!canSave || isSaving}
+                onClick={() => {
+                  setFileMenuAnchor(null);
+                  void handleSave();
+                }}
+                data-testid="editor-save"
+              >
+                <ListItemIcon>
+                  <SaveIcon fontSize="small" />
+                </ListItemIcon>
+                <ListItemText>今すぐ保存</ListItemText>
+              </MenuItem>,
+            ]}
+            <ListSubheader sx={{ lineHeight: "28px" }}>表示</ListSubheader>
             <MenuItem
               onClick={toggleCentered}
               role="menuitemcheckbox"
@@ -3284,6 +3263,8 @@ export function EditorPage() {
               <ListItemText>行番号</ListItemText>
             </MenuItem>
           </Menu>
+          {/* #394: groups — this file | the AI | the comment pane. */}
+          <Divider orientation="vertical" flexItem sx={{ my: 1 }} />
           {/* #366/#390: the send button carries the AI's state and the new-reply
               badge itself, so the result shows where the click was made. */}
           <AiSendButton
@@ -3329,7 +3310,15 @@ export function EditorPage() {
             </Box>
           )}
           {/* #389: while the comment pane is closed, this reopens it. Icon
-              only; the badge counts open comments like the summary button's. */}
+              only; the badge counts open comments like the summary button's.
+              #394: it sits exactly where the pane's close button was. This
+              header's right padding is 16px (px: 2) and the pane title row's
+              4px (pr: 0.5), so shift it right by the 12px difference —
+              `transform`, like the sidebar button (#221), so its footprint in
+              the row and every button to its left stay put. */}
+          {!isCommentPaneOpen && (
+            <Divider orientation="vertical" flexItem sx={{ my: 1 }} />
+          )}
           {!isCommentPaneOpen && (
             <Tooltip title="コメントを開く">
               <IconButton
@@ -3340,7 +3329,7 @@ export function EditorPage() {
                 }}
                 aria-label="コメントを開く"
                 data-testid="comment-pane-open"
-                sx={{ ml: 0.75, flexShrink: 0 }}
+                sx={{ flexShrink: 0, transform: "translateX(12px)" }}
               >
                 <CommentOutlinedIcon fontSize="small" />
                 {openCommentCount > 0 && (
@@ -3348,6 +3337,7 @@ export function EditorPage() {
                     count={openCommentCount}
                     label="未解決"
                     testId="comment-pane-open-badge"
+                    atEdge
                   />
                 )}
               </IconButton>

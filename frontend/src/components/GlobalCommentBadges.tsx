@@ -1,63 +1,76 @@
-import Box from "@mui/material/Box";
-import Chip from "@mui/material/Chip";
+import IconButton from "@mui/material/IconButton";
 import Tooltip from "@mui/material/Tooltip";
 import PublicIcon from "@mui/icons-material/Public";
 import WarningAmberIcon from "@mui/icons-material/WarningAmber";
+import { CountBadge } from "./CountBadge";
 
 export type GlobalBadgeKind = "global" | "orphan";
 
 interface Props {
   globalCount: number;
   orphanCount: number;
+  /** The orphan button only means something once the file is under review;
+   *  before that there are no comments to have lost their place. */
+  showOrphan?: boolean;
   onOpen: (kind: GlobalBadgeKind) => void;
+  /** Opens the global-comment composer beside `anchor`. The globe goes
+   *  straight here while there is nothing to list yet. */
+  onAddGlobal: (anchor: DOMRect) => void;
 }
 
-/** Pressable badges in the comment pane's status row (#316, moved up from a
- *  row of their own in #390). Global-scope and orphan comments have no live anchor to render
- *  beside in the document body, so instead of permanently occupying space
- *  above the editor (the old DocumentTopComments, #309) they collapse to a
- *  count here — click one to see the full threads in GlobalCommentsDialog.
- *  A badge with a zero count doesn't render, and if both counts are zero
- *  this component renders nothing at all. */
-export function GlobalCommentBadges({ globalCount, orphanCount, onOpen }: Props) {
-  if (globalCount === 0 && orphanCount === 0) return null;
+/** The 位置不明 and 全体 buttons of the comment pane's second row (#316, #390).
+ *  #394: they used to be a "全体 N" chip next to a separate globe button for
+ *  adding one — two globes meaning two things. Now a single globe carries the
+ *  count: with global comments it opens GlobalCommentsDialog (whose footer
+ *  adds one), with none it opens the composer directly. The orphan button is
+ *  view-only (an orphan cannot be created) and renders only while it has a
+ *  count, so the globe and the add button to its right never move. */
+export function GlobalCommentBadges({
+  globalCount,
+  orphanCount,
+  showOrphan = true,
+  onOpen,
+  onAddGlobal,
+}: Props) {
+  const globalLabel =
+    globalCount > 0
+      ? `ファイル全体へのコメント（${globalCount} 件）`
+      : "ファイル全体にコメントを追加（選択不要・未取り込みなら自動で取り込む）";
+  const orphanLabel = `位置不明のコメント（${orphanCount} 件）`;
 
   return (
-    <Box
-      sx={{ display: "flex", gap: 0.5, flexShrink: 0 }}
-      data-testid="global-comment-badges"
-    >
-      {globalCount > 0 && (
-        <Chip
-          icon={<PublicIcon fontSize="small" />}
-          label={`全体 ${globalCount}`}
-          size="small"
-          color="info"
-          onClick={() => onOpen("global")}
-          data-testid="global-comment-badge"
-          aria-label={`全体コメント ${globalCount} 件`}
-          sx={{ cursor: "pointer" }}
-        />
-      )}
-      {orphanCount > 0 && (
-        <Tooltip title="位置不明">
-          <Chip
-            icon={<WarningAmberIcon fontSize="small" />}
-            // The warning mark comes from the Chip's icon — repeating it in
-            // the label showed two of them side by side (#318).
-            // The label is the number only; "位置不明" is the tooltip and the
-            // accessible name (#390).
-            label={String(orphanCount)}
+    <>
+      {showOrphan && orphanCount > 0 && (
+        <Tooltip title={orphanLabel}>
+          <IconButton
             size="small"
             color="warning"
-            variant="outlined"
             onClick={() => onOpen("orphan")}
+            aria-label={orphanLabel}
             data-testid="orphan-comment-badge"
-            aria-label={`位置不明コメント ${orphanCount} 件`}
-            sx={{ cursor: "pointer" }}
-          />
+            sx={{ flexShrink: 0 }}
+          >
+            <WarningAmberIcon fontSize="small" />
+            <CountBadge count={orphanCount} color="warning" />
+          </IconButton>
         </Tooltip>
       )}
-    </Box>
+      <Tooltip title={globalLabel}>
+        <IconButton
+          size="small"
+          color="primary"
+          onClick={(e) => {
+            if (globalCount > 0) onOpen("global");
+            else onAddGlobal(e.currentTarget.getBoundingClientRect());
+          }}
+          aria-label={globalLabel}
+          data-testid="global-comment-badge"
+          sx={{ flexShrink: 0 }}
+        >
+          <PublicIcon fontSize="small" />
+          {globalCount > 0 && <CountBadge count={globalCount} />}
+        </IconButton>
+      </Tooltip>
+    </>
   );
 }

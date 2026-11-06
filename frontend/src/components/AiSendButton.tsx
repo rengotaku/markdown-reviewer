@@ -116,7 +116,24 @@ export function AiSendButton({
             aria-describedby={descId}
             data-testid="editor-copy-review-command"
             sx={[
-              { minWidth: 0, px: 1, py: 0.5, lineHeight: 0 },
+              // #394: a 22px disc, so it reads the same size as the header's
+              // 20px icons, inside the same 30×30 hit area — the ::before
+              // ring extends the click target 4px past the disc.
+              {
+                minWidth: 0,
+                width: 22,
+                height: 22,
+                p: 0,
+                m: "4px",
+                borderRadius: "50%",
+                lineHeight: 0,
+                "&::before": {
+                  content: '""',
+                  position: "absolute",
+                  inset: -4,
+                  borderRadius: "50%",
+                },
+              },
               isNone
                 ? {
                     borderStyle: "dashed",
@@ -129,13 +146,13 @@ export function AiSendButton({
           >
             {isBusy ? (
               <CircularProgress
-                size={18}
+                size={14}
                 color="inherit"
                 thickness={5}
                 data-testid="editor-send-spinner"
               />
             ) : (
-              <SendIcon fontSize="small" data-testid="editor-send-icon" />
+              <SendIcon sx={{ fontSize: 14, ml: "2px" }} data-testid="editor-send-icon" />
             )}
             {unsentCount !== null && unsentCount > 0 && (
               <CountBadge
