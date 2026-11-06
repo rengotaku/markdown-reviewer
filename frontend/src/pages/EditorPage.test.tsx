@@ -2577,6 +2577,82 @@ describe("EditorPage jump to comment (#167)", () => {
       });
       expect(screen.queryByTestId("orphan-comment-badge")).toBeNull();
     });
+
+    // #396: a refetch nulls commentsLoadedForPath until it lands. A recompute
+    // in that window used to rebuild the verdicts empty, and an unchanged
+    // response never re-triggered one, so the badge sat at 0.
+    it("keeps the badge while comments are being refetched (#396)", async () => {
+      const { http, HttpResponse } = await import("msw");
+      const { server } = await import("@/test/mocks/server");
+      class MockEventSource {
+        static instances: MockEventSource[] = [];
+        onopen: (() => void) | null = null;
+        onerror: (() => void) | null = null;
+        onmessage: ((e: MessageEvent<string>) => void) | null = null;
+        url: string;
+        constructor(url: string) {
+          this.url = url;
+          MockEventSource.instances.push(this);
+        }
+        emitMessage(data: unknown) {
+          this.onmessage?.({ data: JSON.stringify(data) } as MessageEvent<string>);
+        }
+        close() {}
+      }
+      vi.stubGlobal("EventSource", MockEventSource);
+      const nextFrames = () =>
+        act(async () => {
+          await new Promise((resolve) => requestAnimationFrame(resolve));
+          await new Promise((resolve) => requestAnimationFrame(resolve));
+        });
+
+      try {
+        const comments = [unplaceable()];
+        await openReadmeWithComments(comments);
+        const ed = installFakeEditor(
+          "<p>mock content</p><table><tbody><tr><td>手段</td><td>インターコム</td></tr></tbody></table>"
+        );
+        expect(await screen.findByTestId("orphan-comment-badge")).toHaveTextContent(/^1$/);
+
+        // Hold the refetch open so the window stays observable.
+        let release: () => void = () => {};
+        const gate = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        server.use(
+          http.get("http://localhost:8080/api/comments/*", async () => {
+            await gate;
+            return HttpResponse.json({
+              file: "README.md",
+              root: "mock-root",
+              summary: { total: comments.length, by_scope: {}, by_status: {} },
+              comments,
+            });
+          })
+        );
+        act(() => {
+          MockEventSource.instances[0].emitMessage({
+            kind: "comments",
+            root: "mock-root",
+            path: "README.md",
+          });
+        });
+        await nextFrames();
+        // A transaction mid-refetch (any edit / selection change) recomputes.
+        act(() => {
+          ed.view.dispatch(ed.state.tr);
+        });
+        await nextFrames();
+        expect(screen.getByTestId("orphan-comment-badge")).toHaveTextContent(/^1$/);
+
+        release();
+        await nextFrames();
+        await nextFrames();
+        expect(screen.getByTestId("orphan-comment-badge")).toHaveTextContent(/^1$/);
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
   });
 
   describe("comment_id deeplink (STEP 3)", () => {
