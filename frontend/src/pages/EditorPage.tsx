@@ -1615,6 +1615,8 @@ export function EditorPage() {
     const next: Record<string, number> = {};
     const unresolved = new Set<string>();
     let blocks: AnchorBlock[] | null = null;
+    // Judged once per recompute, and only when some anchor fails to resolve.
+    let docIsActiveFile: boolean | null = null;
     for (const c of comments) {
       if (c.scope === "global" || c.orphan) continue;
       const el = root.querySelector<HTMLElement>(
@@ -1633,8 +1635,16 @@ export function EditorPage() {
       blocks ??= extractAnchorBlocks(editor.state.doc);
       const m = measureAnchor(c, blocks);
       if (m.kind === "measured") next[c.id] = m.top;
-      else if (m.kind === "unresolvable" && docHoldsActiveFile(blocks))
-        unresolved.add(c.id);
+      else if (m.kind === "unresolvable") {
+        docIsActiveFile ??= docHoldsActiveFile(blocks);
+        // #396: when the document can't be judged against (e.g. the window
+        // while comments are being refetched, where commentsLoadedForPath is
+        // null), keep the previous verdict instead of dropping it — rebuilding
+        // the set empty here made the 位置不明 badge fall to 0 until the next
+        // scroll. A file switch empties `comments` first, so the previous
+        // file's verdicts never carry over.
+        if (docIsActiveFile || unresolvedIds.has(c.id)) unresolved.add(c.id);
+      }
     }
     // Skip the state update (and the render + downstream effects it would
     // trigger) when nothing actually moved — a `transaction` fires on every
@@ -1694,7 +1704,10 @@ export function EditorPage() {
   // event) rather than firing the DOM read synchronously from each listener.
   useEffect(() => {
     scheduleAnchorRecalcRef.current();
-  }, [comments, editor, centered, isCommentPaneOpen]);
+    // commentsLoadedForPath (#396): a refetch that returns an unchanged list
+    // keeps `comments` as is, so this is what re-judges anchors once the
+    // fetch lands.
+  }, [comments, editor, centered, isCommentPaneOpen, commentsLoadedForPath]);
   useEffect(() => {
     if (!editor || editor.isDestroyed) return;
     const onUpdate = () => scheduleAnchorRecalcRef.current();
