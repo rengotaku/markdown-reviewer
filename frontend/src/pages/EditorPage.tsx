@@ -1571,8 +1571,18 @@ export function EditorPage() {
   // document, so the pane can show them as 位置不明 instead of dropping them
   // (#328). Empty while the document isn't ready to be judged against — see
   // the guard in recomputeAnchorTops.
-  const [unresolvedIds, setUnresolvedIds] = useState<ReadonlySet<string>>(
-    () => new Set()
+  // #396: kept with the fileKey it was judged for. Comment ids are numbered
+  // per file (c-001, ...), so a verdict must never be read against another
+  // file's comments — and a file switch can't rely on the empty-`comments`
+  // recompute to clear it, since rAF coalescing may skip that frame.
+  const [unresolvedVerdict, setUnresolvedVerdict] = useState<{
+    key: string;
+    ids: ReadonlySet<string>;
+  }>(() => ({ key: "", ids: new Set() }));
+  const unresolvedIds = useMemo<ReadonlySet<string>>(
+    () =>
+      unresolvedVerdict.key === fileKey ? unresolvedVerdict.ids : new Set<string>(),
+    [unresolvedVerdict, fileKey]
   );
   // Whether the document the editor currently holds is the active file's
   // (#328). "This anchor resolves nowhere" is only worth reporting to the
@@ -1641,8 +1651,8 @@ export function EditorPage() {
         // while comments are being refetched, where commentsLoadedForPath is
         // null), keep the previous verdict instead of dropping it — rebuilding
         // the set empty here made the 位置不明 badge fall to 0 until the next
-        // scroll. A file switch empties `comments` first, so the previous
-        // file's verdicts never carry over.
+        // scroll. `unresolvedIds` only holds verdicts made for this fileKey,
+        // so the previous file's never carry over.
         if (docIsActiveFile || unresolvedIds.has(c.id)) unresolved.add(c.id);
       }
     }
@@ -1666,7 +1676,11 @@ export function EditorPage() {
         ? prev
         : box
     );
-    setUnresolvedIds((prev) => (sameIdSet(prev, unresolved) ? prev : unresolved));
+    setUnresolvedVerdict((prev) =>
+      prev.key === fileKey && sameIdSet(prev.ids, unresolved)
+        ? prev
+        : { key: fileKey, ids: unresolved }
+    );
   };
   // #306 root cause: `scheduleAnchorRecalc` coalesces bursts of triggers onto
   // a single rAF via `anchorRafRef` — but the callback closed over
