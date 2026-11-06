@@ -242,9 +242,21 @@ describe("CommentSidePane", () => {
     expect(screen.getByTestId("comment-filter-resolved")).toHaveAccessibleName(
       "解決済み（1 件）を表示"
     );
-    await user.hover(screen.getByTestId("comment-filter-resolved").firstElementChild!);
+    await user.hover(screen.getByTestId("comment-filter-all"));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("すべて（2 件）を表示");
+    await user.unhover(screen.getByTestId("comment-filter-all"));
+    await waitFor(() => expect(screen.queryByRole("tooltip")).toBeNull());
+    // Keyboard users get the same description on focus, and Space switches.
+    await user.click(screen.getByTestId("comment-filter-open"));
+    await user.tab();
+    expect(screen.getByTestId("comment-filter-resolved")).toHaveFocus();
     expect(await screen.findByRole("tooltip")).toHaveTextContent(
       "解決済み（1 件）を表示"
+    );
+    await user.keyboard(" ");
+    expect(screen.getByTestId("comment-filter-resolved")).toHaveAttribute(
+      "aria-pressed",
+      "true"
     );
     await chooseStatus(user, "all");
     await waitFor(() => expect(screen.getAllByTestId("comment-item")).toHaveLength(2));

@@ -64,16 +64,16 @@ export function StatusFilterToggle({
       {OPTIONS.map(({ value: v, label, Icon }) => {
         const name = `${label}（${counts[v]} 件）を表示`;
         return (
-          <ToggleButton
-            key={v}
-            value={v}
-            aria-label={name}
-            data-testid={`comment-filter-${v}`}
-            sx={{ px: 0.75, py: 0, fontSize: "0.75rem", lineHeight: 1 }}
-          >
-            {/* The Tooltip sits inside: ToggleButtonGroup clones its direct
-                children and needs them to be the ToggleButtons. */}
-            <Tooltip title={name}>
+          // The Tooltip wraps the button itself (ToggleButtonGroup hands its
+          // state down by context, so it needn't be a direct child) so the
+          // description shows on keyboard focus as well as on hover.
+          <Tooltip key={v} title={name}>
+            <ToggleButton
+              value={v}
+              aria-label={name}
+              data-testid={`comment-filter-${v}`}
+              sx={{ px: 0.75, py: 0, fontSize: "0.75rem", lineHeight: 1 }}
+            >
               <Box
                 component="span"
                 sx={{ display: "inline-flex", alignItems: "center", gap: 0.375 }}
@@ -81,8 +81,8 @@ export function StatusFilterToggle({
                 <Icon sx={{ fontSize: 16 }} />
                 <span style={{ fontVariantNumeric: "tabular-nums" }}>{counts[v]}</span>
               </Box>
-            </Tooltip>
-          </ToggleButton>
+            </ToggleButton>
+          </Tooltip>
         );
       })}
     </ToggleButtonGroup>
