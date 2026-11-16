@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"log"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -405,9 +406,14 @@ func TestSummaryNoMatch(t *testing.T) {
 // separate parts of the send's log line.
 func TestSendTimesVerifyAndWrite(t *testing.T) {
 	var buf bytes.Buffer
-	prev := slog.Default()
+	// slog.SetDefault also redirects the standard log package; restore both.
+	prev, prevOut, prevFlags := slog.Default(), log.Writer(), log.Flags()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
-	t.Cleanup(func() { slog.SetDefault(prev) })
+	t.Cleanup(func() {
+		slog.SetDefault(prev)
+		log.SetOutput(prevOut)
+		log.SetFlags(prevFlags)
+	})
 
 	adapter, put := fixture(t)
 	put(metadata{PID: 1, SessionID: "s", Cwd: "/work", Status: "idle"})

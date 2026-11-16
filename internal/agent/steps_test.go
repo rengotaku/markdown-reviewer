@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"log"
 	"log/slog"
 	"strings"
 	"testing"
@@ -16,9 +17,14 @@ import (
 func captureSendLogs(t *testing.T) func() []map[string]any {
 	t.Helper()
 	var buf bytes.Buffer
-	prev := slog.Default()
+	// slog.SetDefault also redirects the standard log package; restore both.
+	prev, prevOut, prevFlags := slog.Default(), log.Writer(), log.Flags()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
-	t.Cleanup(func() { slog.SetDefault(prev) })
+	t.Cleanup(func() {
+		slog.SetDefault(prev)
+		log.SetOutput(prevOut)
+		log.SetFlags(prevFlags)
+	})
 	return func() []map[string]any {
 		var lines []map[string]any
 		for _, raw := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
