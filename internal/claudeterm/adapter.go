@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"markdown-reviewer/internal/agent"
@@ -34,8 +35,24 @@ type metadata struct {
 type Adapter struct {
 	writer  terminal.Writer
 	process func(context.Context, metadata) (string, bool)
-	dir     string
+	// liveness remembers whether a process incarnation (PID + start time) is
+	// alive, so the editor's status polling (#399) does not start one `ps`
+	// per session on every poll. Under load those runs used to overrun the
+	// status request's deadline, and sessions not yet checked were dropped as
+	// dead, so the editor showed "no session" for a live one. An incarnation
+	// that is dead stays dead; one that is alive is checked again by Send,
+	// which forgets it when it is gone. Guarded by mu.
+	liveness map[incarnation]bool
+	dir      string
+	mu       sync.Mutex
 }
+
+type incarnation struct {
+	start string
+	pid   int
+}
+
+func incarnationOf(s metadata) incarnation { return incarnation{pid: s.PID, start: s.ProcStart} }
 
 func New(writer terminal.Writer) *Adapter {
 	dir := os.Getenv("CLAUDE_CONFIG_DIR")
@@ -43,7 +60,7 @@ func New(writer terminal.Writer) *Adapter {
 		home, _ := os.UserHomeDir()
 		dir = filepath.Join(home, ".claude")
 	}
-	return &Adapter{dir: filepath.Join(dir, "sessions"), process: processTTY, writer: writer}
+	return &Adapter{dir: filepath.Join(dir, "sessions"), process: processTTY, writer: writer, liveness: map[incarnation]bool{}}
 }
 
 var _ agent.Summarizer = (*Adapter)(nil)
@@ -88,13 +105,54 @@ func (a *Adapter) Sessions(ctx context.Context) ([]agent.Session, error) {
 		return nil, err
 	}
 	var sessions []agent.Session
+	seen := make(map[incarnation]struct{}, len(entries))
 	for _, s := range entries {
-		if _, alive := a.process(ctx, s); !alive {
+		key := incarnationOf(s)
+		seen[key] = struct{}{}
+		if !a.alive(ctx, s, key) {
 			continue
 		}
 		sessions = append(sessions, agent.Session{ID: s.SessionID, Cwd: s.Cwd, Name: s.Name, Instance: s.ProcStart, PID: s.PID, Ready: readyForInput(s.Status), Background: s.Status == "shell"})
 	}
+	a.forgetExcept(seen)
 	return sessions, nil
+}
+
+// alive answers from the remembered liveness, running `ps` only for an
+// incarnation seen for the first time. A check cut short by ctx is not
+// remembered, so the next call checks again instead of keeping a live
+// session out for good.
+func (a *Adapter) alive(ctx context.Context, s metadata, key incarnation) bool {
+	a.mu.Lock()
+	alive, known := a.liveness[key]
+	a.mu.Unlock()
+	if known {
+		return alive
+	}
+	_, alive = a.process(ctx, s)
+	if !alive && ctx.Err() != nil {
+		return false
+	}
+	a.remember(key, alive)
+	return alive
+}
+
+func (a *Adapter) remember(key incarnation, alive bool) {
+	a.mu.Lock()
+	a.liveness[key] = alive
+	a.mu.Unlock()
+}
+
+// forgetExcept drops incarnations whose metadata file is gone, so the map
+// does not grow with every session that ever ran.
+func (a *Adapter) forgetExcept(seen map[incarnation]struct{}) {
+	a.mu.Lock()
+	for key := range a.liveness {
+		if _, ok := seen[key]; !ok {
+			delete(a.liveness, key)
+		}
+	}
+	a.mu.Unlock()
 }
 
 func (a *Adapter) Send(ctx context.Context, target agent.Session, text string) error {
@@ -106,10 +164,16 @@ func (a *Adapter) Send(ctx context.Context, target agent.Session, text string) e
 		if s.SessionID != target.ID || s.PID != target.PID || s.ProcStart != target.Instance {
 			continue
 		}
+		// Always a fresh check: this is where a remembered "alive" turns out
+		// to be stale, and a session that has exited is forgotten here.
 		tty, alive := a.process(ctx, s)
 		if !alive {
+			if ctx.Err() == nil {
+				a.remember(incarnationOf(s), false)
+			}
 			return agent.ErrNoSession
 		}
+		a.remember(incarnationOf(s), true)
 		if !readyForInput(s.Status) {
 			return agent.ErrBusy
 		}
