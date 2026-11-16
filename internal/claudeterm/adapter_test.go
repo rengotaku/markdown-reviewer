@@ -231,7 +231,78 @@ func TestADeadVerdictIsNotOverwritten(t *testing.T) {
 	key := incarnation{pid: 1, start: "start"}
 	require.False(t, adapter.remember(key, false))
 	require.False(t, adapter.remember(key, true))
-	require.False(t, adapter.liveness[key])
+	require.False(t, adapter.liveness[key].alive)
+}
+
+// fakeClock lets a test move time past aliveFor.
+func fakeClock(adapter *Adapter) *time.Time {
+	now := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+	adapter.now = func() time.Time { return now }
+	return &now
+}
+
+// FND-6 in #399: a session that exits while busy is never reached by a send,
+// so only the expiry can drop it — and with it gone, the status and the send
+// move to the live session in the same directory.
+func TestAnExitedBusySessionDropsOutAfterExpiry(t *testing.T) {
+	adapter, put := fixture(t)
+	now := fakeClock(adapter)
+	put(metadata{PID: 1, SessionID: "owner", Cwd: "/work", Status: "busy"})
+	put(metadata{PID: 2, SessionID: "other", Cwd: "/work", Status: "idle"})
+	service := agent.New(adapter)
+	require.True(t, service.Register(context.Background(), "/work/a.md", agent.Identity{AgentID: "claude", SessionID: "owner", PID: 1}))
+	require.Equal(t, "busy", service.Status(context.Background(), "/work/a.md").State)
+
+	live := adapter.process
+	adapter.process = func(ctx context.Context, s metadata) (string, bool, error) {
+		if s.PID == 1 {
+			return "", false, nil
+		}
+		return live(ctx, s)
+	}
+	*now = now.Add(aliveFor - time.Second)
+	require.Equal(t, "busy", service.Status(context.Background(), "/work/a.md").State)
+
+	*now = now.Add(2 * time.Second)
+	require.Equal(t, "idle", service.Status(context.Background(), "/work/a.md").State)
+	require.True(t, service.Send(context.Background(), "/work/a.md").Sent)
+}
+
+// An expired "alive" whose re-check cannot decide stays alive, and is checked
+// again on the next lookup rather than trusted for another aliveFor.
+func TestAnUndecidedRecheckKeepsAlive(t *testing.T) {
+	adapter, put := fixture(t)
+	now := fakeClock(adapter)
+	put(metadata{PID: 1, SessionID: "s", Cwd: "/work", Status: "idle"})
+	_, err := adapter.Sessions(context.Background())
+	require.NoError(t, err)
+
+	calls := 0
+	adapter.process = func(context.Context, metadata) (string, bool, error) {
+		calls++
+		return "", false, context.DeadlineExceeded
+	}
+	*now = now.Add(aliveFor)
+	for range 2 {
+		sessions, err := adapter.Sessions(context.Background())
+		require.NoError(t, err)
+		require.Len(t, sessions, 1)
+	}
+	require.Equal(t, 2, calls)
+}
+
+// A dead verdict does not expire: the same incarnation cannot come back.
+func TestADeadVerdictDoesNotExpire(t *testing.T) {
+	adapter, put := fixture(t)
+	now := fakeClock(adapter)
+	put(metadata{PID: 99, SessionID: "dead", Cwd: "/work", Status: "idle"})
+	calls := countingProcess(adapter)
+	_, err := adapter.Sessions(context.Background())
+	require.NoError(t, err)
+	*now = now.Add(10 * aliveFor)
+	_, err = adapter.Sessions(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 1, calls[99])
 }
 
 func TestSessionsForgetsRemovedMetadata(t *testing.T) {

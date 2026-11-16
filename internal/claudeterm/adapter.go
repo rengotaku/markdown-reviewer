@@ -44,11 +44,22 @@ type Adapter struct {
 	// per session on every poll. Under load those runs used to overrun the
 	// status request's deadline, and sessions not yet checked were dropped as
 	// dead, so the editor showed "no session" for a live one. An incarnation
-	// that is dead stays dead; one that is alive is checked again by Send,
-	// which forgets it when it is gone. Guarded by mu.
-	liveness map[incarnation]bool
+	// that is dead stays dead. One that is alive is checked again once
+	// aliveFor has passed, and by every Send, so a session that exited —
+	// even while busy, when no send reaches it — drops out. Guarded by mu.
+	liveness map[incarnation]verdict
+	now      func() time.Time
 	dir      string
 	mu       sync.Mutex
+}
+
+// aliveFor is how long an "alive" verdict is trusted before the process is
+// checked again: the longest an exited session can still look present.
+const aliveFor = 30 * time.Second
+
+type verdict struct {
+	checked time.Time
+	alive   bool
 }
 
 type incarnation struct {
@@ -64,7 +75,7 @@ func New(writer terminal.Writer) *Adapter {
 		home, _ := os.UserHomeDir()
 		dir = filepath.Join(home, ".claude")
 	}
-	return &Adapter{dir: filepath.Join(dir, "sessions"), process: processTTY, writer: writer, liveness: map[incarnation]bool{}}
+	return &Adapter{dir: filepath.Join(dir, "sessions"), process: processTTY, writer: writer, liveness: map[incarnation]verdict{}, now: time.Now}
 }
 
 var _ agent.Summarizer = (*Adapter)(nil)
@@ -123,19 +134,21 @@ func (a *Adapter) Sessions(ctx context.Context) ([]agent.Session, error) {
 }
 
 // alive answers from the remembered liveness, running `ps` only for an
-// incarnation seen for the first time. A check that could not decide
-// (cut short by ctx, ps failing to run) is not remembered, so the next call
-// checks again instead of keeping a live session out for good.
+// incarnation seen for the first time or whose "alive" has expired. A check
+// that could not decide (cut short by ctx, ps failing to run) is not
+// remembered: a new incarnation counts as absent until a later check
+// decides, and an expired one keeps its last "alive" rather than turning
+// into "no session".
 func (a *Adapter) alive(ctx context.Context, s metadata, key incarnation) bool {
 	a.mu.Lock()
-	alive, known := a.liveness[key]
+	v, known := a.liveness[key]
 	a.mu.Unlock()
-	if known {
-		return alive
+	if known && (!v.alive || a.now().Sub(v.checked) < aliveFor) {
+		return v.alive
 	}
 	_, alive, err := a.process(ctx, s)
 	if err != nil {
-		return false
+		return known && v.alive
 	}
 	return a.remember(key, alive)
 }
@@ -146,10 +159,10 @@ func (a *Adapter) alive(ctx context.Context, s metadata, key incarnation) bool {
 func (a *Adapter) remember(key incarnation, alive bool) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if known, ok := a.liveness[key]; ok && !known {
+	if v, ok := a.liveness[key]; ok && !v.alive {
 		return false
 	}
-	a.liveness[key] = alive
+	a.liveness[key] = verdict{alive: alive, checked: a.now()}
 	return alive
 }
 
