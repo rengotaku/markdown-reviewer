@@ -24,8 +24,8 @@ func fixture(t *testing.T) (*Adapter, func(metadata)) {
 	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
 	adapter := New(writerFunc(func(context.Context, string, string) error { return nil }))
 	require.NoError(t, os.MkdirAll(adapter.dir, 0700))
-	adapter.process = func(_ context.Context, s metadata) (string, bool) {
-		return "/dev/ttys" + strconv.Itoa(s.PID), s.PID != 99
+	adapter.process = func(_ context.Context, s metadata) (string, bool, error) {
+		return "/dev/ttys" + strconv.Itoa(s.PID), s.PID != 99, nil
 	}
 	put := func(s metadata) {
 		t.Helper()
@@ -81,9 +81,9 @@ func TestSendRevalidatesMetadata(t *testing.T) {
 				raw.ProcStart = "new"
 				put(raw)
 			case "dead process":
-				adapter.process = func(context.Context, metadata) (string, bool) { return "", false }
+				adapter.process = func(context.Context, metadata) (string, bool, error) { return "", false, nil }
 			case "no terminal":
-				adapter.process = func(context.Context, metadata) (string, bool) { return "", true }
+				adapter.process = func(context.Context, metadata) (string, bool, error) { return "", true, nil }
 			}
 			adapter.writer = writerFunc(func(context.Context, string, string) error { t.Fatal("must not deliver"); return nil })
 			require.ErrorIs(t, adapter.Send(context.Background(), sessions[0], "command"), tc.want)
@@ -111,7 +111,7 @@ func TestBackgroundShellDelivery(t *testing.T) {
 func countingProcess(adapter *Adapter) map[int]int {
 	calls := map[int]int{}
 	inner := adapter.process
-	adapter.process = func(ctx context.Context, s metadata) (string, bool) {
+	adapter.process = func(ctx context.Context, s metadata) (string, bool, error) {
 		calls[s.PID]++
 		return inner(ctx, s)
 	}
@@ -164,16 +164,17 @@ func TestSessionsChecksANewIncarnation(t *testing.T) {
 	require.Equal(t, 2, calls[1])
 }
 
-// A check cut short by the request deadline is not a "dead" verdict.
-func TestSessionsDoesNotRememberACheckCutShort(t *testing.T) {
+// A check that could not decide (cut short by the request deadline, ps
+// failing to run) is not a "dead" verdict: the next lookup checks again.
+func TestSessionsDoesNotRememberAnInconclusiveCheck(t *testing.T) {
 	adapter, put := fixture(t)
 	put(metadata{PID: 1, SessionID: "s", Cwd: "/work", Status: "idle"})
-	expired, cancel := context.WithCancel(context.Background())
-	cancel()
 	live := adapter.process
-	adapter.process = func(context.Context, metadata) (string, bool) { return "", false }
+	adapter.process = func(context.Context, metadata) (string, bool, error) {
+		return "", false, context.DeadlineExceeded
+	}
 
-	sessions, err := adapter.Sessions(expired)
+	sessions, err := adapter.Sessions(context.Background())
 	require.NoError(t, err)
 	require.Empty(t, sessions)
 
@@ -192,12 +193,45 @@ func TestSendForgetsAnExitedSession(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, sessions, 1)
 
-	adapter.process = func(context.Context, metadata) (string, bool) { return "", false }
+	adapter.process = func(context.Context, metadata) (string, bool, error) { return "", false, nil }
 	require.ErrorIs(t, adapter.Send(context.Background(), sessions[0], "command"), agent.ErrNoSession)
 
 	sessions, err = adapter.Sessions(context.Background())
 	require.NoError(t, err)
 	require.Empty(t, sessions)
+}
+
+// An inconclusive check at send time is reported as such, not as "no session",
+// and does not change what is remembered.
+func TestSendReportsAnInconclusiveCheck(t *testing.T) {
+	adapter, put := fixture(t)
+	put(metadata{PID: 1, SessionID: "s", Cwd: "/work", Status: "idle"})
+	sessions, err := adapter.Sessions(context.Background())
+	require.NoError(t, err)
+
+	live := adapter.process
+	adapter.process = func(context.Context, metadata) (string, bool, error) {
+		return "", false, context.DeadlineExceeded
+	}
+	adapter.writer = writerFunc(func(context.Context, string, string) error { t.Fatal("must not deliver"); return nil })
+	err = adapter.Send(context.Background(), sessions[0], "command")
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.NotErrorIs(t, err, agent.ErrNoSession)
+
+	adapter.process = live
+	sessions, err = adapter.Sessions(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+}
+
+// A check that began before Send found the session gone must not bring it
+// back when it finishes later.
+func TestADeadVerdictIsNotOverwritten(t *testing.T) {
+	adapter, _ := fixture(t)
+	key := incarnation{pid: 1, start: "start"}
+	require.False(t, adapter.remember(key, false))
+	require.False(t, adapter.remember(key, true))
+	require.False(t, adapter.liveness[key])
 }
 
 func TestSessionsForgetsRemovedMetadata(t *testing.T) {
