@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -15,6 +16,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"markdown-reviewer/internal/agent"
@@ -32,10 +34,40 @@ type metadata struct {
 }
 
 type Adapter struct {
-	writer  terminal.Writer
-	process func(context.Context, metadata) (string, bool)
-	dir     string
+	writer terminal.Writer
+	// process reports the session's terminal and whether its process is
+	// alive. A non-nil error means liveness could not be determined (the
+	// check failed or was cut short), which is never taken as "dead".
+	process func(context.Context, metadata) (string, bool, error)
+	// liveness remembers whether a process incarnation (PID + start time) is
+	// alive, so the editor's status polling (#399) does not start one `ps`
+	// per session on every poll. Under load those runs used to overrun the
+	// status request's deadline, and sessions not yet checked were dropped as
+	// dead, so the editor showed "no session" for a live one. An incarnation
+	// that is dead stays dead. One that is alive is checked again once
+	// aliveFor has passed, and by every Send, so a session that exited —
+	// even while busy, when no send reaches it — drops out. Guarded by mu.
+	liveness map[incarnation]verdict
+	now      func() time.Time
+	dir      string
+	mu       sync.Mutex
 }
+
+// aliveFor is how long an "alive" verdict is trusted before the process is
+// checked again: the longest an exited session can still look present.
+const aliveFor = 30 * time.Second
+
+type verdict struct {
+	checked time.Time
+	alive   bool
+}
+
+type incarnation struct {
+	start string
+	pid   int
+}
+
+func incarnationOf(s metadata) incarnation { return incarnation{pid: s.PID, start: s.ProcStart} }
 
 func New(writer terminal.Writer) *Adapter {
 	dir := os.Getenv("CLAUDE_CONFIG_DIR")
@@ -43,7 +75,7 @@ func New(writer terminal.Writer) *Adapter {
 		home, _ := os.UserHomeDir()
 		dir = filepath.Join(home, ".claude")
 	}
-	return &Adapter{dir: filepath.Join(dir, "sessions"), process: processTTY, writer: writer}
+	return &Adapter{dir: filepath.Join(dir, "sessions"), process: processTTY, writer: writer, liveness: map[incarnation]verdict{}, now: time.Now}
 }
 
 var _ agent.Summarizer = (*Adapter)(nil)
@@ -88,13 +120,62 @@ func (a *Adapter) Sessions(ctx context.Context) ([]agent.Session, error) {
 		return nil, err
 	}
 	var sessions []agent.Session
+	seen := make(map[incarnation]struct{}, len(entries))
 	for _, s := range entries {
-		if _, alive := a.process(ctx, s); !alive {
+		key := incarnationOf(s)
+		seen[key] = struct{}{}
+		if !a.alive(ctx, s, key) {
 			continue
 		}
 		sessions = append(sessions, agent.Session{ID: s.SessionID, Cwd: s.Cwd, Name: s.Name, Instance: s.ProcStart, PID: s.PID, Ready: readyForInput(s.Status), Background: s.Status == "shell"})
 	}
+	a.forgetExcept(seen)
 	return sessions, nil
+}
+
+// alive answers from the remembered liveness, running `ps` only for an
+// incarnation seen for the first time or whose "alive" has expired. A check
+// that could not decide (cut short by ctx, ps failing to run) is not
+// remembered: a new incarnation counts as absent until a later check
+// decides, and an expired one keeps its last "alive" rather than turning
+// into "no session".
+func (a *Adapter) alive(ctx context.Context, s metadata, key incarnation) bool {
+	a.mu.Lock()
+	v, known := a.liveness[key]
+	a.mu.Unlock()
+	if known && (!v.alive || a.now().Sub(v.checked) < aliveFor) {
+		return v.alive
+	}
+	_, alive, err := a.process(ctx, s)
+	if err != nil {
+		return known && v.alive
+	}
+	return a.remember(key, alive)
+}
+
+// remember records a verdict and returns the one now on record. An
+// incarnation found dead stays dead: a check that started earlier and saw it
+// alive must not bring it back once Send has found it gone.
+func (a *Adapter) remember(key incarnation, alive bool) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if v, ok := a.liveness[key]; ok && !v.alive {
+		return false
+	}
+	a.liveness[key] = verdict{alive: alive, checked: a.now()}
+	return alive
+}
+
+// forgetExcept drops incarnations whose metadata file is gone, so the map
+// does not grow with every session that ever ran.
+func (a *Adapter) forgetExcept(seen map[incarnation]struct{}) {
+	a.mu.Lock()
+	for key := range a.liveness {
+		if _, ok := seen[key]; !ok {
+			delete(a.liveness, key)
+		}
+	}
+	a.mu.Unlock()
 }
 
 func (a *Adapter) Send(ctx context.Context, target agent.Session, text string) error {
@@ -106,8 +187,13 @@ func (a *Adapter) Send(ctx context.Context, target agent.Session, text string) e
 		if s.SessionID != target.ID || s.PID != target.PID || s.ProcStart != target.Instance {
 			continue
 		}
-		tty, alive := a.process(ctx, s)
-		if !alive {
+		// Always a fresh check: this is where a remembered "alive" turns out
+		// to be stale, and a session that has exited is forgotten here.
+		tty, alive, err := a.process(ctx, s)
+		if err != nil {
+			return err
+		}
+		if !a.remember(incarnationOf(s), alive) {
 			return agent.ErrNoSession
 		}
 		if !readyForInput(s.Status) {
@@ -140,28 +226,37 @@ func readyForInput(status string) bool {
 	return status == "idle" || status == "shell"
 }
 
-func processTTY(ctx context.Context, s metadata) (string, bool) {
+func processTTY(ctx context.Context, s metadata) (string, bool, error) {
 	if runtime.GOOS != "darwin" {
-		return "", false
+		return "", false, nil
 	}
 	cmd := exec.CommandContext(ctx, "/bin/ps", "-o", "tty=,lstart=,comm=", "-p", strconv.Itoa(s.PID))
 	// Claude's procStart is UTC, while ps otherwise formats in the local zone.
 	cmd.Env = append(os.Environ(), "TZ=UTC", "LC_ALL=C")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	raw, err := cmd.Output()
 	if err != nil {
-		return "", false
+		// ps exits 1 with no output at all when the PID does not exist; that
+		// is the only failure that proves the process is gone. Anything else
+		// (killed by ctx, failed to start, an error message) is inconclusive.
+		var exit *exec.ExitError
+		if errors.As(err, &exit) && exit.ExitCode() == 1 && len(bytes.TrimSpace(raw)) == 0 && stderr.Len() == 0 {
+			return "", false, nil
+		}
+		return "", false, err
 	}
 	fields := strings.Fields(string(raw))
 	if len(fields) < 7 || strings.Join(fields[1:6], " ") != strings.Join(strings.Fields(s.ProcStart), " ") {
-		return "", false
+		return "", false, nil
 	}
 	if !strings.Contains(strings.ToLower(filepath.Base(fields[6])), "claude") {
-		return "", false
+		return "", false, nil
 	}
 	if !ttyPattern.MatchString(fields[0]) {
-		return "", true
+		return "", true, nil
 	}
-	return "/dev/" + fields[0], true
+	return "/dev/" + fields[0], true, nil
 }
 
 // transcriptLine is the part of a conversation-log line needed to find the

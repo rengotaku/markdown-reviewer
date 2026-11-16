@@ -24,8 +24,8 @@ func fixture(t *testing.T) (*Adapter, func(metadata)) {
 	t.Setenv("CLAUDE_CONFIG_DIR", t.TempDir())
 	adapter := New(writerFunc(func(context.Context, string, string) error { return nil }))
 	require.NoError(t, os.MkdirAll(adapter.dir, 0700))
-	adapter.process = func(_ context.Context, s metadata) (string, bool) {
-		return "/dev/ttys" + strconv.Itoa(s.PID), s.PID != 99
+	adapter.process = func(_ context.Context, s metadata) (string, bool, error) {
+		return "/dev/ttys" + strconv.Itoa(s.PID), s.PID != 99, nil
 	}
 	put := func(s metadata) {
 		t.Helper()
@@ -81,9 +81,9 @@ func TestSendRevalidatesMetadata(t *testing.T) {
 				raw.ProcStart = "new"
 				put(raw)
 			case "dead process":
-				adapter.process = func(context.Context, metadata) (string, bool) { return "", false }
+				adapter.process = func(context.Context, metadata) (string, bool, error) { return "", false, nil }
 			case "no terminal":
-				adapter.process = func(context.Context, metadata) (string, bool) { return "", true }
+				adapter.process = func(context.Context, metadata) (string, bool, error) { return "", true, nil }
 			}
 			adapter.writer = writerFunc(func(context.Context, string, string) error { t.Fatal("must not deliver"); return nil })
 			require.ErrorIs(t, adapter.Send(context.Background(), sessions[0], "command"), tc.want)
@@ -105,6 +105,215 @@ func TestBackgroundShellDelivery(t *testing.T) {
 	require.True(t, service.Register(context.Background(), "/work/a.md", agent.Identity{AgentID: "claude", SessionID: "s", PID: 1}))
 	require.True(t, service.Send(context.Background(), "/work/a.md").Sent)
 	require.Equal(t, 1, calls)
+}
+
+// countingProcess wraps the fixture's process check and counts calls per PID.
+func countingProcess(adapter *Adapter) map[int]int {
+	calls := map[int]int{}
+	inner := adapter.process
+	adapter.process = func(ctx context.Context, s metadata) (string, bool, error) {
+		calls[s.PID]++
+		return inner(ctx, s)
+	}
+	return calls
+}
+
+// #399: status polling must not start one `ps` per session on every poll.
+func TestSessionsRemembersLiveness(t *testing.T) {
+	adapter, put := fixture(t)
+	put(metadata{PID: 1, SessionID: "live", Cwd: "/work", Status: "idle"})
+	put(metadata{PID: 99, SessionID: "dead", Cwd: "/work", Status: "idle"})
+	calls := countingProcess(adapter)
+
+	for range 3 {
+		sessions, err := adapter.Sessions(context.Background())
+		require.NoError(t, err)
+		require.Len(t, sessions, 1)
+		require.Equal(t, "live", sessions[0].ID)
+	}
+	require.Equal(t, map[int]int{1: 1, 99: 1}, calls)
+}
+
+func TestSessionsStillReadsStatusEachTime(t *testing.T) {
+	adapter, put := fixture(t)
+	raw := metadata{PID: 1, SessionID: "s", Cwd: "/work", Status: "idle"}
+	put(raw)
+	sessions, err := adapter.Sessions(context.Background())
+	require.NoError(t, err)
+	require.True(t, sessions[0].Ready)
+
+	raw.Status = "busy"
+	put(raw)
+	sessions, err = adapter.Sessions(context.Background())
+	require.NoError(t, err)
+	require.False(t, sessions[0].Ready)
+}
+
+func TestSessionsChecksANewIncarnation(t *testing.T) {
+	adapter, put := fixture(t)
+	raw := metadata{PID: 1, SessionID: "s", Cwd: "/work", Status: "idle"}
+	put(raw)
+	calls := countingProcess(adapter)
+	_, err := adapter.Sessions(context.Background())
+	require.NoError(t, err)
+
+	raw.ProcStart = "restarted"
+	put(raw)
+	_, err = adapter.Sessions(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 2, calls[1])
+}
+
+// A check that could not decide (cut short by the request deadline, ps
+// failing to run) is not a "dead" verdict: the next lookup checks again.
+func TestSessionsDoesNotRememberAnInconclusiveCheck(t *testing.T) {
+	adapter, put := fixture(t)
+	put(metadata{PID: 1, SessionID: "s", Cwd: "/work", Status: "idle"})
+	live := adapter.process
+	adapter.process = func(context.Context, metadata) (string, bool, error) {
+		return "", false, context.DeadlineExceeded
+	}
+
+	sessions, err := adapter.Sessions(context.Background())
+	require.NoError(t, err)
+	require.Empty(t, sessions)
+
+	adapter.process = live
+	sessions, err = adapter.Sessions(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+}
+
+// A remembered "alive" that turns out stale at send time is forgotten, so the
+// next lookup no longer offers the exited session.
+func TestSendForgetsAnExitedSession(t *testing.T) {
+	adapter, put := fixture(t)
+	put(metadata{PID: 1, SessionID: "s", Cwd: "/work", Status: "idle"})
+	sessions, err := adapter.Sessions(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+
+	adapter.process = func(context.Context, metadata) (string, bool, error) { return "", false, nil }
+	require.ErrorIs(t, adapter.Send(context.Background(), sessions[0], "command"), agent.ErrNoSession)
+
+	sessions, err = adapter.Sessions(context.Background())
+	require.NoError(t, err)
+	require.Empty(t, sessions)
+}
+
+// An inconclusive check at send time is reported as such, not as "no session",
+// and does not change what is remembered.
+func TestSendReportsAnInconclusiveCheck(t *testing.T) {
+	adapter, put := fixture(t)
+	put(metadata{PID: 1, SessionID: "s", Cwd: "/work", Status: "idle"})
+	sessions, err := adapter.Sessions(context.Background())
+	require.NoError(t, err)
+
+	live := adapter.process
+	adapter.process = func(context.Context, metadata) (string, bool, error) {
+		return "", false, context.DeadlineExceeded
+	}
+	adapter.writer = writerFunc(func(context.Context, string, string) error { t.Fatal("must not deliver"); return nil })
+	err = adapter.Send(context.Background(), sessions[0], "command")
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.NotErrorIs(t, err, agent.ErrNoSession)
+
+	adapter.process = live
+	sessions, err = adapter.Sessions(context.Background())
+	require.NoError(t, err)
+	require.Len(t, sessions, 1)
+}
+
+// A check that began before Send found the session gone must not bring it
+// back when it finishes later.
+func TestADeadVerdictIsNotOverwritten(t *testing.T) {
+	adapter, _ := fixture(t)
+	key := incarnation{pid: 1, start: "start"}
+	require.False(t, adapter.remember(key, false))
+	require.False(t, adapter.remember(key, true))
+	require.False(t, adapter.liveness[key].alive)
+}
+
+// fakeClock lets a test move time past aliveFor.
+func fakeClock(adapter *Adapter) *time.Time {
+	now := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+	adapter.now = func() time.Time { return now }
+	return &now
+}
+
+// FND-6 in #399: a session that exits while busy is never reached by a send,
+// so only the expiry can drop it — and with it gone, the status and the send
+// move to the live session in the same directory.
+func TestAnExitedBusySessionDropsOutAfterExpiry(t *testing.T) {
+	adapter, put := fixture(t)
+	now := fakeClock(adapter)
+	put(metadata{PID: 1, SessionID: "owner", Cwd: "/work", Status: "busy"})
+	put(metadata{PID: 2, SessionID: "other", Cwd: "/work", Status: "idle"})
+	service := agent.New(adapter)
+	require.True(t, service.Register(context.Background(), "/work/a.md", agent.Identity{AgentID: "claude", SessionID: "owner", PID: 1}))
+	require.Equal(t, "busy", service.Status(context.Background(), "/work/a.md").State)
+
+	live := adapter.process
+	adapter.process = func(ctx context.Context, s metadata) (string, bool, error) {
+		if s.PID == 1 {
+			return "", false, nil
+		}
+		return live(ctx, s)
+	}
+	*now = now.Add(aliveFor - time.Second)
+	require.Equal(t, "busy", service.Status(context.Background(), "/work/a.md").State)
+
+	*now = now.Add(2 * time.Second)
+	require.Equal(t, "idle", service.Status(context.Background(), "/work/a.md").State)
+	require.True(t, service.Send(context.Background(), "/work/a.md").Sent)
+}
+
+// An expired "alive" whose re-check cannot decide stays alive, and is checked
+// again on the next lookup rather than trusted for another aliveFor.
+func TestAnUndecidedRecheckKeepsAlive(t *testing.T) {
+	adapter, put := fixture(t)
+	now := fakeClock(adapter)
+	put(metadata{PID: 1, SessionID: "s", Cwd: "/work", Status: "idle"})
+	_, err := adapter.Sessions(context.Background())
+	require.NoError(t, err)
+
+	calls := 0
+	adapter.process = func(context.Context, metadata) (string, bool, error) {
+		calls++
+		return "", false, context.DeadlineExceeded
+	}
+	*now = now.Add(aliveFor)
+	for range 2 {
+		sessions, err := adapter.Sessions(context.Background())
+		require.NoError(t, err)
+		require.Len(t, sessions, 1)
+	}
+	require.Equal(t, 2, calls)
+}
+
+// A dead verdict does not expire: the same incarnation cannot come back.
+func TestADeadVerdictDoesNotExpire(t *testing.T) {
+	adapter, put := fixture(t)
+	now := fakeClock(adapter)
+	put(metadata{PID: 99, SessionID: "dead", Cwd: "/work", Status: "idle"})
+	calls := countingProcess(adapter)
+	_, err := adapter.Sessions(context.Background())
+	require.NoError(t, err)
+	*now = now.Add(10 * aliveFor)
+	_, err = adapter.Sessions(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 1, calls[99])
+}
+
+func TestSessionsForgetsRemovedMetadata(t *testing.T) {
+	adapter, put := fixture(t)
+	put(metadata{PID: 1, SessionID: "s", Cwd: "/work", Status: "idle"})
+	_, err := adapter.Sessions(context.Background())
+	require.NoError(t, err)
+	require.NoError(t, os.Remove(filepath.Join(adapter.dir, "1.json")))
+	_, err = adapter.Sessions(context.Background())
+	require.NoError(t, err)
+	require.Empty(t, adapter.liveness)
 }
 
 func TestDiscoveryIgnoresDeadAndInvalidMetadata(t *testing.T) {
