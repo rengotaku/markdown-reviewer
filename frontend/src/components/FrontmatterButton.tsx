@@ -22,6 +22,9 @@ import { FrontmatterTable } from "./tiptap/FrontmatterTable";
  */
 export function FrontmatterButton() {
   const { active: activeRoot } = useActiveRoot();
+  const activeFileId = useOpenFiles((s) =>
+    activeRoot ? (s.activeIdByRoot[activeRoot] ?? null) : null
+  );
   const activeMarkdown = useOpenFiles((s) => {
     const id = activeRoot ? s.activeIdByRoot[activeRoot] : null;
     const file = id ? s.files.find((f) => f.id === id) : undefined;
@@ -33,6 +36,16 @@ export function FrontmatterButton() {
   );
   const [open, setOpen] = useState(false);
 
+  // The dialog belongs to the file it was opened for. Close it when the
+  // active file changes, or when the frontmatter disappears (an external
+  // edit), so it never comes back on its own once frontmatter is there again.
+  const scopeKey = `${activeRoot ?? ""}\u0000${activeFileId ?? ""}\u0000${entries.length > 0}`;
+  const [prevScopeKey, setPrevScopeKey] = useState(scopeKey);
+  if (prevScopeKey !== scopeKey) {
+    setPrevScopeKey(scopeKey);
+    if (open) setOpen(false);
+  }
+
   if (entries.length === 0) return null;
 
   return (
@@ -42,7 +55,7 @@ export function FrontmatterButton() {
           size="small"
           sx={{ flexShrink: 0 }}
           onClick={() => setOpen(true)}
-          aria-label="frontmatter を表示"
+          aria-label={`frontmatter を表示（${entries.length} 項目）`}
           aria-haspopup="dialog"
           data-testid="editor-frontmatter-button"
         >
