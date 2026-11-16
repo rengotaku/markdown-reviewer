@@ -114,3 +114,27 @@ describe("AiSendButton (#390)", () => {
     expect(send()).toHaveClass("MuiButton-contained");
   });
 });
+
+describe("AiSendButton while a send is in flight (#402)", () => {
+  it("shows a spinner, says it is sending and cannot be clicked again", () => {
+    const { onSend } = setup(
+      { state: "idle", agent_id: "claude", session_name: "s" },
+      { sending: true }
+    );
+    expect(screen.getByTestId("editor-sending-spinner")).toBeInTheDocument();
+    expect(screen.queryByTestId("editor-send-icon")).toBeNull();
+    expect(send()).toBeDisabled();
+    expect(send()).toHaveAttribute("aria-busy", "true");
+    expect(send()).toHaveAccessibleDescription("AI へ送信中…");
+    fireEvent.click(send());
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("returns to the send icon once the send has finished", () => {
+    setup({ state: "idle", agent_id: "claude", session_name: "s" }, { sending: false });
+    expect(screen.getByTestId("editor-send-icon")).toBeInTheDocument();
+    expect(screen.queryByTestId("editor-sending-spinner")).toBeNull();
+    expect(send()).toBeEnabled();
+    expect(send()).not.toHaveAttribute("aria-busy");
+  });
+});

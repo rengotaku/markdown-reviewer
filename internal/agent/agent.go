@@ -4,6 +4,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -206,14 +207,25 @@ func (s *Service) Status(ctx context.Context, path string) Status {
 	return status
 }
 
-func (s *Service) Send(ctx context.Context, path string) Result {
-	result := Result{Command: ReviewCommand(path), Reason: "no_session"}
+func (s *Service) Send(ctx context.Context, path string) (result Result) {
+	start := time.Now()
+	ctx, timed := withSteps(ctx)
+	// #402: one line per send with the time each part took, so a slow send
+	// can be traced to choosing the recipient, revalidating it or writing.
+	defer func() {
+		attrs := []any{"sent", result.Sent, "reason", result.Reason, "agent", result.AgentID,
+			"total_ms", time.Since(start).Milliseconds()}
+		slog.Info("agent: send", append(attrs, timed.attrs()...)...)
+	}()
+	result = Result{Command: ReviewCommand(path), Reason: "no_session"}
 	if !s.sending.TryLock() {
 		result.Reason = "busy"
 		return result
 	}
 	defer s.sending.Unlock()
+	done := TimeStep(ctx, "choose")
 	chosen := s.choose(ctx, path)
+	done()
 	if chosen == nil {
 		return result
 	}
