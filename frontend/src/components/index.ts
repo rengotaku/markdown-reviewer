@@ -6,6 +6,7 @@ export { CommentSidePane } from "./CommentSidePane";
 export { CommentComposerPopover } from "./CommentComposerPopover";
 export { CountBadge } from "./CountBadge";
 export { DiffView } from "./DiffView";
+export { FrontmatterButton } from "./FrontmatterButton";
 export { NameTooltip } from "./NameTooltip";
 export { LinkPreviewCard } from "./LinkPreviewCard";
 export { CommentId } from "./CommentId";

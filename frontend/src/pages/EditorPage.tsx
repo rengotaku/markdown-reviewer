@@ -40,6 +40,7 @@ import {
   CommentComposerPopover,
   CountBadge,
   DiffView,
+  FrontmatterButton,
   NameTooltip,
 } from "@/components";
 import type { DocBox, RailReveal } from "@/components/CommentSidePane";
@@ -3212,6 +3213,9 @@ export function EditorPage() {
               </IconButton>
             </span>
           </Tooltip>
+          {/* #398: frontmatter opens in a dialog from here instead of sitting
+              above the editor. Absent when the file has none. */}
+          <FrontmatterButton />
           {/* Outside the box above, which clips when the header is narrow:
               this menu is the only way to copy or save on demand. #394: the
               表示 menu (a 71px text button) moved in here as its own section,

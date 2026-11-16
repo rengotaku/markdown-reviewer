@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useMemo, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Box from "@mui/material/Box";
 import { useEditor, EditorContent } from "@tiptap/react";
 import type { Editor } from "@tiptap/react";
@@ -16,9 +16,8 @@ import { useOpenFiles } from "@/hooks/useOpenFiles";
 import { useActiveRoot } from "@/hooks/useActiveRoot";
 import { useEditorInstance } from "@/hooks/useEditorInstance";
 import { useEditorPrefs } from "@/hooks/useEditorPrefs";
-import { splitPreamble, parseFrontmatter } from "@/utils/frontmatter";
+import { splitPreamble } from "@/utils/frontmatter";
 import { resolveInternalLink } from "@/utils/internalLink";
-import { FrontmatterTable } from "./FrontmatterTable";
 import { TableMenu } from "./toolbar/TableMenu";
 import { BlockCopyButton } from "./toolbar/BlockCopyButton";
 import { SlashCommand } from "./extensions/SlashCommand";
@@ -95,11 +94,6 @@ export function TiptapEditor() {
     return file ? file.reloadToken : 0;
   });
   const updateActiveMarkdown = useOpenFiles((s) => s.updateActiveMarkdown);
-  const activeMarkdown = useOpenFiles((s) => {
-    const id = activeRoot ? s.activeIdByRoot[activeRoot] : null;
-    const file = id ? s.files.find((f) => f.id === id) : undefined;
-    return file ? file.markdown : "";
-  });
   // Root-relative path of the file currently open — the base against which
   // in-app link hrefs are resolved (#213).
   const activeFilePath = useOpenFiles((s) => {
@@ -108,10 +102,6 @@ export function TiptapEditor() {
     return file ? file.path : "";
   });
   const requestOpenPath = useEditorInstance((s) => s.requestOpenPath);
-  const frontmatter = useMemo(
-    () => parseFrontmatter(splitPreamble(activeMarkdown).frontmatterYaml),
-    [activeMarkdown]
-  );
   const lastLoadedKeyRef = useRef<string | null>(null);
   // Track the editor instance that recorded `lastLoadedKeyRef`. If TipTap
   // hands us a fresh editor (StrictMode dev unmount-remount, HMR, etc.) the
@@ -496,7 +486,6 @@ export function TiptapEditor() {
       {editor && (
         <BlockCopyButton editor={editor} containerRef={containerRef} />
       )}
-      <FrontmatterTable entries={frontmatter} />
       <EditorContent editor={editor} />
       {/* #338: room below the document for comment cards the rail stacks past
           its end. EditorPage sets the height (0 when nothing overhangs). */}
