@@ -1,0 +1,44 @@
+name: 機能追加・改善
+description: 新しい機能や改善を提案する
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: 何をするか
+      description: 達成したい状態を書く（実装方法ではなく結果）
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: なぜ必要か
+      description: 何ができない・何が不便なのか
+    validations:
+      required: true
+
+  - type: textarea
+    id: done
+    attributes:
+      label: 完了条件
+      description: 完了したと判定できる条件を、満たしたかどうかで判断できる形で書く
+      value: |
+        - [ ]
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 検討した他の方法
+    validations:
+      required: false
+
+  - type: textarea
+    id: related
+    attributes:
+      label: 関連
+      description: 関連する Issue / PR / 参考資料の URL
+    validations:
+      required: false

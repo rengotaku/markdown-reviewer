@@ -1,0 +1,62 @@
+name: バグ報告
+description: 期待どおりに動かないものを報告する
+labels: ["bug"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: 何が起きたか
+      placeholder: 簡潔に書く
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 再現手順
+      placeholder: |
+        1. `make run` を実行
+        2. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期待する動作
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: 実際の動作
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: 環境
+      placeholder: |
+        - OS:
+        - 言語・ランタイムのバージョン:
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: エラーログ
+      description: 関係するエラーメッセージやログがあれば貼る
+      render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: related
+    attributes:
+      label: 関連
+      description: 関連する Issue / PR の URL
+    validations:
+      required: false
