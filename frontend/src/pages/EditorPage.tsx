@@ -2546,9 +2546,14 @@ export function EditorPage() {
   // Save and snapshot before handing this file's comments to Claude Code.
   // The clipboard remains the fallback when direct terminal delivery fails.
   const reviewHandoffPending = useRef(false);
+  // #402: the ref blocks a second click; this state shows the wait. Saving,
+  // the revision and the send take seconds together, and the busy state only
+  // arrives with the send's response.
+  const [reviewHandoffBusy, setReviewHandoffBusy] = useState(false);
   const handleCopyReviewCommand = async () => {
     if (reviewHandoffPending.current) return;
     reviewHandoffPending.current = true;
+    setReviewHandoffBusy(true);
     try {
       if (!activeFile) return;
       const rootPath = roots.find((r) => r.name === activeFile.root)?.path ?? "";
@@ -2619,6 +2624,7 @@ export function EditorPage() {
       }
     } finally {
       reviewHandoffPending.current = false;
+      setReviewHandoffBusy(false);
     }
   };
 
@@ -3301,6 +3307,7 @@ export function EditorPage() {
           <AiSendButton
             status={activeFile ? agentActivity.status : null}
             disabled={!activeFile}
+            sending={reviewHandoffBusy}
             busySince={agentActivity.busySince}
             sentCount={
               agentActivity.sentByUs ? (agentActivity.sentIds?.size ?? null) : null

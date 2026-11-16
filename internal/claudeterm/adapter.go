@@ -179,8 +179,10 @@ func (a *Adapter) forgetExcept(seen map[incarnation]struct{}) {
 }
 
 func (a *Adapter) Send(ctx context.Context, target agent.Session, text string) error {
+	verified := agent.TimeStep(ctx, "verify")
 	entries, err := a.metadata()
 	if err != nil {
+		verified()
 		return err
 	}
 	for _, s := range entries {
@@ -190,6 +192,7 @@ func (a *Adapter) Send(ctx context.Context, target agent.Session, text string) e
 		// Always a fresh check: this is where a remembered "alive" turns out
 		// to be stale, and a session that has exited is forgotten here.
 		tty, alive, err := a.process(ctx, s)
+		verified()
 		if err != nil {
 			return err
 		}
@@ -202,8 +205,11 @@ func (a *Adapter) Send(ctx context.Context, target agent.Session, text string) e
 		if tty == "" {
 			return agent.ErrNoTerminal
 		}
+		written := agent.TimeStep(ctx, "write")
+		defer written()
 		return a.writer.WriteText(ctx, tty, text)
 	}
+	verified()
 	return agent.ErrNoSession
 }
 

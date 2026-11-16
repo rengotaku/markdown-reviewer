@@ -1,8 +1,10 @@
 package claudeterm
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -397,4 +399,32 @@ func TestSummaryNoMatch(t *testing.T) {
 	_, _, ok, err = adapter.Summary(context.Background(), agent.Session{ID: "old"}, time.Date(2026, 10, 29, 1, 0, 0, 0, time.UTC))
 	require.NoError(t, err)
 	require.False(t, ok)
+}
+
+// #402: the claude adapter marks the revalidation and the terminal write as
+// separate parts of the send's log line.
+func TestSendTimesVerifyAndWrite(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	adapter, put := fixture(t)
+	put(metadata{PID: 1, SessionID: "s", Cwd: "/work", Status: "idle"})
+	service := agent.New(adapter)
+	require.True(t, service.Send(context.Background(), "/work/a.md").Sent)
+
+	var line map[string]any
+	for _, raw := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		var l map[string]any
+		require.NoError(t, json.Unmarshal([]byte(raw), &l))
+		if l["msg"] == "agent: send" {
+			require.Nil(t, line, "one line per send")
+			line = l
+		}
+	}
+	require.NotNil(t, line)
+	for _, key := range []string{"choose_ms", "verify_ms", "write_ms", "total_ms"} {
+		require.Contains(t, line, key)
+	}
 }

@@ -48,6 +48,9 @@ interface Props {
   /** Comments not yet sent to the AI; drawn as an outlined badge. */
   unsentCount?: number | null;
   disabled?: boolean;
+  /** A click is being handled: saving, recording a revision and sending
+   *  (#402). Shown as a spinner and blocks another click until it ends. */
+  sending?: boolean;
   onSend: () => void;
   onShowReplies: () => void;
 }
@@ -62,6 +65,7 @@ export function AiSendButton({
   sentCount = null,
   unsentCount = null,
   disabled = false,
+  sending = false,
   onSend,
   onShowReplies,
 }: Props) {
@@ -90,11 +94,13 @@ export function AiSendButton({
     detail = `${name} 待機中`;
     live = `${name} 待機中`;
   }
-  const title = isNone
-    ? "コマンドをコピー（送信先のセッションが見つかりません）"
-    : detail
-      ? `AI へ送信（${detail}）`
-      : "AI へ送信";
+  const title = sending
+    ? "AI へ送信中…"
+    : isNone
+      ? "コマンドをコピー（送信先のセッションが見つかりません）"
+      : detail
+        ? `AI へ送信（${detail}）`
+        : "AI へ送信";
 
   return (
     <Box
@@ -109,7 +115,8 @@ export function AiSendButton({
             color={isNone ? "inherit" : "primary"}
             disableElevation
             onClick={onSend}
-            disabled={disabled}
+            disabled={disabled || sending}
+            aria-busy={sending || undefined}
             aria-label="AI へ送信"
             // The Tooltip labels its span wrapper, not this button, so the
             // state and the copy-instead-of-send cases are tied on here.
@@ -144,12 +151,12 @@ export function AiSendButton({
                 : {},
             ]}
           >
-            {isBusy ? (
+            {sending || isBusy ? (
               <CircularProgress
                 size={14}
                 color="inherit"
                 thickness={5}
-                data-testid="editor-send-spinner"
+                data-testid={sending ? "editor-sending-spinner" : "editor-send-spinner"}
               />
             ) : (
               <SendIcon sx={{ fontSize: 14, ml: "2px" }} data-testid="editor-send-icon" />
