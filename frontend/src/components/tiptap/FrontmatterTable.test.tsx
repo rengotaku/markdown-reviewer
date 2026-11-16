@@ -1,10 +1,5 @@
 import { describe, it, expect } from "vitest";
-import {
-  render,
-  screen,
-  waitForElementToBeRemoved,
-} from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { render, screen } from "@testing-library/react";
 import { FrontmatterTable } from "./FrontmatterTable";
 
 describe("FrontmatterTable", () => {
@@ -13,8 +8,7 @@ describe("FrontmatterTable", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("renders scalar, array, empty, null and object values", async () => {
-    const user = userEvent.setup();
+  it("renders scalar, array, empty, null and object values", () => {
     render(
       <FrontmatterTable
         entries={[
@@ -26,38 +20,17 @@ describe("FrontmatterTable", () => {
         ]}
       />
     );
-    // Collapsed by default — expand to assert the rendered values.
-    await user.click(screen.getByTestId("frontmatter-toggle"));
-    expect(await screen.findByText("date")).toBeInTheDocument();
+    expect(screen.getByTestId("frontmatter-table")).toBeInTheDocument();
+    expect(screen.getByText("date")).toBeInTheDocument();
     expect(screen.getByText("2026-06-24")).toBeInTheDocument();
     // array items become chips
     expect(screen.getByText("infra")).toBeInTheDocument();
     expect(screen.getByText("staging")).toBeInTheDocument();
+    // empty array and null both render a dash
+    expect(screen.getAllByText("—")).toHaveLength(2);
     // nested object renders its keys/values
     expect(screen.getByText("author:")).toBeInTheDocument();
     expect(screen.getByText("alice")).toBeInTheDocument();
     expect(screen.getByText("3")).toBeInTheDocument();
-  });
-
-  it("toggles the table visibility via the header button", async () => {
-    const user = userEvent.setup();
-    render(<FrontmatterTable entries={[{ key: "date", value: "2026-06-24" }]} />);
-
-    // collapsed by default (unmountOnExit keeps it out of the DOM until opened)
-    expect(screen.queryByTestId("frontmatter-table")).not.toBeInTheDocument();
-
-    const toggle = screen.getByTestId("frontmatter-toggle");
-    expect(toggle).toHaveAttribute("aria-expanded", "false");
-
-    await user.click(toggle);
-    expect(toggle).toHaveAttribute("aria-expanded", "true");
-    expect(await screen.findByTestId("frontmatter-table")).toBeInTheDocument();
-
-    await user.click(toggle);
-    expect(toggle).toHaveAttribute("aria-expanded", "false");
-    // Collapse unmounts after its exit transition completes.
-    await waitForElementToBeRemoved(() =>
-      screen.queryByTestId("frontmatter-table")
-    );
   });
 });

@@ -425,18 +425,6 @@
   text-decoration: line-through;
 }
 
-/* Frontmatter panel — read-only YAML frontmatter surfaced above the editor.
-   Top padding halved (was 24px) to tighten the gap above the panel (#94). */
-.frontmatter-panel {
-  padding: 12px 48px 0;
-  box-sizing: border-box;
-}
-
-.editor-centered .frontmatter-panel {
-  max-width: 720px;
-  margin: 0 auto;
-}
-
 .ProseMirror-dropcursor,
 .prosemirror-dropcursor-block,
 .prosemirror-dropcursor-inline {
