@@ -410,7 +410,7 @@ func TestHeadingStacks_Fences(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			stacks := headingStacks(tc.content)
+			stacks := renderDoc(tc.content).stacks
 			for line, want := range tc.want {
 				got := stacks[line-1]
 				if len(got) != len(want) {
@@ -521,7 +521,9 @@ func TestStripInlineMarkup(t *testing.T) {
 	}
 }
 
-func TestStripInlineMarkupUnescaped(t *testing.T) {
+// TestRenderDocLineText checks a single line's rendered text: what anchors
+// are matched against (#370, #404).
+func TestRenderDocLineText(t *testing.T) {
 	cases := []struct{ in, want string }{
 		{`precheck の各行に \[新\] / \[旧\] を付ける`, "precheck の各行に [新] / [旧] を付ける"},
 		{`\*not em\* and \_not em\_`, "*not em* and _not em_"},
@@ -532,10 +534,17 @@ func TestStripInlineMarkupUnescaped(t *testing.T) {
 		{"\\`not code\\` **bold**", "`not code` bold"},
 		{`\[label\](url)`, "[label](url)"},
 		{"plain **bold**", "plain bold"},
+		{"# C&C 報告 &gt; 11月", "C&C 報告 > 11月"},
+		{"x &lt; y &amp; z &#62; &#x3E; &copy;", "x < y & z > > ©"},
+		{"&notanentity; stays", "&notanentity; stays"},
+		{`\&gt; stays`, "&gt; stays"},
+		{"`&gt;` in code", "&gt; in code"},
+		{"- [ ] task &gt; item", "task > item"},
+		{"> quoted &gt; text", "quoted > text"},
 	}
 	for _, c := range cases {
-		if got := stripInlineMarkupUnescaped(c.in); got != c.want {
-			t.Errorf("stripInlineMarkupUnescaped(%q) = %q, want %q", c.in, got, c.want)
+		if got := renderDoc(c.in).text[0]; got != c.want {
+			t.Errorf("renderDoc(%q).text[0] = %q, want %q", c.in, got, c.want)
 		}
 	}
 	// stripInlineMarkup itself keeps escapes, so fingerprints stay stable.

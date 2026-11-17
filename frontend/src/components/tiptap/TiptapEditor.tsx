@@ -2,16 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Box from "@mui/material/Box";
 import { useEditor, EditorContent } from "@tiptap/react";
 import type { Editor } from "@tiptap/react";
-import StarterKit from "@tiptap/starter-kit";
-import { CodeBlockLowlight } from "@tiptap/extension-code-block-lowlight";
 import Placeholder from "@tiptap/extension-placeholder";
-import { Table } from "@tiptap/extension-table";
-import { TableRow } from "@tiptap/extension-table-row";
-import { TableCell } from "@tiptap/extension-table-cell";
-import { TableHeader } from "@tiptap/extension-table-header";
-import { TaskList } from "@tiptap/extension-task-list";
-import { TaskItem } from "@tiptap/extension-task-item";
-import { Markdown } from "tiptap-markdown";
 import { useOpenFiles } from "@/hooks/useOpenFiles";
 import { useActiveRoot } from "@/hooks/useActiveRoot";
 import { useEditorInstance } from "@/hooks/useEditorInstance";
@@ -21,17 +12,14 @@ import { resolveInternalLink } from "@/utils/internalLink";
 import { TableMenu } from "./toolbar/TableMenu";
 import { BlockCopyButton } from "./toolbar/BlockCopyButton";
 import { SlashCommand } from "./extensions/SlashCommand";
-import { MarkdownText, RawHtml, RawHtmlBlock } from "./extensions/RawHtml";
-import { MermaidBlock } from "./extensions/MermaidBlock";
-import { createCodeLowlight } from "./extensions/codeHighlight";
 import { MarkdownPaste } from "./extensions/MarkdownPaste";
 import { CommentHighlight } from "./extensions/CommentHighlight";
 import { DiffGutter } from "./extensions/DiffGutter";
 import { LineNumberGutter } from "./extensions/LineNumberGutter";
 import { BlankLines } from "./extensions/BlankLines";
 import { ExternalLinkDecoration } from "./extensions/ExternalLinkDecoration";
-import { MarkdownLink } from "./extensions/MarkdownLink";
 import { IndentKeymap } from "./extensions/IndentKeymap";
+import { contentExtensions } from "./contentExtensions";
 import { LinkPreviewCard } from "../LinkPreviewCard";
 import { LinkHoverGuard } from "./linkHoverGuard";
 import { getEditorMarkdown, recordBlockSources } from "./markdownSerialize";
@@ -61,7 +49,6 @@ const MARKDOWN_SYNC_DEBOUNCE_MS = 250;
 
 // Built once per module: registering the grammars is pure setup and the
 // instance is stateless across editors.
-const codeLowlight = createCodeLowlight();
 
 /**
  * Re-run the decoration passes that the per-keystroke path only maps through
@@ -151,46 +138,15 @@ export function TiptapEditor() {
 
   const editor = useEditor({
     extensions: [
-      // codeBlock comes from CodeBlockLowlight instead of StarterKit (#198):
-      // same node name and markdown round-trip, plus per-token spans that the
-      // stylesheet colours. Registering it twice would throw on duplicate node
-      // names, hence the StarterKit opt-out.
-      // `text` comes from MarkdownText instead (#297): same node, plus a
-      // serializer that writes `<` / `>` as themselves.
-      StarterKit.configure({ link: false, codeBlock: false, text: false }),
-      MarkdownText,
-      // Raw HTML in the file is kept as its source and written back as is
-      // (#297), instead of being dropped or turned into other nodes.
-      RawHtml,
-      RawHtmlBlock,
+      ...contentExtensions(),
       // Tab inside code blocks + indent-preserving Backspace on emptied list
       // items (#278). Registered with a higher priority than StarterKit so
       // its Backspace handler runs before the default list keymap.
       IndentKeymap,
-      CodeBlockLowlight.configure({ lowlight: codeLowlight }),
       Placeholder.configure({
         placeholder: "Start writing, or type / for commands...",
       }),
-      MarkdownLink.configure({
-        openOnClick: true,
-        autolink: true,
-        linkOnPaste: true,
-      }),
-      Markdown.configure({
-        // Render a bare `https://…` in the source as a link (#274). Round-trip
-        // safety for that is MarkdownLink's job.
-        linkify: true,
-        transformPastedText: true,
-        transformCopiedText: false,
-      }),
-      Table.configure({ resizable: false }),
-      TableRow,
-      TableCell,
-      TableHeader,
-      TaskList,
-      TaskItem.configure({ nested: true }),
       SlashCommand,
-      MermaidBlock,
       MarkdownPaste,
       CommentHighlight,
       DiffGutter,

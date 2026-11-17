@@ -315,17 +315,6 @@ func nextCommentID(comments []Comment) string {
 	return fmt.Sprintf("c-%03d", max+1)
 }
 
-var (
-	anchorHeadingRe = regexp.MustCompile(`^(#{1,6})\s+(.+?)\s*$`)
-	// A fenced code block delimiter: 3+ backticks or tildes, optionally
-	// followed by an info string (backtick fences may not have a backtick in
-	// theirs, per CommonMark).
-	fenceRe = regexp.MustCompile("^(`{3,}|~{3,})(.*)$")
-	// A bullet or ordered list marker plus the whitespace that follows it,
-	// which together set the item's content column.
-	listMarkerRe = regexp.MustCompile(`^(\s*)([-*+]|\d{1,9}[.)])([ \t]+)`)
-)
-
 // ResolveAnchor finds the 1-indexed line range of an anchor in the canonical
 // content. It searches for the snippet under a matching heading path, picking
 // the Occurrence-th match. ok=false means the anchor is orphaned (snippet not
@@ -341,18 +330,24 @@ func ResolveAnchor(content string, a Anchor) (lineRange [2]int, ok bool) {
 	if a.Snippet == "" {
 		return [2]int{}, false
 	}
-	stacks := headingStacks(content)
-	lines := strings.Split(content, "\n")
-	code := codeLines(lines)
+	return resolveInDoc(renderDoc(content), a)
+}
+
+// resolveInDoc is ResolveAnchor against an already rendered document.
+//
+// Exact matching owns Occurrence. When nothing matches exactly, a snippet
+// that still carries leading block markers (`- `, `1. `, `> `, `# ` — AI
+// clients copy them from the raw line) is retried without them, and accepted
+// only when that finds exactly one line: Occurrence was counted on raw lines
+// and does not index the stripped matches. This mirrors the frontend's #168
+// fallback (stripBlockMarkers in pmAnchor.ts).
+func resolveInDoc(doc renderedDoc, a Anchor) (lineRange [2]int, ok bool) {
+	under := func(i int) bool {
+		return len(a.HeadingPath) == 0 || headingSuffixMatch(doc.stacks[i], a.HeadingPath)
+	}
 	seen := 0
-	for i, line := range lines {
-		// Snippet/heading_path are authored from the frontend's ProseMirror
-		// textContent, which renders inline marks away. Strip the same marks
-		// here so a code span / emphasis in the canonical line still matches.
-		if !strings.Contains(renderedLine(line, code[i]), a.Snippet) {
-			continue
-		}
-		if len(a.HeadingPath) > 0 && !headingSuffixMatch(stacks[i], a.HeadingPath) {
+	for i, t := range doc.text {
+		if !strings.Contains(t, a.Snippet) || !under(i) {
 			continue
 		}
 		if seen == a.Occurrence {
@@ -360,7 +355,43 @@ func ResolveAnchor(content string, a Anchor) (lineRange [2]int, ok bool) {
 		}
 		seen++
 	}
-	return [2]int{}, false
+	if seen > 0 {
+		return [2]int{}, false
+	}
+	bare := stripBlockMarkers(a.Snippet)
+	if bare == a.Snippet || bare == "" {
+		return [2]int{}, false
+	}
+	match := -1
+	for i, t := range doc.text {
+		if !strings.Contains(t, bare) || !under(i) {
+			continue
+		}
+		if match >= 0 {
+			return [2]int{}, false
+		}
+		match = i
+	}
+	if match < 0 {
+		return [2]int{}, false
+	}
+	return [2]int{match + 1, match + 1}, true
+}
+
+// blockMarkerRe matches one leading block marker; see stripBlockMarkers.
+var blockMarkerRe = regexp.MustCompile(`^\s*(?:>\s*|[-*+]\s+|\d+[.)]\s+|#{1,6}\s+)`)
+
+// stripBlockMarkers removes leading block-level Markdown markers from a
+// snippet, repeatedly so nested forms like "> - " go too. Same rule as the
+// frontend's stripBlockMarkers (pmAnchor.ts).
+func stripBlockMarkers(s string) string {
+	for {
+		next := blockMarkerRe.ReplaceAllString(s, "")
+		if next == s {
+			return s
+		}
+		s = next
+	}
 }
 
 // FingerprintAt returns the fingerprint (markup-stripped, trimmed line text)
@@ -438,11 +469,10 @@ func ResolveAnchorForDisplay(content string, a Anchor) (anchor Anchor, lineRange
 	if a.Snippet == "" || a.Occurrence != 0 {
 		return a, [2]int{}, false
 	}
-	lines := strings.Split(content, "\n")
-	code := codeLines(lines)
+	doc := renderDoc(content)
 	match := -1
-	for i, line := range lines {
-		if !strings.Contains(renderedLine(line, code[i]), a.Snippet) {
+	for i, t := range doc.text {
+		if !strings.Contains(t, a.Snippet) {
 			continue
 		}
 		if match >= 0 {
@@ -455,7 +485,7 @@ func ResolveAnchorForDisplay(content string, a Anchor) (anchor Anchor, lineRange
 	}
 	repaired := Anchor{
 		Snippet:     a.Snippet,
-		HeadingPath: append([]string(nil), headingStacks(content)[match]...),
+		HeadingPath: append([]string(nil), doc.stacks[match]...),
 		Occurrence:  0,
 	}
 	// The repaired anchor must resolve strictly to the same line; if it does
@@ -464,136 +494,6 @@ func ResolveAnchorForDisplay(content string, a Anchor) (anchor Anchor, lineRange
 		return repaired, lr, true
 	}
 	return a, [2]int{match + 1, match + 1}, true
-}
-
-// headingStacks returns, for each 0-indexed line, the heading stack in effect
-// on that line (each element keeps its `#` prefix so the level is explicit).
-//
-// Lines inside a fenced code block are skipped: a shell comment such as
-// `# (b) 共有リソースの確認` is not a heading, and treating it as one used to
-// reset the stack for the whole rest of the document, orphaning every comment
-// below the first fence (#205). The frontend builds heading_path from
-// ProseMirror `heading` nodes, where fenced text can never contribute, so the
-// backend has to match that.
-func headingStacks(content string) [][]string {
-	lines := strings.Split(content, "\n")
-	out := make([][]string, len(lines))
-	type entry struct {
-		text  string
-		level int
-	}
-	var stack []entry
-	var fence fenceState
-	for i, line := range lines {
-		// An indented code block is code for the same reason a fence is, so a
-		// `#` line that sits 4+ columns past its container is not a heading
-		// either.
-		if !fence.step(line) && fence.indentAllowsBlock(leadingIndent(line)) {
-			if m := anchorHeadingRe.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
-				level := len(m[1])
-				for len(stack) > 0 && stack[len(stack)-1].level >= level {
-					stack = stack[:len(stack)-1]
-				}
-				stack = append(stack, entry{text: m[1] + " " + stripInlineMarkupUnescaped(strings.TrimSpace(m[2])), level: level})
-			}
-		}
-		snap := make([]string, len(stack))
-		for j, e := range stack {
-			snap[j] = e.text
-		}
-		out[i] = snap
-	}
-	return out
-}
-
-// fenceState tracks whether a line-by-line scan is currently inside a fenced
-// code block.
-//
-// Indentation decides between a fence and an indented code block, and it is
-// measured against the enclosing container rather than the left margin: a
-// delimiter may be indented up to 3 columns past its container's content
-// column (CommonMark). Both directions matter in practice — code fences nested
-// under a bullet are routinely indented 2–6 columns and must stay fences,
-// while a 4-column indented ``` at the document root is literal text inside an
-// indented code block and must not open one (mistaking it for an opener makes
-// the rest of the document look like code, which is exactly the orphaning
-// #205 is about). Only list containers are tracked; blockquotes are not, so a
-// fence inside `>` is still invisible here — that predates this and is
-// unchanged.
-type fenceState struct {
-	// contentIndent is the content column of the innermost open list item, or
-	// 0 at the document root.
-	contentIndent int
-	char          byte // 0 when outside; '`' or '~' while a fence is open
-	n             int  // length of the opening delimiter run
-}
-
-// step advances the state with the next raw line and reports whether that line
-// belongs to a fenced code block (delimiter lines included).
-func (f *fenceState) step(line string) bool {
-	trimmed := strings.TrimSpace(line)
-	m := fenceRe.FindStringSubmatch(trimmed)
-
-	if f.char != 0 {
-		// Inside a fence: only a run of the same character, at least as long
-		// as the opener, indented no more than 3 columns past the opener's
-		// container and with nothing but whitespace after it, closes it. A
-		// delimiter indented further is code content — closing on it would end
-		// the block early and hand the lines below back to the heading parser.
-		if m != nil && m[1][0] == f.char && len(m[1]) >= f.n &&
-			strings.TrimSpace(m[2]) == "" && leadingIndent(line) <= f.contentIndent+3 {
-			f.char, f.n = 0, 0
-		}
-		return true
-	}
-
-	if trimmed == "" {
-		return false
-	}
-	indent := leadingIndent(line)
-	if indent < f.contentIndent {
-		// Dedented out of the list item — back to the document root.
-		f.contentIndent = 0
-	}
-	if lm := listMarkerRe.FindStringSubmatch(line); lm != nil && indent <= f.contentIndent+3 {
-		f.contentIndent = indent + len(lm[2]) + len(lm[3])
-	}
-
-	if m == nil || !f.indentAllowsBlock(indent) {
-		return false
-	}
-	// A backtick fence may not carry a backtick in its info string, so
-	// something like ```` ```go` ```` is not an opener.
-	if m[1][0] == '`' && strings.ContainsRune(m[2], '`') {
-		return false
-	}
-	f.char, f.n = m[1][0], len(m[1])
-	return true
-}
-
-// indentAllowsBlock reports whether a line at the given indentation can start a
-// leaf block (a fence or an ATX heading) rather than being indented-code
-// content: CommonMark allows up to 3 columns past the container's content
-// column.
-func (f *fenceState) indentAllowsBlock(indent int) bool {
-	return indent <= f.contentIndent+3
-}
-
-// leadingIndent counts the indentation columns of a line, expanding tabs to the
-// next multiple of 4 the way CommonMark does.
-func leadingIndent(line string) int {
-	n := 0
-	for _, r := range line {
-		switch r {
-		case ' ':
-			n++
-		case '\t':
-			n += 4 - n%4
-		default:
-			return n
-		}
-	}
-	return n
 }
 
 // headingSuffixMatch reports whether want is a suffix of stack, so a partial
@@ -640,61 +540,9 @@ func StripInlineMarkup(s string) string { return stripInlineMarkup(s) }
 // underscores in `_watchlist.md`) survive. Only text outside code spans has
 // links/images unwrapped to their text and emphasis/strikethrough delimiters
 // dropped.
-func stripInlineMarkup(s string) string { return stripInline(s, false) }
+func stripInlineMarkup(s string) string { return stripInline(s) }
 
-// stripInlineMarkupUnescaped is stripInlineMarkup that also resolves CommonMark
-// backslash escapes outside code spans (`\[` → `[`), matching what the editor
-// renders for prose. The editor's serializer writes such escapes on save
-// (`[新]` comes back as `\[新\]`), so without this a snippet authored from the
-// rendered text orphans on the next save (#370). An escaped character never
-// acts as an emphasis/link/code delimiter.
-func stripInlineMarkupUnescaped(s string) string { return stripInline(s, true) }
-
-// renderedLine returns line's text as the editor renders it, which is what
-// snippets are authored from: inline markup is stripped, and backslash escapes
-// are resolved in prose (`\[` → `[`) but kept in code, where the editor shows
-// them as typed. inCode comes from codeLines.
-func renderedLine(line string, inCode bool) string {
-	if inCode {
-		return stripInlineMarkup(line)
-	}
-	return stripInlineMarkupUnescaped(line)
-}
-
-// codeLines reports, per line, whether it belongs to a fenced or indented code
-// block, using the same fence tracking as headingStacks.
-func codeLines(lines []string) []bool {
-	out := make([]bool, len(lines))
-	var fence fenceState
-	for i, line := range lines {
-		inFence := fence.step(line)
-		out[i] = inFence || (strings.TrimSpace(line) != "" && !fence.indentAllowsBlock(leadingIndent(line)))
-	}
-	return out
-}
-
-// escapeBase maps an escaped ASCII punctuation character to a rune in the
-// supplementary private use area while emphasis is stripped, so the regexes
-// in stripEmphasis cannot treat it as a delimiter. restoreEscapes maps it back.
-const escapeBase = 0xF0000
-
-func isASCIIPunct(r rune) bool {
-	return r < 0x80 && strings.ContainsRune("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~", r)
-}
-
-func restoreEscapes(s string) string {
-	if !strings.ContainsFunc(s, func(r rune) bool { return r >= escapeBase && r < escapeBase+0x80 }) {
-		return s
-	}
-	return strings.Map(func(r rune) rune {
-		if r >= escapeBase && r < escapeBase+0x80 {
-			return r - escapeBase
-		}
-		return r
-	}, s)
-}
-
-func stripInline(s string, unescape bool) string {
+func stripInline(s string) string {
 	runes := []rune(s)
 	n := len(runes)
 	var out strings.Builder
@@ -707,11 +555,6 @@ func stripInline(s string, unescape bool) string {
 	}
 	i := 0
 	for i < n {
-		if unescape && runes[i] == '\\' && i+1 < n && isASCIIPunct(runes[i+1]) {
-			seg.WriteRune(escapeBase + runes[i+1])
-			i += 2
-			continue
-		}
 		if runes[i] != '`' {
 			seg.WriteRune(runes[i])
 			i++
@@ -748,9 +591,6 @@ func stripInline(s string, unescape bool) string {
 		i = j + k
 	}
 	flush()
-	if unescape {
-		return restoreEscapes(out.String())
-	}
 	return out.String()
 }
 

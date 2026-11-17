@@ -1,0 +1,443 @@
+[
+  {
+    "name": "entity in heading",
+    "markdown": "# C&C 報告（2026-11-17）チーム &gt; 11月\n\n- 進捗: 予定どおり\n",
+    "anchors": [
+      {
+        "heading_path": [
+          "# C&C 報告（2026-11-17）チーム > 11月"
+        ],
+        "snippet": "C&C 報告（2026-11-17）チーム > 11月",
+        "occurrence": 0
+      },
+      {
+        "heading_path": [
+          "# C&C 報告（2026-11-17）チーム > 11月"
+        ],
+        "snippet": "進捗: 予定どおり",
+        "occurrence": 0
+      }
+    ]
+  },
+  {
+    "name": "entities in text",
+    "markdown": "x &lt; y &amp; z &gt; w\n\n数値参照 &#62; と &#x3E; と &copy;\n",
+    "anchors": [
+      {
+        "heading_path": [],
+        "snippet": "x < y & z > w",
+        "occurrence": 0
+      },
+      {
+        "heading_path": [],
+        "snippet": "数値参照 > と > と ©",
+        "occurrence": 0
+      }
+    ]
+  },
+  {
+    "name": "unknown entity stays literal",
+    "markdown": "&notanentity; と & 単体\n",
+    "anchors": [
+      {
+        "heading_path": [],
+        "snippet": "&notanentity; と & 単体",
+        "occurrence": 0
+      }
+    ]
+  },
+  {
+    "name": "backslash escapes",
+    "markdown": "\\[新\\] / \\[旧\\] と \\_x\\_ と \\*y\\* と a\\\\b\n",
+    "anchors": [
+      {
+        "heading_path": [],
+        "snippet": "[新] / [旧] と _x_ と *y* と a\\b",
+        "occurrence": 0
+      }
+    ]
+  },
+  {
+    "name": "escaped entity",
+    "markdown": "\\&gt; はそのまま\n",
+    "anchors": [
+      {
+        "heading_path": [],
+        "snippet": "&gt; はそのまま",
+        "occurrence": 0
+      }
+    ]
+  },
+  {
+    "name": "tildes",
+    "markdown": "~~取消~~ と ~draft~ と ~~~三つ~~~ と a~b と ~~~~四つ~~~~ と ~~開きだけ\n\n# ~見出し~ の章\n\n配下の本文\n",
+    "anchors": [
+      {
+        "heading_path": [],
+        "snippet": "取消 と ~draft~ と ~三つ~ と a~b と 四つ と ~~開きだけ",
+        "occurrence": 0
+      },
+      {
+        "heading_path": [
+          "# ~見出し~ の章"
+        ],
+        "snippet": "~見出し~ の章",
+        "occurrence": 0
+      },
+      {
+        "heading_path": [
+          "# ~見出し~ の章"
+        ],
+        "snippet": "配下の本文",
+        "occurrence": 0
+      }
+    ]
+  },
+  {
+    "name": "emphasis",
+    "markdown": "**強調** と *斜体* と __太字__ と _細字_ と ~~取消~~\n\n***両方*** と snake_case_name と a*b*c\n",
+    "anchors": [
+      {
+        "heading_path": [],
+        "snippet": "強調 と 斜体 と 太字 と 細字 と 取消",
+        "occurrence": 0
+      },
+      {
+        "heading_path": [],
+        "snippet": "両方 と snake_case_name と abc",
+        "occurrence": 0
+      }
+    ]
+  },
+  {
+    "name": "code spans",
+    "markdown": "`a_b` と ``a`b`` と ` x ` と `&gt;` と `\\[`\n",
+    "anchors": [
+      {
+        "heading_path": [],
+        "snippet": "a_b と a`b と x と &gt; と \\[",
+        "occurrence": 0
+      }
+    ]
+  },
+  {
+    "name": "links",
+    "markdown": "[テキスト](https://example.com) と [角括弧](<a b.md>) と [参照][r]\n\n[r]: https://example.com/r\n",
+    "anchors": [
+      {
+        "heading_path": [],
+        "snippet": "テキスト と 角括弧 と 参照",
+        "occurrence": 0
+      }
+    ]
+  },
+  {
+    "name": "autolinks",
+    "markdown": "<https://example.com/a> と https://example.com/b と www.example.com\n",
+    "anchors": [
+      {
+        "heading_path": [],
+        "snippet": "https://example.com/a と https://example.com/b と www.example.com",
+        "occurrence": 0
+      }
+    ]
+  },
+  {
+    "name": "image",
+    "markdown": "前 ![代替](x.png) 後\n",
+    "anchors": [
+      {
+        "heading_path": [],
+        "snippet": "前 後",
+        "occurrence": 0
+      }
+    ]
+  },
+  {
+    "name": "whitespace runs",
+    "markdown": "a  b\t\tc   `x  y`   d\n\n全角　　空白\n",
+    "anchors": [
+      {
+        "heading_path": [],
+        "snippet": "a b c x y d",
+        "occurrence": 0
+      },
+      {
+        "heading_path": [],
+        "snippet": "全角　　空白",
+        "occurrence": 0
+      }
+    ]
+  },
+  {
+    "name": "inline html",
+    "markdown": "a <span>b</span> c\n\n改行 <br> の前後\n",
+    "anchors": [
+      {
+        "heading_path": [],
+        "snippet": "a <span>b</span> c",
+        "occurrence": 0
+      },
+      {
+        "heading_path": [],
+        "snippet": "改行 <br> の前後",
+        "occurrence": 0
+      }
+    ]
+  },
+  {
+    "name": "heading forms",
+    "markdown": "Setext 見出し\n===\n\n本文1\n\n## 閉じ付き ##\n\n本文2\n\n### `code` と **強調** の見出し\n\n本文3\n",
+    "anchors": [
+      {
+        "heading_path": [
+          "# Setext 見出し"
+        ],
+        "snippet": "Setext 見出し",
+        "occurrence": 0
+      },
+      {
+        "heading_path": [
+          "# Setext 見出し"
+        ],
+        "snippet": "本文1",
+        "occurrence": 0
+      },
+      {
+        "heading_path": [
+          "# Setext 見出し",
+          "## 閉じ付き"
+        ],
+        "snippet": "閉じ付き",
+        "occurrence": 0
+      },
+      {
+        "heading_path": [
+          "# Setext 見出し",
+          "## 閉じ付き"
+        ],
+        "snippet": "本文2",
+        "occurrence": 0
+      },
+      {
+        "heading_path": [
+          "# Setext 見出し",
+          "## 閉じ付き",
+          "### code と 強調 の見出し"
+        ],
+        "snippet": "code と 強調 の見出し",
+        "occurrence": 0
+      },
+      {
+        "heading_path": [
+          "# Setext 見出し",
+          "## 閉じ付き",
+          "### code と 強調 の見出し"
+        ],
+        "snippet": "本文3",
+        "occurrence": 0
+      }
+    ]
+  },
+  {
+    "name": "lists",
+    "markdown": "- 箇条\n* 星\n+ 足し\n1. 番号\n2) 括弧\n  - 入れ子 &gt; 項目\n\n- [ ] 未完了\n- [x] 完了 &amp; 済\n",
+    "anchors": [
+      {
+        "heading_path": [],
+        "snippet": "箇条",
+        "occurrence": 0
+      },
+      {
+        "heading_path": [],
+        "snippet": "星",
+        "occurrence": 0
+      },
+      {
+        "heading_path": [],
+        "snippet": "足し",
+        "occurrence": 0
+      },
+      {
+        "heading_path": [],
+        "snippet": "番号",
+        "occurrence": 0
+      },
+      {
+        "heading_path": [],
+        "snippet": "括弧",
+        "occurrence": 0
+      },
+      {
+        "heading_path": [],
+        "snippet": "入れ子 > 項目",
+        "occurrence": 0
+      },
+      {
+        "heading_path": [],
+        "snippet": "未完了",
+        "occurrence": 0
+      },
+      {
+        "heading_path": [],
+        "snippet": "完了 & 済",
+        "occurrence": 0
+      }
+    ]
+  },
+  {
+    "name": "blockquote",
+    "markdown": "> 引用 &gt; 文\n>\n> - 引用内の箇条\n",
+    "anchors": [
+      {
+        "heading_path": [],
+        "snippet": "引用 > 文",
+        "occurrence": 0
+      },
+      {
+        "heading_path": [],
+        "snippet": "引用内の箇条",
+        "occurrence": 0
+      }
+    ]
+  },
+  {
+    "name": "table",
+    "markdown": "| 列A | 列B |\n|---|---|\n| a &gt; b | \\[新\\] と `c` |\n| x \\| y | **z** |\n",
+    "anchors": [
+      {
+        "heading_path": [],
+        "snippet": "列A",
+        "occurrence": 0
+      },
+      {
+        "heading_path": [],
+        "snippet": "列B",
+        "occurrence": 0
+      },
+      {
+        "heading_path": [],
+        "snippet": "a > b",
+        "occurrence": 0
+      },
+      {
+        "heading_path": [],
+        "snippet": "[新] と c",
+        "occurrence": 0
+      },
+      {
+        "heading_path": [],
+        "snippet": "x | y",
+        "occurrence": 0
+      },
+      {
+        "heading_path": [],
+        "snippet": "z",
+        "occurrence": 0
+      }
+    ]
+  },
+  {
+    "name": "fenced code is literal",
+    "markdown": "```sh\n# コメント &gt; そのまま\necho **x** \\[y\\]\n```\n\n## 後の見出し\n\n本文\n",
+    "anchors": [
+      {
+        "heading_path": [],
+        "snippet": "# コメント &gt; そのまま",
+        "occurrence": 0
+      },
+      {
+        "heading_path": [],
+        "snippet": "echo **x** \\[y\\]",
+        "occurrence": 0
+      },
+      {
+        "heading_path": [
+          "## 後の見出し"
+        ],
+        "snippet": "後の見出し",
+        "occurrence": 0
+      },
+      {
+        "heading_path": [
+          "## 後の見出し"
+        ],
+        "snippet": "本文",
+        "occurrence": 0
+      }
+    ]
+  },
+  {
+    "name": "code in list",
+    "markdown": "- 項目\n\n  ```\n  中 &gt; 身\n  ```\n",
+    "anchors": [
+      {
+        "heading_path": [],
+        "snippet": "項目",
+        "occurrence": 0
+      },
+      {
+        "heading_path": [],
+        "snippet": "中 &gt; 身",
+        "occurrence": 0
+      }
+    ]
+  },
+  {
+    "name": "mermaid",
+    "markdown": "```mermaid\ngraph TD\n  A --> B\n```\n\n後の段落\n",
+    "anchors": [
+      {
+        "heading_path": [],
+        "snippet": "後の段落",
+        "occurrence": 0
+      }
+    ]
+  },
+  {
+    "name": "html block",
+    "markdown": "<div>\n生 HTML &gt; ブロック\n</div>\n\n後の段落\n",
+    "anchors": [
+      {
+        "heading_path": [],
+        "snippet": "<div>",
+        "occurrence": 0
+      },
+      {
+        "heading_path": [],
+        "snippet": "生 HTML &gt; ブロック",
+        "occurrence": 0
+      },
+      {
+        "heading_path": [],
+        "snippet": "</div>",
+        "occurrence": 0
+      },
+      {
+        "heading_path": [],
+        "snippet": "後の段落",
+        "occurrence": 0
+      }
+    ]
+  },
+  {
+    "name": "frontmatter and hint",
+    "markdown": "<!-- markdown-reviewer\n本文はクリーンです。\nCLI(推奨):  mr review <このファイルのパス>\n-->\n\n---\ntitle: x\nkind: y\n---\n\n# 見出し &gt; 1\n\n本文\n",
+    "anchors": [
+      {
+        "heading_path": [
+          "# 見出し > 1"
+        ],
+        "snippet": "見出し > 1",
+        "occurrence": 0
+      },
+      {
+        "heading_path": [
+          "# 見出し > 1"
+        ],
+        "snippet": "本文",
+        "occurrence": 0
+      }
+    ]
+  }
+]
