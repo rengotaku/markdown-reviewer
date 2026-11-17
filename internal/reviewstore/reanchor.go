@@ -72,7 +72,7 @@ func ReanchorReview(review Review, oldCanonical, newCanonical string) (Review, b
 
 	oldLines := strings.Split(oldCanonical, "\n")
 	newLines := strings.Split(newCanonical, "\n")
-	newStacks := headingStacks(newCanonical)
+	newDoc := renderDoc(newCanonical)
 	// old line index (0-based) -> new line index (0-based) for lines the diff
 	// pairs as "same or changed in place". Deleted old lines are absent.
 	lineMap := mapChangedLines(oldLines, newLines)
@@ -88,7 +88,7 @@ func ReanchorReview(review Review, oldCanonical, newCanonical string) (Review, b
 		cm := &out[ci]
 
 		if cm.Anchor != nil {
-			if newA, did := reanchorOne(*cm.Anchor, oldCanonical, newCanonical, newLines, newStacks, lineMap); did {
+			if newA, did := reanchorOne(*cm.Anchor, oldCanonical, newCanonical, newLines, newDoc, lineMap); did {
 				cm.Anchor = &newA
 				changed = true
 			}
@@ -101,7 +101,7 @@ func ReanchorReview(review Review, oldCanonical, newCanonical string) (Review, b
 			copy(anchors, cm.Anchors)
 			anyMoved := false
 			for ai := range anchors {
-				if newA, did := reanchorOne(anchors[ai], oldCanonical, newCanonical, newLines, newStacks, lineMap); did {
+				if newA, did := reanchorOne(anchors[ai], oldCanonical, newCanonical, newLines, newDoc, lineMap); did {
 					anchors[ai] = newA
 					anyMoved = true
 				}
@@ -199,7 +199,7 @@ func reanchorOne(
 	a Anchor,
 	oldCanonical, newCanonical string,
 	newLines []string,
-	newStacks [][]string,
+	newDoc renderedDoc,
 	lineMap map[int]int,
 ) (Anchor, bool) {
 	probe := a
@@ -275,10 +275,10 @@ func reanchorOne(
 				// previously-fine anchor to a pipe-bearing snippet the
 				// frontend's per-cell block matching can never resolve (see
 				// rebuildPreservingSnippet's doc comment).
-				if rebuilt, ok := rebuildPreservingSnippet(probe, newCanonical, newLines, newStacks, newIdx); ok {
+				if rebuilt, ok := rebuildPreservingSnippet(probe, newCanonical, newDoc, newIdx); ok {
 					return rebuilt, true
 				}
-				if rebuilt, ok := rebuildAt(probe, newCanonical, newLines, newStacks, newIdx); ok {
+				if rebuilt, ok := rebuildAt(probe, newCanonical, newDoc, newIdx); ok {
 					return rebuilt, true
 				}
 			}
@@ -289,10 +289,10 @@ func reanchorOne(
 	// search the whole new body for the anchor's exact old line text.
 	if probe.LineFingerprint != "" {
 		if newIdx, found := findLineByFingerprint(newLines, probe.LineFingerprint); found {
-			if rebuilt, ok := rebuildPreservingSnippet(probe, newCanonical, newLines, newStacks, newIdx); ok {
+			if rebuilt, ok := rebuildPreservingSnippet(probe, newCanonical, newDoc, newIdx); ok {
 				return rebuilt, true
 			}
-			if rebuilt, ok := rebuildAt(probe, newCanonical, newLines, newStacks, newIdx); ok {
+			if rebuilt, ok := rebuildAt(probe, newCanonical, newDoc, newIdx); ok {
 				return rebuilt, true
 			}
 		}
@@ -336,18 +336,18 @@ func reanchorOne(
 // does not occur on newIdx (its text changed, not just its position/context)
 // or the candidate still fails to resolve to newIdx; the caller falls back
 // to rebuildAt in that case.
-func rebuildPreservingSnippet(a Anchor, newCanonical string, newLines []string, newStacks [][]string, newIdx int) (Anchor, bool) {
-	if !strings.Contains(renderedLine(newLines[newIdx], codeLines(newLines)[newIdx]), a.Snippet) {
+func rebuildPreservingSnippet(a Anchor, newCanonical string, newDoc renderedDoc, newIdx int) (Anchor, bool) {
+	if !strings.Contains(newDoc.text[newIdx], a.Snippet) {
 		return a, false
 	}
 	headingPath := a.HeadingPath
 	if headingPath != nil {
-		headingPath = append([]string(nil), newStacks[newIdx]...)
+		headingPath = append([]string(nil), newDoc.stacks[newIdx]...)
 	}
 	candidate := Anchor{
 		Snippet:     a.Snippet,
 		HeadingPath: headingPath,
-		Occurrence:  occurrenceAtLine(newLines, newStacks, newIdx, a.Snippet, headingPath),
+		Occurrence:  occurrenceAtLine(newDoc, newIdx, a.Snippet, headingPath),
 	}
 	if fp, ok := FingerprintAt(newCanonical, candidate); ok {
 		candidate.LineFingerprint = fp
@@ -364,15 +364,15 @@ func rebuildPreservingSnippet(a Anchor, newCanonical string, newLines []string, 
 // newIdx has no stable text to anchor to (blank / markup-only) or the
 // rebuilt anchor still fails to resolve to the intended line; the caller
 // decides what to do with the original anchor in that case.
-func rebuildAt(a Anchor, newCanonical string, newLines []string, newStacks [][]string, newIdx int) (Anchor, bool) {
-	newSnippet := renderedLine(newLines[newIdx], codeLines(newLines)[newIdx])
+func rebuildAt(a Anchor, newCanonical string, newDoc renderedDoc, newIdx int) (Anchor, bool) {
+	newSnippet := firstCell(newDoc.text[newIdx])
 	if strings.TrimSpace(newSnippet) == "" {
 		return a, false
 	}
 	rebuilt := Anchor{
-		HeadingPath: append([]string(nil), newStacks[newIdx]...),
+		HeadingPath: append([]string(nil), newDoc.stacks[newIdx]...),
 		Snippet:     newSnippet,
-		Occurrence:  occurrenceAtLine(newLines, newStacks, newIdx, newSnippet, newStacks[newIdx]),
+		Occurrence:  occurrenceAtLine(newDoc, newIdx, newSnippet, newDoc.stacks[newIdx]),
 	}
 	if fp, ok := FingerprintAt(newCanonical, rebuilt); ok {
 		rebuilt.LineFingerprint = fp
@@ -406,19 +406,31 @@ func findLineByFingerprint(newLines []string, fingerprint string) (int, bool) {
 // a line counts when its markup-stripped text contains snippet AND its heading
 // stack suffix-matches headingPath. The occurrence is the number of matching
 // lines strictly before targetIdx.
-func occurrenceAtLine(lines []string, stacks [][]string, targetIdx int, snippet string, headingPath []string) int {
-	code := codeLines(lines)
+func occurrenceAtLine(doc renderedDoc, targetIdx int, snippet string, headingPath []string) int {
 	occ := 0
-	for i := 0; i < targetIdx && i < len(lines); i++ {
-		if !strings.Contains(renderedLine(lines[i], code[i]), snippet) {
+	for i := 0; i < targetIdx && i < len(doc.text); i++ {
+		if !strings.Contains(doc.text[i], snippet) {
 			continue
 		}
-		if len(headingPath) > 0 && !headingSuffixMatch(stacks[i], headingPath) {
+		if len(headingPath) > 0 && !headingSuffixMatch(doc.stacks[i], headingPath) {
 			continue
 		}
 		occ++
 	}
 	return occ
+}
+
+// firstCell returns the first non-blank table cell of a rendered line (cells
+// are joined by tableCellSep), or the line itself when it is not a table row.
+// A rebuilt snippet must be something the editor can match, and the editor
+// matches cell by cell.
+func firstCell(line string) string {
+	for _, c := range strings.Split(line, tableCellSep) {
+		if strings.TrimSpace(c) != "" {
+			return c
+		}
+	}
+	return line
 }
 
 // mapChangedLines builds a map from old-line index to new-line index for lines

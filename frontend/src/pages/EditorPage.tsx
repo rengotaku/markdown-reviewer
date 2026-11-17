@@ -92,6 +92,7 @@ import {
 import { stripHint } from "@/utils/stripHint";
 import { firstH1 } from "@/utils/firstH1";
 import { formatLocalTimestamp } from "@/utils/formatTimestamp";
+import { orphanOnCreateWarning } from "@/utils/orphanOnCreate";
 import {
   computeAnchorsFromSelection,
   resolveAnchorInDoc,
@@ -2773,7 +2774,8 @@ export function EditorPage() {
         // allowOrphan: the selection may cover text typed since the last
         // autosave, which the server cannot resolve against the file on disk
         // yet. The anchor comes from the live doc, so it resolves once saved.
-        await createComment(
+        const hadUnsavedEdits = activeFile.isDirty;
+        const created = await createComment(
           path,
           {
             scope: "inline",
@@ -2786,6 +2788,11 @@ export function EditorPage() {
           root,
           true
         );
+        const landed = [created.anchor, ...(created.anchors ?? [])].some(
+          (a) => a && resolveAnchorInDoc(editor.state.doc, a) !== null
+        );
+        const orphanWarning = orphanOnCreateWarning(created, hadUnsavedEdits, landed);
+        if (orphanWarning) showToast(orphanWarning, "warning");
         // The selection has done its job. Left standing it covers the very
         // highlight it just produced, and hovering there reads as "pointer is
         // inside a selection" — so the new comment answered with 「コメント追加」

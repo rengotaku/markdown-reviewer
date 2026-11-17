@@ -80,12 +80,12 @@ func cmdCommentAdd(args []string) error {
 	// The documented contract is rendered text, which may itself contain
 	// markdown-looking characters (a code span rendering as `**value**`), so
 	// the literal form is tried first and wins. Only when it does not resolve
-	// is the input read as raw markdown and its inline markup removed — the
-	// other order would silently re-anchor `**value**` onto a plain "value"
+	// is the input read as raw markdown and rendered the way the editor would
+	// render it (entities, escapes, inline markup; #404) — the other order would silently re-anchor `**value**` onto a plain "value"
 	// line elsewhere in the body.
 	literal := reviewstore.Anchor{Snippet: snippet, HeadingPath: literalHeadings, Occurrence: occurrence}
 	anchor := reviewstore.Anchor{
-		Snippet:     reviewstore.StripInlineMarkup(snippet),
+		Snippet:     reviewstore.RenderSnippet(snippet),
 		HeadingPath: headings,
 		Occurrence:  occurrence,
 	}
@@ -132,8 +132,8 @@ func normalizeHeadings(raw []string) (literal, stripped []string, err error) {
 			return nil, nil, fmt.Errorf("--heading %q ends with an attribute block ({...}); pass the heading text without the attribute block", h)
 		}
 		l := strings.TrimSpace(h)
-		n := strings.TrimSpace(reviewstore.StripInlineMarkup(h))
-		if !atxHeadingRe.MatchString(n) || !atxHeadingRe.MatchString(l) {
+		n, ok := reviewstore.RenderHeading(h)
+		if !ok || !atxHeadingRe.MatchString(l) {
 			return nil, nil, fmt.Errorf("--heading %q must be the rendered heading with its # prefix, e.g. \"## Title\"", h)
 		}
 		literal = append(literal, l)
@@ -228,7 +228,7 @@ func attrHeadingFor(content, want string) (string, bool) {
 			continue
 		}
 		bare := m[1] + " " + attrBlockRe.ReplaceAllString(m[2], "")
-		if reviewstore.StripInlineMarkup(bare) == want {
+		if r, ok := reviewstore.RenderHeading(bare); ok && r == want {
 			return strings.TrimSpace(line), true
 		}
 	}

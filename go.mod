@@ -13,6 +13,7 @@ require (
 	github.com/pmezard/go-difflib v1.0.0
 	github.com/sethvargo/go-envconfig v1.3.0
 	github.com/stretchr/testify v1.11.1
+	github.com/yuin/goldmark v1.7.13
 	gorm.io/gorm v1.31.1
 )
 
