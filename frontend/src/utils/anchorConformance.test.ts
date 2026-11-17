@@ -42,6 +42,7 @@ const CASES: Record<string, string> = {
   "unknown entity stays literal": "&notanentity; と & 単体\n",
   "backslash escapes": "\\[新\\] / \\[旧\\] と \\_x\\_ と \\*y\\* と a\\\\b\n",
   "escaped entity": "\\&gt; はそのまま\n",
+  "tildes": "~~取消~~ と ~draft~ と ~~~三つ~~~ と a~b と ~~~~四つ~~~~ と ~~開きだけ\n\n# ~見出し~ の章\n\n配下の本文\n",
   "emphasis": "**強調** と *斜体* と __太字__ と _細字_ と ~~取消~~\n\n***両方*** と snake_case_name と a*b*c\n",
   "code spans": "`a_b` と ``a`b`` と ` x ` と `&gt;` と `\\[`\n",
   "links": "[テキスト](https://example.com) と [角括弧](<a b.md>) と [参照][r]\n\n[r]: https://example.com/r\n",

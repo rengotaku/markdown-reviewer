@@ -69,6 +69,31 @@
     ]
   },
   {
+    "name": "tildes",
+    "markdown": "~~取消~~ と ~draft~ と ~~~三つ~~~ と a~b と ~~~~四つ~~~~ と ~~開きだけ\n\n# ~見出し~ の章\n\n配下の本文\n",
+    "anchors": [
+      {
+        "heading_path": [],
+        "snippet": "取消 と ~draft~ と ~三つ~ と a~b と 四つ と ~~開きだけ",
+        "occurrence": 0
+      },
+      {
+        "heading_path": [
+          "# ~見出し~ の章"
+        ],
+        "snippet": "~見出し~ の章",
+        "occurrence": 0
+      },
+      {
+        "heading_path": [
+          "# ~見出し~ の章"
+        ],
+        "snippet": "配下の本文",
+        "occurrence": 0
+      }
+    ]
+  },
+  {
     "name": "emphasis",
     "markdown": "**強調** と *斜体* と __太字__ と _細字_ と ~~取消~~\n\n***両方*** と snake_case_name と a*b*c\n",
     "anchors": [

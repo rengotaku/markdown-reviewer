@@ -12,8 +12,10 @@ import (
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/extension"
 	east "github.com/yuin/goldmark/extension/ast"
+	"github.com/yuin/goldmark/parser"
 	ghtml "github.com/yuin/goldmark/renderer/html"
 	"github.com/yuin/goldmark/text"
+	"github.com/yuin/goldmark/util"
 )
 
 // renderedDoc is the canonical content as the editor presents it, per source
@@ -43,8 +45,66 @@ type renderedDoc struct {
 }
 
 var mdParser = goldmark.New(
-	goldmark.WithExtensions(extension.Table, extension.Strikethrough, extension.Linkify, extension.TaskList),
+	goldmark.WithExtensions(extension.Table, extension.Linkify, extension.TaskList),
+	goldmark.WithParserOptions(parser.WithInlineParsers(util.Prioritized(doubleTildeParser{}, 500))),
 ).Parser()
+
+// doubleTildeParser is goldmark's strikethrough parser rewritten to the rule
+// markdown-it applies. goldmark's own extension also accepts a single `~`
+// (GFM allows it), which would render `~draft~` as "draft" while the editor
+// shows "~draft~" and so orphan every comment on such a line.
+//
+// markdown-it (rules_inline/strikethrough.mjs) takes a run of 2+ tildes, keeps
+// its first tilde as text when the run is odd, and turns the rest into `~~`
+// delimiters, all sharing the flanking computed for the whole run. A lone `~`
+// is text.
+type doubleTildeParser struct{}
+
+type tildeDelimiterProcessor struct{}
+
+func (tildeDelimiterProcessor) IsDelimiter(b byte) bool { return b == '~' }
+
+func (tildeDelimiterProcessor) CanOpenCloser(opener, closer *parser.Delimiter) bool {
+	return opener.Char == closer.Char
+}
+
+func (tildeDelimiterProcessor) OnMatch(int) ast.Node { return east.NewStrikethrough() }
+
+func (doubleTildeParser) Trigger() []byte { return []byte{'~'} }
+
+func (doubleTildeParser) Parse(parent ast.Node, block text.Reader, pc parser.Context) ast.Node {
+	before := block.PrecendingCharacter()
+	line, segment := block.PeekLine()
+	run := parser.ScanDelimiter(line, before, 2, tildeDelimiterProcessor{})
+	if run == nil {
+		return nil
+	}
+	n := run.OriginalLength
+	start := segment.Start
+	// Every node but the last is appended here; the parser appends the one
+	// returned, which keeps them in source order.
+	var pending ast.Node
+	emit := func(node ast.Node) {
+		if pending != nil {
+			parent.AppendChild(parent, pending)
+		}
+		pending = node
+	}
+	if n%2 == 1 {
+		emit(ast.NewTextSegment(text.NewSegment(start, start+1)))
+		start++
+	}
+	for ; start+2 <= segment.Start+n; start += 2 {
+		d := parser.NewDelimiter(run.CanOpen, run.CanClose, 2, '~', tildeDelimiterProcessor{})
+		d.Segment = text.NewSegment(start, start+2)
+		emit(d)
+		pc.PushDelimiter(d)
+	}
+	block.Advance(n)
+	return pending
+}
+
+func (doubleTildeParser) CloseBlock(ast.Node, parser.Context) {}
 
 // preambleRe matches the non-editable preamble the editor keeps out of the
 // document (frontend/src/utils/frontmatter.ts splitPreamble): the AI hint
