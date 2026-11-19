@@ -24,7 +24,7 @@ const baseURLEnv = "MARKDOWN_REVIEWER_BASE_URL"
 func cmdOpen(args []string) error {
 	pos, flags := parseArgs(args)
 	if len(pos) < 1 {
-		return fmt.Errorf("usage: mr open <path> [<extra-path>...] [--comment ID] [--print [--replace-slot]]")
+		return fmt.Errorf("usage: mr open <path|root-dir> [<extra-path>...] [--comment ID] [--print [--replace-slot]]")
 	}
 	base := baseURL(launchdPort)
 
@@ -62,6 +62,10 @@ func cmdOpen(args []string) error {
 	}
 	commentID := flags["comment"]
 	if commentID != "" {
+		// Nothing to anchor on when the target is the root's top level.
+		if rel == "" {
+			return fmt.Errorf("--comment needs a file path; %q is the root directory %q (its top level has no file)", pos[0], root)
+		}
 		review, readErr := reviewstore.ReadReview(root, rel)
 		if readErr != nil {
 			return readErr
@@ -78,7 +82,11 @@ func cmdOpen(args []string) error {
 		}
 	}
 	extras := finalizeExtras(plan.extras, root)
-	registerAgent(base, root, rel)
+	// A root's top level has no file for the agent registration endpoint to
+	// key on; skip it rather than POSTing an empty path.
+	if rel != "" {
+		registerAgent(base, root, rel)
+	}
 	for _, extra := range extras {
 		registerAgent(base, root, extra)
 	}
@@ -148,8 +156,17 @@ func planOpen(pos []string) (openPlan, error) {
 
 	mainRoot, mainRel, _, err := resolvePath(pos[0])
 	if err != nil {
-		plan.mainNeedsAdhoc = true
-		outsideRootCount++
+		// A configured root's own directory is a valid target for `mr open`
+		// ("show me this root's top level") even though resolvePath rejects it
+		// — there is no file, so rel stays empty and the deeplink becomes
+		// `/{root}`. Anything else outside the roots still goes to the
+		// server's one-off slot.
+		if rootDir, ok := resolveRootDir(pos[0]); ok {
+			plan.mainRoot, plan.mainRel = rootDir, ""
+		} else {
+			plan.mainNeedsAdhoc = true
+			outsideRootCount++
+		}
 	} else {
 		plan.mainRoot, plan.mainRel = mainRoot, mainRel
 	}
@@ -212,8 +229,14 @@ func pathEscape(s string) string {
 // alongside the active one (issue #289); `extraRels` may be empty or nil.
 func deeplink(base, root, rel, commentID string, extraRels []string) string {
 	link := strings.TrimSuffix(base, "/") +
-		"/" + pathEscape(root) +
-		"/" + pathEscape(rel)
+		"/" + pathEscape(root)
+	// rel is empty when `mr open` was handed a configured root's own
+	// directory ("show me this root's top level"): the UI's `/{root}` route
+	// is the one that renders the file tree with nothing selected, so the
+	// trailing slash is deliberately omitted.
+	if rel != "" {
+		link += "/" + pathEscape(rel)
+	}
 	query := url.Values{}
 	if commentID != "" {
 		query.Set("comment_id", commentID)

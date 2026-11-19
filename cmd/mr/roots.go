@@ -115,6 +115,32 @@ func relUnder(root, file string) (string, bool) {
 	return filepath.ToSlash(rel), true
 }
 
+// resolveRootDir reports the configured root a directory path names, when the
+// path IS that root (not a file or a subdirectory inside it). `mr open` uses it
+// for the "show this root's top level" form: the web UI's `/{root}` route
+// renders the file tree with nothing selected, which a `/{root}/{rel}` deeplink
+// cannot express (resolvePath reports the root itself as outside every root,
+// since rel would be ".").
+func resolveRootDir(arg string) (root string, ok bool) {
+	abs, err := filepath.Abs(arg)
+	if err != nil {
+		return "", false
+	}
+	if resolved, e := filepath.EvalSymlinks(abs); e == nil {
+		abs = resolved
+	}
+	roots, err := loadRoots()
+	if err != nil {
+		return "", false
+	}
+	for _, r := range roots {
+		if r.abs == abs {
+			return r.name, true
+		}
+	}
+	return "", false
+}
+
 // expandHome expands a leading ~ so REVIEW_ROOTS entries written with ~ resolve.
 func expandHome(p string) string {
 	if p != "~" && !strings.HasPrefix(p, "~/") {
