@@ -23,6 +23,12 @@ func isolateHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	// Nothing these flows install comes from the developer's own environment:
+	// options.go falls back to REVIEW_ROOTS / REVIEW_ROOT for any field a test
+	// leaves empty, so a machine that exports them (the mr CLI reads its roots
+	// from there) would silently change what is asserted below.
+	t.Setenv("REVIEW_ROOTS", "")
+	t.Setenv("REVIEW_ROOT", "")
 	t.Cleanup(launchd.SetCheckPortFreeForTest(func(string) error { return nil }))
 	// The flows only talk to the FakeRunner here, so let them run on the
 	// linux CI runner too instead of failing the darwin-only guard.

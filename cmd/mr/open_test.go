@@ -294,6 +294,7 @@ func TestCmdOpen_Case10_MultipleExtrasSameRoot(t *testing.T) {
 	}
 	t.Setenv("REVIEW_ROOTS", string(rootsJSON))
 	t.Setenv("REVIEWER_CONFIG_DIR", t.TempDir())
+	t.Setenv(baseURLEnv, "")              // an exported base URL (a real machine may have one) outranks PORT
 	t.Setenv("PORT", serverdefaults.Port) // pin base URL; a real launchd plist may set a different PORT
 
 	for _, name := range []string{"main.md", "a.md", "b.md"} {
@@ -333,6 +334,7 @@ func TestCmdOpen_Case11_ExtraUnderDifferentRootIsWarnedAndIgnored(t *testing.T) 
 	}
 	t.Setenv("REVIEW_ROOTS", string(rootsJSON))
 	t.Setenv("REVIEWER_CONFIG_DIR", t.TempDir())
+	t.Setenv(baseURLEnv, "")              // an exported base URL (a real machine may have one) outranks PORT
 	t.Setenv("PORT", serverdefaults.Port) // pin base URL; a real launchd plist may set a different PORT
 
 	if writeErr := os.WriteFile(filepath.Join(mainRootDir, "main.md"), []byte("# doc\n"), 0o644); writeErr != nil {
@@ -410,5 +412,80 @@ func TestCmdOpen_Case13_RejectedTwoOutsideRootPathsNeverPostsToAdhoc(t *testing.
 		t.Error("cmdOpen POSTed to /api/adhoc before validating the out-of-root cap — " +
 			"this would have purged whatever review currently occupies the slot, " +
 			"for a command that was going to be rejected anyway")
+	}
+}
+
+// A configured root's own directory is not a file, so resolvePath reports it
+// as outside every root (rel would be "."). `mr open <root-dir>` means "show
+// this root's top level", which the UI already has a route for: `/{root}`.
+func TestPlanOpen_RootDirBecomesRootTopLevel(t *testing.T) {
+	rootDir := t.TempDir()
+	rootsJSON, err := json.Marshal([]map[string]string{{"name": "works", "path": rootDir}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("REVIEW_ROOTS", string(rootsJSON))
+
+	plan, err := planOpen([]string{rootDir})
+	if err != nil {
+		t.Fatalf("planOpen(%q) error = %v, want nil", rootDir, err)
+	}
+	if plan.mainNeedsAdhoc {
+		t.Errorf("planOpen(%q) needs the ad-hoc slot, want the configured root instead", rootDir)
+	}
+	if plan.mainRoot != "works" || plan.mainRel != "" {
+		t.Errorf("planOpen(%q) = (root %q, rel %q), want (root %q, rel %q)",
+			rootDir, plan.mainRoot, plan.mainRel, "works", "")
+	}
+}
+
+func TestDeeplink_RootTopLevelOmitsTheFileSegment(t *testing.T) {
+	got := deeplink("http://localhost:15174", "works", "", "", nil)
+	if want := "http://localhost:15174/works"; got != want {
+		t.Errorf("deeplink() = %q, want %q", got, want)
+	}
+}
+
+func TestDeeplink_RootTopLevelKeepsExtraTabs(t *testing.T) {
+	got := deeplink("http://localhost:15174", "works", "", "", []string{"a.md", "b.md"})
+	if want := "http://localhost:15174/works?open=a.md&open=b.md"; got != want {
+		t.Errorf("deeplink() = %q, want %q", got, want)
+	}
+}
+
+func TestCmdOpen_RootDirPrintsTopLevelURL(t *testing.T) {
+	rootDir := t.TempDir()
+	rootsJSON, err := json.Marshal([]map[string]string{{"name": "works", "path": rootDir}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("REVIEW_ROOTS", string(rootsJSON))
+	t.Setenv(baseURLEnv, "http://127.0.0.1:9")
+
+	out, err := captureStdout(t, func() error {
+		return cmdOpen([]string{rootDir, "--print"})
+	})
+	if err != nil {
+		t.Fatalf("cmdOpen(%q, --print) error = %v, want nil", rootDir, err)
+	}
+	if got, want := strings.TrimSpace(out), "http://127.0.0.1:9/works"; got != want {
+		t.Errorf("stdout = %q, want %q", got, want)
+	}
+}
+
+func TestCmdOpen_RootDirRejectsComment(t *testing.T) {
+	rootDir := t.TempDir()
+	rootsJSON, err := json.Marshal([]map[string]string{{"name": "works", "path": rootDir}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("REVIEW_ROOTS", string(rootsJSON))
+	t.Setenv(baseURLEnv, "http://127.0.0.1:9")
+
+	_, err = captureStdout(t, func() error {
+		return cmdOpen([]string{rootDir, "--comment", "c-001", "--print"})
+	})
+	if err == nil || !strings.Contains(err.Error(), "--comment needs a file path") {
+		t.Errorf("cmdOpen(root dir, --comment) error = %v, want a --comment/file-path error", err)
 	}
 }

@@ -13,7 +13,7 @@
 //	                                                             replies in one call
 //	mr resolve  <path> <id> [--force]  mark a comment resolved
 //	mr reopen   <path> <id> [--force]  reopen a resolved comment
-//	mr open     <path> [<extra-path>...] [--comment ID] [--print [--replace-slot]]  open the file in the web UI
+//	mr open     <path|root-dir> [<extra-path>...] [--comment ID] [--print [--replace-slot]]  open the file in the web UI
 //	mr revisions <path> [--json]  list revision history, newest first
 //	mr restore  <path> <id> [--author NAME]  restore the canonical body to
 //	                                          revision id (default author "external")
@@ -111,7 +111,7 @@ Usage:
   mr apply    <path> [<json-file>|-] [--author NAME] [--force]  body edits + replies in one call
   mr resolve  <path> <id> [--force]    mark a comment resolved
   mr reopen   <path> <id> [--force]    reopen a resolved comment
-  mr open     <path> [<extra-path>...] [--comment ID] [--print [--replace-slot]]  open the file in the web UI (--print: URL only)
+  mr open     <path|root-dir> [<extra-path>...] [--comment ID] [--print [--replace-slot]]  open the file in the web UI (--print: URL only)
   mr comment add <path> --snippet TEXT [--heading H]... [--occurrence N] [--author NAME] [--force] <text>
                                        create an anchored comment (default author "ai")
   mr revisions <path> [--json]         list revision history, newest first
@@ -126,6 +126,9 @@ alongside <path> via repeated ?open= params. Extras must share <path>'s root;
 a mismatched or unresolvable extra is dropped with a warning, and at most one
 positional argument total may sit outside every configured root (the one-off
 slot only holds one file).
+Handing "mr open" a configured root's own directory (e.g. ~/code/<repo>) opens
+"/{root}": the tree with no file selected. Only files and roots have a URL, so
+pass a file or the root itself; --comment needs a file and is refused on a root.
 "mr open --print" never replaces the one-off slot: it prints the URL only when
 the slot already holds <path>, and otherwise exits non-zero naming the file the
 slot holds; add --replace-slot (or drop --print) to replace it deliberately.

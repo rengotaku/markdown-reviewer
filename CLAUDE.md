@@ -44,14 +44,14 @@ mr reply    <path> <id> <text> [--author NAME] [--force] # スレッド返信（
 mr apply    <path> [<json-file>|-] [--author NAME] [--force]  # 本文の修正と返信を 1 回で（JSON: edits / replies）
 mr resolve  <path> <id> [--force]                        # resolved にする
 mr reopen   <path> <id> [--force]                        # resolved を open に戻す
-mr open     <path> [<extra-path>...] [--comment ID] [--print [--replace-slot]]  # Web UI で開く（--print: URL のみ出力）
+mr open     <path|root-dir> [<extra-path>...] [--comment ID] [--print [--replace-slot]]  # Web UI で開く（--print: URL のみ出力）
 mr comment add <path> --snippet TEXT [--heading H]... [--occurrence N] [--author NAME] [--force] <text>  # アンカー付きコメントを作る（既定 author=ai）
 mr revisions <path> [--json]                              # 履歴一覧（新しい順・id / 日時 / author）
 mr restore  <path> <id> [--author NAME]                   # その版へ書き戻す（既定 author=external）
 mr diff     <path> [--since ID] [--since-last-read]       # 前回 mr で読んだ時（既定）/ 指定 revision との差分
 ```
 
-パスは絶対 / cwd 相対のどちらでもよい。サーバ未起動でも動作する（`mr open` の URL 出力も同様。ブラウザで開くにはサーバが必要）。
+パスは絶対 / cwd 相対のどちらでもよい。サーバ未起動でも動作する（`mr open` の URL 出力も同様。ブラウザで開くにはサーバが必要）。`mr open` に設定済み root のディレクトリ（例: `~/code/<repo>`）を渡すと `/{root}` を開き、ファイル未選択のままその root のツリーを表示する。
 
 `mr comments` / `mr review` は読み取りに成功するたびに `last_read`（本文の sha・その時点の最新 revision・時刻）を記録し、前回の `last_read` から本文が変わっていれば冒頭に変更バナーを出す（変わっていなければ何も出さない）。バナーの「影響」に載るのは、アンカーが解決できなくなったコメント（位置不明）と、アンカー先の行そのものが書き換わったコメント（アンカー行が変更）だけで、単に位置がずれただけのコメントは載らない。`mr reply` / `mr resolve` / `mr reopen` は、`last_read` を記録した後に本文が変わっていると exit 1 で止まる（`mr diff <path> --since-last-read` で差分を確認してから `mr comments` で読み直すか、意図的に無視する場合のみ `--force` を付ける）。
 
