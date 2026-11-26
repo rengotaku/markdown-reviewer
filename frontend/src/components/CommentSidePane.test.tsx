@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach, onTestFinished } from "vitest";
-import { render, screen, within, waitFor, act } from "@testing-library/react";
+import { render, screen, within, waitFor, act, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { CommentDetailDialog, CommentSidePane } from "./CommentSidePane";
+import { CommentSidePane } from "./CommentSidePane";
 import type { CommentJSON } from "@/api";
 
 afterEach(() => {
@@ -41,6 +41,12 @@ function renderPane(props: Partial<React.ComponentProps<typeof CommentSidePane>>
     onJump: vi.fn(),
     onSelect: vi.fn(),
   };
+  // The reader shows the selected comment, so most tests (which look at one
+  // comment's body, replies and actions) start with the first anchored one
+  // selected; pass `selectedId: null` for an empty reader.
+  const firstAnchored = (props.comments ?? []).find(
+    (c) => c.scope !== "global" && !c.orphan
+  );
   render(
     <CommentSidePane
       root="works"
@@ -48,29 +54,12 @@ function renderPane(props: Partial<React.ComponentProps<typeof CommentSidePane>>
       comments={[]}
       reviewActive
       canAddComment
+      selectedId={firstAnchored?.id ?? null}
       {...handlers}
       {...props}
     />
   );
   return handlers;
-}
-
-/** #364: the "対象: ..." label now renders only in the detail dialog. */
-function renderDetail(c: CommentJSON) {
-  render(
-    <CommentDetailDialog
-      comment={c}
-      onClose={vi.fn()}
-      onDelete={vi.fn()}
-      onResolveToggle={vi.fn()}
-      onReply={vi.fn()}
-      onEdit={vi.fn()}
-      onEditReply={vi.fn()}
-      onDeleteReply={vi.fn()}
-      onJump={vi.fn()}
-      onCopyLink={vi.fn()}
-    />
-  );
 }
 
 /** #394: the status filter is three icon toggles; press one. */
@@ -121,13 +110,12 @@ describe("CommentSidePane", () => {
     // #390: the title carries no open/total count.
     expect(screen.getByText("Comments")).toBeInTheDocument();
     expect(screen.queryByText(/Comments \(/)).toBeNull();
-    // The rail measures its own box via rAF before it can place a second
-    // card (see the file's first test).
-    await waitFor(() => expect(screen.getAllByTestId("comment-item")).toHaveLength(2));
-    expect(screen.getByText("first")).toBeInTheDocument();
-    expect(screen.getByText("second")).toBeInTheDocument();
+    expect(screen.getAllByTestId("comment-item")).toHaveLength(2);
+    const [first, second] = screen.getAllByTestId("comment-item");
+    expect(within(first).getByTestId("comment-row-body")).toHaveTextContent("first");
+    expect(within(second).getByTestId("comment-row-body")).toHaveTextContent("second");
+    // The selected one (c1) is in the reader, with its scope badge.
     expect(screen.getByTestId("comment-scope-inline")).toBeInTheDocument();
-    expect(screen.getByTestId("comment-scope-block")).toBeInTheDocument();
   });
 
   it("shows short bodies in full with no toggle", () => {
@@ -144,28 +132,6 @@ describe("CommentSidePane", () => {
   // data-testid/label contract (comment-body-toggle, 続きを表示/折りたたむ)
   // is unchanged, only the "is the text sliced" assertion is gone. The
   // `data-collapsed` attribute is a test hook for the CSS-clamp state.
-  it("keeps the full body rendered (no source slicing) and toggles the clamp state", async () => {
-    const user = userEvent.setup();
-    const long = "あ".repeat(250);
-    renderPane({ comments: [comment("c1", { body: long })] });
-
-    const body = screen.getByTestId("comment-body");
-    // Full source is always present in the DOM — only visually clamped.
-    expect(body.textContent).toContain("あ".repeat(250));
-    expect(body).toHaveAttribute("data-collapsed", "true");
-
-    const toggle = screen.getByTestId("comment-body-toggle");
-    expect(toggle).toHaveTextContent("続きを表示");
-
-    await user.click(toggle);
-    expect(screen.getByTestId("comment-body")).toHaveAttribute("data-collapsed", "false");
-    expect(screen.getByTestId("comment-body-toggle")).toHaveTextContent("折りたたむ");
-
-    await user.click(screen.getByTestId("comment-body-toggle"));
-    expect(screen.getByTestId("comment-body-toggle")).toHaveTextContent("続きを表示");
-    expect(screen.getByTestId("comment-body")).toHaveAttribute("data-collapsed", "true");
-  });
-
   it("calls onRefresh when the refresh button is clicked", async () => {
     const user = userEvent.setup();
     const h = renderPane();
@@ -244,13 +210,6 @@ describe("CommentSidePane", () => {
     });
     expect(first).toHaveAttribute("data-selected", "false");
     expect(second).toHaveAttribute("data-selected", "true");
-  });
-
-  it("copying a link from a row does not open its thread", async () => {
-    const user = userEvent.setup();
-    const h = renderPane({ comments: [comment("c1")] });
-    await user.click(screen.getByTestId("comment-copy-link"));
-    expect(h.onSelect).not.toHaveBeenCalled();
   });
 
   // #316: global-scope and orphan comments no longer get a card in this
@@ -426,7 +385,9 @@ describe("CommentSidePane", () => {
         rerender(paneWith(comments, "u1", new Set(["u1"])));
         expect(screen.getByTestId("global-comments-dialog")).toBeInTheDocument();
         await user.keyboard("{Escape}");
-        await waitFor(() => expect(screen.queryByTestId("global-comments-dialog")).toBeNull());
+        await waitFor(() =>
+          expect(screen.queryByTestId("global-comments-dialog")).toBeNull()
+        );
 
         rerender(paneWith(comments, "u1", new Set(["u1", "u2"])));
         expect(screen.queryByTestId("global-comments-dialog")).toBeNull();
@@ -505,21 +466,23 @@ describe("CommentSidePane", () => {
   });
 
   it("labels a multi-anchor (cross-section) comment with its heading names", () => {
-    renderDetail(
-      comment("c1", {
-        scope: "cross_section",
-        anchor: undefined,
-        // #162 made buildCommentJSON resolve a context from `anchors` too,
-        // so a real cross_section response now carries one. The heading
-        // list must still win — that is what the scope is about.
-        context: { heading_path: ["# 認証", "## トークン"], line_range: [3, 20] },
-        anchors: [
-          { heading_path: ["# 認証", "## トークン"], snippet: "s1", occurrence: 0 },
-          { heading_path: ["# 認証", "## エラー"], snippet: "s2", occurrence: 0 },
-        ],
-      })
-    );
-    expect(screen.getByTestId("comment-detail-context-c1")).toHaveTextContent(
+    renderPane({
+      comments: [
+        comment("c1", {
+          scope: "cross_section",
+          anchor: undefined,
+          // #162 made buildCommentJSON resolve a context from `anchors` too,
+          // so a real cross_section response now carries one. The heading
+          // list must still win — that is what the scope is about.
+          context: { heading_path: ["# 認証", "## トークン"], line_range: [3, 20] },
+          anchors: [
+            { heading_path: ["# 認証", "## トークン"], snippet: "s1", occurrence: 0 },
+            { heading_path: ["# 認証", "## エラー"], snippet: "s2", occurrence: 0 },
+          ],
+        }),
+      ],
+    });
+    expect(screen.getByTestId("comment-reader-context")).toHaveTextContent(
       "対象: ## トークン ・ ## エラー"
     );
   });
@@ -529,27 +492,31 @@ describe("CommentSidePane", () => {
     // blocks in `anchors`, but its resolved `context.line_range` already
     // covers all of them — so the label must stay "見出し (L74–L80)" rather
     // than degrading to a list of repeated heading names.
-    renderDetail(
-      comment("c1", {
-        scope: "inline",
-        anchor: { heading_path: ["## 実績"], snippet: "s1", occurrence: 0 },
-        anchors: [{ heading_path: ["## 実績"], snippet: "s2", occurrence: 0 }],
-        context: { heading_path: ["## 実績"], line_range: [74, 80] },
-      })
-    );
-    expect(screen.getByTestId("comment-detail-context-c1")).toHaveTextContent(
+    renderPane({
+      comments: [
+        comment("c1", {
+          scope: "inline",
+          anchor: { heading_path: ["## 実績"], snippet: "s1", occurrence: 0 },
+          anchors: [{ heading_path: ["## 実績"], snippet: "s2", occurrence: 0 }],
+          context: { heading_path: ["## 実績"], line_range: [74, 80] },
+        }),
+      ],
+    });
+    expect(screen.getByTestId("comment-reader-context")).toHaveTextContent(
       "対象: ## 実績 (L74–80)"
     );
   });
 
   it("falls back to the anchor snippet when no live context is resolved", () => {
-    renderDetail(
-      comment("c1", {
-        context: null,
-        anchor: { heading_path: [], snippet: "生スニペット", occurrence: 0 },
-      })
-    );
-    expect(screen.getByTestId("comment-detail-context-c1")).toHaveTextContent(
+    renderPane({
+      comments: [
+        comment("c1", {
+          context: null,
+          anchor: { heading_path: [], snippet: "生スニペット", occurrence: 0 },
+        }),
+      ],
+    });
+    expect(screen.getByTestId("comment-reader-context")).toHaveTextContent(
       "対象: 生スニペット"
     );
   });
@@ -569,23 +536,6 @@ describe("CommentSidePane", () => {
     renderPane({ comments: [comment("c1", { body: tableBody })] });
     const body = screen.getByTestId("comment-body");
     expect(body.querySelector("table")).not.toBeNull();
-  });
-
-  it("B4: keeps a table intact (not truncated mid-syntax) in a long, collapsed body, and the toggle still works", async () => {
-    const user = userEvent.setup();
-    const tableMd = "| a | b |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |";
-    const padding = "x".repeat(220);
-    renderPane({ comments: [comment("c1", { body: `${padding}\n\n${tableMd}` })] });
-
-    const body = screen.getByTestId("comment-body");
-    expect(body).toHaveAttribute("data-collapsed", "true");
-    expect(body.querySelector("table")).not.toBeNull();
-
-    const toggle = screen.getByTestId("comment-body-toggle");
-    expect(toggle).toBeInTheDocument();
-    await user.click(toggle);
-    expect(screen.getByTestId("comment-body")).toHaveAttribute("data-collapsed", "false");
-    expect(screen.getByTestId("comment-body-toggle")).toHaveTextContent("折りたたむ");
   });
 
   it("B5: shows no toggle for a body at/under the preview limit (regression guard)", () => {
@@ -643,15 +593,6 @@ describe("CommentSidePane", () => {
     });
   }
 
-  it("#330: collapses a short source whose rendered body is taller than the card's clamp", async () => {
-    stubRenderedHeight(140);
-    renderPane({ comments: [comment("c1", { body: "あ".repeat(130) })] });
-    await waitFor(() =>
-      expect(screen.getByTestId("comment-body")).toHaveAttribute("data-collapsed", "true")
-    );
-    expect(screen.getByTestId("comment-body-toggle")).toHaveTextContent("続きを表示");
-  });
-
   it("#330: leaves a short source that fits within the clamp uncollapsed, with no toggle", async () => {
     stubRenderedHeight(40);
     renderPane({ comments: [comment("c1", { body: "あ".repeat(20) })] });
@@ -665,88 +606,6 @@ describe("CommentSidePane", () => {
     stubRenderedHeight(40);
     const body = `[短い表示名](https://example.com/${"a".repeat(300)})`;
     renderPane({ comments: [comment("c1", { body })] });
-    await act(async () => {});
-    expect(screen.getByTestId("comment-body")).toHaveAttribute("data-collapsed", "false");
-    expect(screen.queryByTestId("comment-body-toggle")).toBeNull();
-  });
-
-  it("#148: links below the clamp leave the tab order while collapsed, and return on expand", async () => {
-    const user = userEvent.setup();
-    stubRenderedHeight(400);
-    // Clamp edge at 42px: the first link sits inside it, the second below.
-    const rect = (top: number, height: number) =>
-      ({
-        top,
-        left: 0,
-        right: 300,
-        bottom: top + height,
-        width: 300,
-        height,
-        x: 0,
-        y: top,
-        toJSON() {},
-      }) as DOMRect;
-    vi.mocked(HTMLElement.prototype.getBoundingClientRect).mockImplementation(function (
-      this: HTMLElement
-    ) {
-      if (this.style.height === "3em") return rect(0, 42);
-      if (this.dataset.testid === "comment-body") return rect(0, 42);
-      if (this.textContent === "見えるリンク") return rect(10, 16);
-      if (this.textContent === "隠れるリンク") return rect(120, 16);
-      return rect(0, 4000);
-    });
-    const body =
-      "[見えるリンク](https://a.example)\n\n本文\n\n本文\n\n[隠れるリンク](https://b.example)";
-    renderPane({ comments: [comment("c1", { body })] });
-    await waitFor(() =>
-      expect(screen.getByTestId("comment-body")).toHaveAttribute("data-collapsed", "true")
-    );
-    expect(screen.getByText("見えるリンク")).not.toHaveAttribute("tabindex");
-    expect(screen.getByText("見えるリンク")).not.toHaveAttribute("aria-hidden");
-    expect(screen.getByText("隠れるリンク")).toHaveAttribute("tabindex", "-1");
-    expect(screen.getByText("隠れるリンク")).toHaveAttribute("aria-hidden", "true");
-
-    await user.click(screen.getByTestId("comment-body-toggle"));
-    expect(screen.getByText("隠れるリンク")).not.toHaveAttribute("tabindex");
-    expect(screen.getByText("隠れるリンク")).not.toHaveAttribute("aria-hidden");
-  });
-
-  it("#330: a rail card's body is clamped from first paint, before any measurement lands", () => {
-    // setup.ts's no-op ResizeObserver never calls back — the state a card is
-    // in when the rail's own card observer reports its height first. If the
-    // body were unclamped here, that full height would place (or drop) the
-    // card, and a dropped card never re-measures.
-    renderPane({ comments: [comment("c1", { body: "あ".repeat(130) })] });
-    const body = screen.getByTestId("comment-body");
-    expect(getComputedStyle(body).maxHeight).toBe("3em");
-    // Not known to overflow yet: no fade/toggle claim.
-    expect(body).toHaveAttribute("data-collapsed", "false");
-    expect(screen.queryByTestId("comment-body-toggle")).toBeNull();
-  });
-
-  it("#330: pressing a card's 続きを表示 (click or keyboard) expands it without selecting the card", async () => {
-    // Selecting would drop the toggle (the selected card shows its body in
-    // full), pulling the pressed button out from under the pointer/focus.
-    const user = userEvent.setup();
-    const h = renderPane({ comments: [comment("c1", { body: "あ".repeat(250) })] });
-
-    await user.click(screen.getByTestId("comment-body-toggle"));
-    expect(screen.getByTestId("comment-body")).toHaveAttribute("data-collapsed", "false");
-
-    screen.getByTestId("comment-body-toggle").focus();
-    await user.keyboard("{Enter}");
-    expect(screen.getByTestId("comment-body")).toHaveAttribute("data-collapsed", "true");
-    expect(screen.getByTestId("comment-body-toggle")).toHaveFocus();
-
-    expect(h.onSelect).not.toHaveBeenCalled();
-  });
-
-  it("#330: the selected card shows its body in full with no toggle, even past the preview limit", async () => {
-    stubRenderedHeight(400);
-    renderPane({
-      comments: [comment("c1", { body: "あ".repeat(250) })],
-      selectedId: "c1",
-    });
     await act(async () => {});
     expect(screen.getByTestId("comment-body")).toHaveAttribute("data-collapsed", "false");
     expect(screen.queryByTestId("comment-body-toggle")).toBeNull();
@@ -812,231 +671,121 @@ describe("CommentSidePane resolved comments in the list (#326)", () => {
   });
 });
 
-describe("CommentSidePane rail card selection (#308)", () => {
-  // #304 stripped the popover (CommentThreadPopover) without moving its
-  // actions into the rail card, so an anchored comment could be read but
-  // never replied to or resolved from the UI. These cases restore that only
-  // for the selected card — an unselected card must stay exactly as low as
-  // before (#298's whole point), so cases 1-2 pin down the "still nothing
-  // extra" side before 3-6 pin down what selection adds.
-
-  it("1. a non-selected card offers reply / resolve / detail in its header, but no reply input, edit, or delete (#364)", () => {
-    renderPane({ comments: [comment("c1")] });
-    const item = screen.getByTestId("comment-item");
-    expect(within(item).getByTestId("comment-reply-toggle")).toBeInTheDocument();
-    expect(within(item).getByTestId("comment-resolve-toggle")).toBeInTheDocument();
-    expect(within(item).getByTestId("comment-open-detail")).toBeInTheDocument();
-    expect(screen.queryByTestId("comment-reply-input")).toBeNull();
-    expect(screen.queryByTestId("comment-edit")).toBeNull();
-    expect(screen.queryByTestId("comment-delete")).toBeNull();
+describe("CommentSidePane list rows (#411)", () => {
+  it("1. a row is one line: state dot, id, the body's first line; no reply / resolve / edit / delete / copy buttons", () => {
+    renderPane({
+      comments: [comment("c1", { body: "一行目\n二行目" })],
+      selectedId: null,
+    });
+    const row = screen.getByTestId("comment-item");
+    expect(within(row).getByTestId("comment-state-dot")).toBeInTheDocument();
+    expect(within(row).getByTestId("comment-id")).toHaveTextContent("c1");
+    expect(within(row).getByTestId("comment-row-body")).toHaveTextContent(/^一行目$/);
+    for (const id of [
+      "comment-reply-toggle",
+      "comment-resolve-toggle",
+      "comment-edit",
+      "comment-delete",
+      "comment-copy-link",
+      "comment-open-detail",
+    ]) {
+      expect(within(row).queryByTestId(id)).toBeNull();
+    }
   });
 
-  it("2. a non-selected card previews its latest two replies and counts the rest (#364)", () => {
+  it("2. a row shows a badge for new AI replies, and none otherwise", () => {
+    renderPane({
+      comments: [comment("c1"), comment("c2")],
+      selectedId: null,
+      agentNewReplies: new Map([["c1", 2]]),
+    });
+    const [first, second] = screen.getAllByTestId("comment-item");
+    expect(within(first).getByTestId("comment-new-ai-replies")).toHaveTextContent(
+      "新着 2"
+    );
+    expect(within(second).queryByTestId("comment-new-ai-replies")).toBeNull();
+  });
+});
+
+describe("CommentSidePane reader (#411)", () => {
+  it("1. with nothing selected the reader says to pick a comment", () => {
+    renderPane({ comments: [comment("c1")], selectedId: null });
+    expect(screen.getByTestId("comment-reader")).toHaveTextContent(
+      "一覧からコメントを選ぶと、ここに全文が出ます"
+    );
+    expect(screen.queryByTestId("comment-body")).toBeNull();
+  });
+
+  it("2. the selected comment's id, scope, target, body and every reply are shown in full", () => {
     renderPane({
       comments: [
         comment("c1", {
+          body: "あ".repeat(250),
           replies: [
-            { author: "ai", date: "2026-05-20", body: "first reply" },
-            { author: "reviewer", date: "2026-05-21", body: "second\nreply" },
-            { author: "ai", date: "2026-05-22", body: "third reply" },
+            { author: "ai", date: "2026-05-21", body: "first reply" },
+            { author: "reviewer", date: "2026-05-22", body: "second reply" },
+            { author: "ai", date: "2026-05-23", body: "third reply" },
           ],
         }),
+        comment("c2"),
       ],
+      selectedId: "c1",
     });
-    const rows = screen.getAllByTestId("comment-reply-preview-row");
-    expect(rows.map((r) => r.textContent)).toEqual(["Rsecond reply", "AIthird reply"]);
-    expect(screen.getByTestId("comment-reply-rest")).toHaveTextContent("ほか 1 件");
-    expect(screen.queryByText("first reply")).toBeNull();
-    expect(screen.queryByTestId("comment-reply-body")).toBeNull();
+    const reader = screen.getByTestId("comment-reader");
+    expect(within(reader).getByTestId("comment-id")).toHaveTextContent("c1");
+    expect(within(reader).getByTestId("comment-scope-inline")).toBeInTheDocument();
+    expect(within(reader).getByTestId("comment-reader-context")).toHaveTextContent(
+      "対象:"
+    );
+    expect(within(reader).getByTestId("comment-body").textContent).toContain(
+      "あ".repeat(250)
+    );
+    expect(within(reader).queryByTestId("comment-body-toggle")).toBeNull();
+    expect(within(reader).getByText("third reply")).toBeInTheDocument();
+    expect(within(reader).getByText("first reply")).toBeInTheDocument();
   });
 
-  it("2a. a badge-only author stays readable by screen readers (#364)", () => {
-    renderPane({
+  it("3. only the reader scrolls: it has its own overflow box", () => {
+    renderPane({ comments: [comment("c1")], selectedId: "c1" });
+    expect(getComputedStyle(screen.getByTestId("comment-reader-scroll")).overflow).toBe(
+      "auto"
+    );
+  });
+
+  it("4. the reader carries reply / resolve / edit / delete / copy-link, and the comment's author bar", async () => {
+    const user = userEvent.setup();
+    const h = renderPane({
       comments: [
         comment("c1", {
           author: "kishira",
-          replies: [{ author: "ai", date: "2026-05-21", body: "only reply" }],
-        }),
-      ],
-    });
-    const item = screen.getByTestId("comment-item");
-    expect(within(item).getByRole("img", { name: "kishira" })).toBeInTheDocument();
-    expect(within(item).getByRole("img", { name: "ai" })).toBeInTheDocument();
-  });
-
-  it("2d. a selected card's comment sits under the same bar as its replies, with no dates in the pane (#364)", () => {
-    renderPane({
-      comments: [
-        comment("c1", {
-          author: "kishira",
-          date: "2026-05-20T10:00:00+09:00",
-          replies: [
-            { author: "ai", date: "2026-05-21T10:00:00+09:00", body: "reply body" },
-          ],
+          replies: [{ author: "ai", date: "2026-05-21", body: "reply body" }],
         }),
       ],
       selectedId: "c1",
     });
-    const item = screen.getByTestId("comment-item");
-    const main = within(item).getByTestId("comment-main-header");
+    const reader = screen.getByTestId("comment-reader");
+    const main = within(reader).getByTestId("comment-main-header");
     expect(within(main).getByRole("img", { name: "kishira" })).toBeInTheDocument();
     expect(within(main).getByTestId("comment-edit")).toBeInTheDocument();
     expect(within(main).getByTestId("comment-delete")).toBeInTheDocument();
     expect(
-      within(within(item).getByTestId("comment-reply-header")).getByRole("img", {
+      within(within(reader).getByTestId("comment-reply-header")).getByRole("img", {
         name: "ai",
       })
     ).toBeInTheDocument();
-    expect(item.textContent).not.toContain("2026-05-2");
-  });
+    expect(reader.textContent).not.toContain("2026-05-2");
+    expect(within(reader).getByTestId("comment-copy-link")).toBeInTheDocument();
 
-  it("2e. the ∨ / ∧ toggle opens a closed card and closes the open one (#364)", async () => {
-    const user = userEvent.setup();
-    const onDeselect = vi.fn();
-    const h = renderPane({
-      comments: [comment("c1"), comment("c2")],
-      selectedId: "c1",
-      onDeselect,
-    });
-    const [open, closed] = screen.getAllByTestId("comment-item");
-    const openToggle = within(open).getByTestId("comment-toggle");
-    const closedToggle = within(closed).getByTestId("comment-toggle");
-    expect(openToggle).toHaveAttribute("aria-expanded", "true");
-    expect(closedToggle).toHaveAttribute("aria-expanded", "false");
-
-    await user.click(openToggle);
-    expect(onDeselect).toHaveBeenCalledTimes(1);
-    expect(h.onSelect).not.toHaveBeenCalled();
-
-    await user.click(closedToggle);
-    expect(h.onSelect).toHaveBeenCalledWith("c2");
-  });
-
-  it("2b. with two or fewer replies the preview shows them all and no rest count (#364)", () => {
-    renderPane({
-      comments: [
-        comment("c1", {
-          replies: [{ author: "reviewer", date: "2026-05-21", body: "only reply" }],
-        }),
-      ],
-    });
-    expect(screen.getAllByTestId("comment-reply-preview-row")).toHaveLength(1);
-    expect(screen.queryByTestId("comment-reply-rest")).toBeNull();
-  });
-
-  it("2c. a non-selected card's header buttons act without needing the card opened first (#364)", async () => {
-    const user = userEvent.setup();
-    const h = renderPane({ comments: [comment("c1")] });
-    const item = screen.getByTestId("comment-item");
-
-    await user.click(within(item).getByTestId("comment-resolve-toggle"));
-    expect(h.onResolveToggle).toHaveBeenCalledWith("c1", "resolved");
-    expect(h.onSelect).not.toHaveBeenCalled();
-
-    await user.click(within(item).getByTestId("comment-reply-toggle"));
-    expect(h.onSelect).toHaveBeenCalledWith("c1");
-  });
-
-  it("3. selecting a card reveals its operation row (reply, resolve, edit, delete, open detail)", async () => {
-    const user = userEvent.setup();
-    renderPane({ comments: [comment("c1")], selectedId: "c1" });
-    const item = screen.getByTestId("comment-item");
-    expect(within(item).getByTestId("comment-reply-toggle")).toBeInTheDocument();
-    expect(within(item).getByTestId("comment-resolve-toggle")).toBeInTheDocument();
-    expect(within(item).getByTestId("comment-edit")).toBeInTheDocument();
-    expect(within(item).getByTestId("comment-delete")).toBeInTheDocument();
-    expect(within(item).getByTestId("comment-open-detail")).toBeInTheDocument();
-    await user.click(within(item).getByTestId("comment-reply-toggle"));
-    expect(within(item).getByTestId("comment-reply-input")).toBeInTheDocument();
-  });
-
-  it("4. selecting a card with replies renders the reply bodies, not just the count", () => {
-    renderPane({
-      comments: [
-        comment("c1", {
-          replies: [{ author: "reviewer", date: "2026-05-21", body: "reply body" }],
-        }),
-      ],
-      selectedId: "c1",
-    });
-    const item = screen.getByTestId("comment-item");
-    expect(within(item).getByText("reply body")).toBeInTheDocument();
-    expect(within(item).queryByTestId("comment-reply-count")).toBeNull();
-  });
-
-  it("5. moving selection to another card closes the previous card's operation row and reply body", async () => {
-    const { rerender } = render(
-      <CommentSidePane
-        root="works"
-        filePath="doc.md"
-        comments={[comment("c1"), comment("c2")]}
-        reviewActive
-        canAddComment
-        onRefresh={vi.fn()}
-        onAddComment={vi.fn()}
-        onAddGlobal={vi.fn()}
-        onDelete={vi.fn()}
-        onResolveToggle={vi.fn()}
-        onReply={vi.fn()}
-        onEdit={vi.fn()}
-        onEditReply={vi.fn()}
-        onDeleteReply={vi.fn()}
-        onJump={vi.fn()}
-        onSelect={vi.fn()}
-        selectedId="c1"
-      />
-    );
-    const [first] = await waitFor(() => {
-      const items = screen.getAllByTestId("comment-item");
-      expect(items).toHaveLength(2);
-      return items;
-    });
-    expect(within(first).getByTestId("comment-resolve-toggle")).toBeInTheDocument();
-
-    rerender(
-      <CommentSidePane
-        root="works"
-        filePath="doc.md"
-        comments={[comment("c1"), comment("c2")]}
-        reviewActive
-        canAddComment
-        onRefresh={vi.fn()}
-        onAddComment={vi.fn()}
-        onAddGlobal={vi.fn()}
-        onDelete={vi.fn()}
-        onResolveToggle={vi.fn()}
-        onReply={vi.fn()}
-        onEdit={vi.fn()}
-        onEditReply={vi.fn()}
-        onDeleteReply={vi.fn()}
-        onJump={vi.fn()}
-        onSelect={vi.fn()}
-        selectedId="c2"
-      />
-    );
-    const [firstAfter, secondAfter] = await waitFor(() => {
-      const items = screen.getAllByTestId("comment-item");
-      expect(items).toHaveLength(2);
-      return items;
-    });
-    expect(within(firstAfter).queryByTestId("comment-edit")).toBeNull();
-    expect(within(secondAfter).getByTestId("comment-edit")).toBeInTheDocument();
-  });
-
-  it("6. replying and resolving from a selected card call onReply / onResolveToggle", async () => {
-    const user = userEvent.setup();
-    const h = renderPane({ comments: [comment("c1")], selectedId: "c1" });
-    const item = screen.getByTestId("comment-item");
-    await user.click(within(item).getByTestId("comment-reply-toggle"));
-    await user.type(within(item).getByTestId("comment-reply-input"), "返信本文");
-    await user.click(within(item).getByTestId("comment-reply-submit"));
+    await user.click(within(reader).getByTestId("comment-reply-toggle"));
+    await user.type(within(reader).getByTestId("comment-reply-input"), "返信本文");
+    await user.click(within(reader).getByTestId("comment-reply-submit"));
     expect(h.onReply).toHaveBeenCalledWith("c1", "返信本文");
 
-    await user.click(within(item).getByTestId("comment-resolve-toggle"));
+    await user.click(within(reader).getByTestId("comment-resolve-toggle"));
     expect(h.onResolveToggle).toHaveBeenCalledWith("c1", "resolved");
   });
 
-  it("7. an ai-authored selected card's edit/delete stay disabled (comment and reply)", () => {
+  it("5. an ai-authored comment's edit/delete stay disabled (comment and reply)", () => {
     renderPane({
       comments: [
         comment("c1", {
@@ -1046,60 +795,103 @@ describe("CommentSidePane rail card selection (#308)", () => {
       ],
       selectedId: "c1",
     });
-    const item = screen.getByTestId("comment-item");
-    expect(within(item).getByTestId("comment-edit")).toBeDisabled();
-    expect(within(item).getByTestId("comment-delete")).toBeDisabled();
-    expect(within(item).getByTestId("comment-reply-edit")).toBeDisabled();
-    expect(within(item).getByTestId("comment-reply-delete")).toBeDisabled();
-  });
-});
-
-// #312: a non-selected card's context row (comment-context-*) is one of the
-// remaining contributors to the ~138px height that pushed neighbouring cards
-// down the rail (#298's anchor-aligned placement only holds when a card is
-// shorter than the anchor spacing above it). Moving the context row behind
-// selection — same treatment #304 already gave the operation row and full
-// reply bodies — keeps it available on demand without costing every
-// non-selected card its height.
-describe("CommentSidePane rail card compact height (#312)", () => {
-  it("1. a non-selected card renders no context row (comment-context-*)", () => {
-    renderPane({ comments: [comment("c1")] });
-    expect(screen.queryByTestId("comment-context-c1")).toBeNull();
+    const reader = screen.getByTestId("comment-reader");
+    expect(within(reader).getByTestId("comment-edit")).toBeDisabled();
+    expect(within(reader).getByTestId("comment-delete")).toBeDisabled();
+    expect(within(reader).getByTestId("comment-reply-edit")).toBeDisabled();
+    expect(within(reader).getByTestId("comment-reply-delete")).toBeDisabled();
   });
 
-  it("2. a selected card renders no context row either; it lives in the detail dialog (#364)", () => {
-    renderPane({ comments: [comment("c1")], selectedId: "c1" });
-    expect(screen.queryByTestId("comment-context-c1")).toBeNull();
-  });
-
-  it("3. a non-selected card still shows the comment id and body (nothing else was removed)", () => {
-    renderPane({ comments: [comment("c1", { body: "body of c1" })] });
-    const item = screen.getByTestId("comment-item");
-    expect(within(item).getByTestId("comment-id")).toHaveTextContent("c1");
-    expect(within(item).getByTestId("comment-body")).toHaveTextContent("body of c1");
-  });
-
-  it("4. a selected card keeps #308's operation row and full reply bodies", async () => {
-    const user = userEvent.setup();
+  it("6. a badge-only author stays readable by screen readers (#364)", () => {
     renderPane({
       comments: [
         comment("c1", {
-          replies: [{ author: "reviewer", date: "2026-05-21", body: "reply body" }],
+          author: "kishira",
+          replies: [{ author: "ai", date: "2026-05-21", body: "only reply" }],
         }),
       ],
-      selectedId: "c1",
     });
-    const item = screen.getByTestId("comment-item");
-    expect(within(item).getByTestId("comment-reply-toggle")).toBeInTheDocument();
-    expect(within(item).getByTestId("comment-resolve-toggle")).toBeInTheDocument();
-    expect(within(item).getByTestId("comment-edit")).toBeInTheDocument();
-    expect(within(item).getByTestId("comment-delete")).toBeInTheDocument();
-    expect(within(item).getByTestId("comment-open-detail")).toBeInTheDocument();
-    expect(within(item).getByText("reply body")).toBeInTheDocument();
-    expect(within(item).queryByTestId("comment-reply-count")).toBeNull();
+    const reader = screen.getByTestId("comment-reader");
+    expect(within(reader).getByRole("img", { name: "kishira" })).toBeInTheDocument();
+    expect(within(reader).getByRole("img", { name: "ai" })).toBeInTheDocument();
+  });
 
-    await user.click(within(item).getByTestId("comment-reply-toggle"));
-    expect(within(item).getByTestId("comment-reply-input")).toBeInTheDocument();
+  it("7. moving the selection shows the other comment in the reader", () => {
+    const comments = [comment("c1", { body: "one" }), comment("c2", { body: "two" })];
+    const common = {
+      root: "works",
+      filePath: "doc.md",
+      comments,
+      reviewActive: true,
+      canAddComment: true,
+      onRefresh: vi.fn(),
+      onAddComment: vi.fn(),
+      onAddGlobal: vi.fn(),
+      onDelete: vi.fn(),
+      onResolveToggle: vi.fn(),
+      onReply: vi.fn(),
+      onEdit: vi.fn(),
+      onEditReply: vi.fn(),
+      onDeleteReply: vi.fn(),
+      onJump: vi.fn(),
+      onSelect: vi.fn(),
+    };
+    const { rerender } = render(<CommentSidePane {...common} selectedId="c1" />);
+    expect(screen.getByTestId("comment-body")).toHaveTextContent("one");
+    rerender(<CommentSidePane {...common} selectedId="c2" />);
+    expect(screen.getByTestId("comment-body")).toHaveTextContent("two");
+    expect(screen.getByTestId("comment-reader")).toHaveAttribute("data-comment-id", "c2");
+  });
+
+  it("8. 本文へ移動 calls onJump with the comment id", async () => {
+    const user = userEvent.setup();
+    const h = renderPane({ comments: [comment("c1")], selectedId: "c1" });
+    const jump = screen.getByTestId("comment-reader-jump");
+    expect(jump).toBeEnabled();
+    await user.click(jump);
+    expect(h.onJump).toHaveBeenCalledWith("c1");
+  });
+
+  it("9. 本文へ移動 is disabled for a comment the editor cannot place", () => {
+    renderPane({
+      comments: [comment("u1"), comment("c1")],
+      selectedId: "u1",
+      unresolvedIds: new Set(["u1"]),
+    });
+    expect(screen.getByTestId("comment-reader-jump")).toBeDisabled();
+  });
+
+  it("10. a comment with no list row can still be read: the status filter hiding it does not empty the reader", async () => {
+    const user = userEvent.setup();
+    renderPane({
+      comments: [comment("c1"), comment("r1", { status: "resolved" })],
+      selectedId: "r1",
+    });
+    expect(screen.getByTestId("comment-reader")).toHaveAttribute("data-comment-id", "r1");
+    await chooseStatus(user, "all");
+    expect(screen.getByTestId("comment-reader")).toHaveAttribute("data-comment-id", "r1");
+  });
+});
+
+describe("CommentSidePane splitter (#411)", () => {
+  it("is a horizontal separator that resizes the list by dragging, within a minimum", () => {
+    renderPane({ comments: [comment("c1")], selectedId: null });
+    const splitter = screen.getByTestId("comment-pane-splitter");
+    expect(splitter).toHaveAttribute("role", "separator");
+    expect(splitter).toHaveAttribute("aria-orientation", "horizontal");
+    const listBox = screen.getByTestId("comment-list").parentElement as HTMLElement;
+    const before = parseInt(getComputedStyle(listBox).height, 10);
+
+    fireEvent.pointerDown(splitter, { clientY: 300, pointerId: 1 });
+    fireEvent.pointerMove(splitter, { clientY: 360, pointerId: 1 });
+    fireEvent.pointerUp(splitter, { clientY: 360, pointerId: 1 });
+    expect(parseInt(getComputedStyle(listBox).height, 10)).toBe(before + 60);
+
+    // Dragged far up: the list stops at its minimum instead of collapsing.
+    fireEvent.pointerDown(splitter, { clientY: 300, pointerId: 1 });
+    fireEvent.pointerMove(splitter, { clientY: -5000, pointerId: 1 });
+    fireEvent.pointerUp(splitter, { clientY: -5000, pointerId: 1 });
+    expect(parseInt(getComputedStyle(listBox).height, 10)).toBeGreaterThan(0);
   });
 });
 
@@ -1163,7 +955,7 @@ describe("CommentSidePane list (#333)", () => {
   });
 });
 
-describe("CommentSidePane drafts survive the card unmounting (#334)", () => {
+describe("CommentSidePane drafts survive the reader switching comments (#334)", () => {
   const baseProps = () => ({
     root: "works",
     filePath: "doc.md",
@@ -1182,13 +974,9 @@ describe("CommentSidePane drafts survive the card unmounting (#334)", () => {
     onSelect: vi.fn(),
   });
 
-  /** #364: every card has a reply button now, so aim at the selected one. */
+  /** The reader holds the selected comment's forms. */
   function selectedCard(): HTMLElement {
-    const card = screen
-      .getAllByTestId("comment-item")
-      .find((el) => el.dataset.selected === "true");
-    if (!card) throw new Error("no selected card");
-    return card;
+    return screen.getByTestId("comment-reader");
   }
 
   async function startReply(user: ReturnType<typeof userEvent.setup>, text: string) {
@@ -1208,15 +996,27 @@ describe("CommentSidePane drafts survive the card unmounting (#334)", () => {
     expect(screen.getByTestId("comment-reply-input")).toHaveValue("書きかけ");
   });
 
-  it("keeps a half-written edit when the status filter hides the card and brings it back", async () => {
+  it("keeps a half-written reply when another comment is selected and the first is selected again (#411)", async () => {
     const user = userEvent.setup();
-    const props = { ...baseProps(), comments: [comment("c1")], selectedId: "c1" };
-    render(<CommentSidePane {...props} />);
+    const props = { ...baseProps(), comments: [comment("c1"), comment("c2")] };
+    const { rerender } = render(<CommentSidePane {...props} selectedId="c1" />);
+    await startReply(user, "書きかけ");
+
+    rerender(<CommentSidePane {...props} selectedId="c2" />);
+    expect(screen.queryByTestId("comment-reply-input")).toBeNull();
+    rerender(<CommentSidePane {...props} selectedId="c1" />);
+    expect(screen.getByTestId("comment-reply-input")).toHaveValue("書きかけ");
+  });
+
+  it("keeps a half-written edit when another comment is selected and the first is selected again (#411)", async () => {
+    const user = userEvent.setup();
+    const props = { ...baseProps(), comments: [comment("c1"), comment("c2")] };
+    const { rerender } = render(<CommentSidePane {...props} selectedId="c1" />);
     await user.click(screen.getByTestId("comment-edit"));
     await user.type(screen.getByTestId("comment-edit-input"), " 追記");
 
-    await chooseStatus(user, "resolved");
-    await chooseStatus(user, "open");
+    rerender(<CommentSidePane {...props} selectedId="c2" />);
+    rerender(<CommentSidePane {...props} selectedId="c1" />);
     expect(screen.getByTestId("comment-edit-input")).toHaveValue("body of c1 追記");
   });
 
@@ -1228,8 +1028,6 @@ describe("CommentSidePane drafts survive the card unmounting (#334)", () => {
     await user.click(screen.getByTestId("comment-reply-submit"));
     expect(props.onReply).toHaveBeenCalledWith("c1", "送信する");
 
-    await chooseStatus(user, "resolved");
-    await chooseStatus(user, "open");
     expect(screen.queryByTestId("comment-reply-input")).toBeNull();
     await user.click(screen.getByTestId("comment-reply-toggle"));
     expect(screen.getByTestId("comment-reply-input")).toHaveValue("");
@@ -1295,21 +1093,29 @@ describe("CommentSidePane drafts survive the card unmounting (#334)", () => {
 });
 
 describe("CommentSidePane sent to AI (#366)", () => {
-  const cardOf = (id: string) =>
-    document.querySelector<HTMLElement>(
-      `[data-testid="comment-item"][data-comment-id="${id}"]`
-    )!;
-
-  it("marks only the sent comments as being answered", () => {
+  // The reader shows the selected comment, so the state is read there.
+  it("marks a sent comment as being answered", () => {
     renderPane({
       comments: [comment("c1"), comment("c2")],
+      selectedId: "c1",
       agentReplying: true,
       agentSentIds: new Set(["c1"]),
     });
-    expect(within(cardOf("c1")).getByTestId("comment-awaiting-ai")).toBeInTheDocument();
-    expect(within(cardOf("c1")).queryByTestId("comment-unsent-to-ai")).toBeNull();
-    expect(within(cardOf("c2")).getByTestId("comment-unsent-to-ai")).toBeInTheDocument();
-    expect(within(cardOf("c2")).queryByTestId("comment-awaiting-ai")).toBeNull();
+    const reader = screen.getByTestId("comment-reader");
+    expect(within(reader).getByTestId("comment-awaiting-ai")).toBeInTheDocument();
+    expect(within(reader).queryByTestId("comment-unsent-to-ai")).toBeNull();
+  });
+
+  it("marks a comment written after the send as not yet sent", () => {
+    renderPane({
+      comments: [comment("c1"), comment("c2")],
+      selectedId: "c2",
+      agentReplying: true,
+      agentSentIds: new Set(["c1"]),
+    });
+    const reader = screen.getByTestId("comment-reader");
+    expect(within(reader).getByTestId("comment-unsent-to-ai")).toBeInTheDocument();
+    expect(within(reader).queryByTestId("comment-awaiting-ai")).toBeNull();
   });
 
   it("stops showing it on a comment the AI has answered (#372)", () => {
@@ -1323,11 +1129,28 @@ describe("CommentSidePane sent to AI (#366)", () => {
           ],
         }),
       ],
+      selectedId: "c1",
       agentReplying: true,
       agentSentIds: new Set(["c1", "c2"]),
     });
-    expect(within(cardOf("c1")).queryByTestId("comment-awaiting-ai")).toBeNull();
-    expect(within(cardOf("c2")).getByTestId("comment-awaiting-ai")).toBeInTheDocument();
+    expect(screen.queryByTestId("comment-awaiting-ai")).toBeNull();
+  });
+
+  it("keeps showing it on a comment the AI has not answered yet (#372)", () => {
+    renderPane({
+      comments: [
+        comment("c2", {
+          replies: [
+            { author: "ai", body: "反映しました" },
+            { author: "alice", body: "まだ違う" },
+          ],
+        }),
+      ],
+      selectedId: "c2",
+      agentReplying: true,
+      agentSentIds: new Set(["c2"]),
+    });
+    expect(screen.getByTestId("comment-awaiting-ai")).toBeInTheDocument();
   });
 
   it("shows neither once the AI is done", () => {
@@ -1359,29 +1182,5 @@ describe("CommentSidePane opening a thread (#376)", () => {
     expect(bodies).toHaveLength(2);
     expect(bodies[0]).toHaveAttribute("data-collapsed", "true");
     expect(bodies[1]).toHaveAttribute("data-collapsed", "false");
-  });
-
-  it("closes the detail view once the comment is resolved", async () => {
-    const user = userEvent.setup();
-    const handlers = renderPane({ comments: [comment("c1")], selectedId: "c1" });
-    await user.click(screen.getByRole("button", { name: "open comment detail" }));
-    expect(screen.getByTestId("comment-detail-dialog")).toBeInTheDocument();
-
-    await user.click(screen.getByTestId("comment-detail-resolve-toggle"));
-    expect(handlers.onResolveToggle).toHaveBeenCalledWith("c1", "resolved");
-    await waitFor(() => expect(screen.queryByTestId("comment-detail-dialog")).toBeNull());
-  });
-
-  it("keeps the detail view open when reopening", async () => {
-    const user = userEvent.setup();
-    const handlers = renderPane({
-      comments: [comment("c1", { status: "resolved" })],
-      selectedId: "c1",
-    });
-    await chooseStatus(user, "all");
-    await user.click(screen.getByRole("button", { name: "open comment detail" }));
-    await user.click(screen.getByTestId("comment-detail-resolve-toggle"));
-    expect(handlers.onResolveToggle).toHaveBeenCalledWith("c1", "open");
-    expect(screen.getByTestId("comment-detail-dialog")).toBeInTheDocument();
   });
 });
