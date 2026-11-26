@@ -1526,8 +1526,7 @@ export function EditorPage() {
     ids: ReadonlySet<string>;
   }>(() => ({ key: "", ids: new Set() }));
   const unresolvedIds = useMemo<ReadonlySet<string>>(
-    () =>
-      unresolvedVerdict.key === fileKey ? unresolvedVerdict.ids : new Set<string>(),
+    () => (unresolvedVerdict.key === fileKey ? unresolvedVerdict.ids : new Set<string>()),
     [unresolvedVerdict, fileKey]
   );
   // Whether the document the editor currently holds is the active file's
@@ -2209,6 +2208,12 @@ export function EditorPage() {
     // The jump runs after the commit that opens the pane: opening it changes
     // the body's width, and the scroll position is computed against that.
     setPendingJump({ id, path: activePath });
+  };
+  // A row in the pane's list only selects: the reader shows the comment and the
+  // document stays where it is (#409). The jump is the reader's own button.
+  const handleSelectCommentCard = (id: string) => {
+    setRailSelectedId(id);
+    setPendingJump(null);
   };
   const [pendingJump, setPendingJump] = useState<{
     id: string;
@@ -3493,48 +3498,47 @@ export function EditorPage() {
       {/* #389: closing hides the pane instead of unmounting it, so the
           reply / edit drafts it holds (#334) survive a close and reopen. */}
       <Box
-          component="aside"
-          hidden={!isCommentPaneOpen}
-          data-testid="comment-pane"
-          sx={{
-            width: 320,
-            flexShrink: 0,
-            borderLeft: "1px solid",
-            borderColor: "divider",
-            bgcolor: "background.paper",
-            display: isCommentPaneOpen ? "flex" : "none",
-            flexDirection: "column",
+        component="aside"
+        hidden={!isCommentPaneOpen}
+        data-testid="comment-pane"
+        sx={{
+          width: 320,
+          flexShrink: 0,
+          borderLeft: "1px solid",
+          borderColor: "divider",
+          bgcolor: "background.paper",
+          display: isCommentPaneOpen ? "flex" : "none",
+          flexDirection: "column",
+        }}
+      >
+        <CommentSidePane
+          root={activeFileRoot}
+          filePath={activePath}
+          comments={comments}
+          reviewActive={reviewActive}
+          onRefresh={refreshComments}
+          onClose={() => {
+            paneFocusRef.current = "comment-pane-open";
+            setCommentPaneOpen(false);
           }}
-        >
-          <CommentSidePane
-            root={activeFileRoot}
-            filePath={activePath}
-            comments={comments}
-            reviewActive={reviewActive}
-            onRefresh={refreshComments}
-            onClose={() => {
-              paneFocusRef.current = "comment-pane-open";
-              setCommentPaneOpen(false);
-            }}
-            canAddComment={canAddComment}
-            onAddComment={handleAddCommentClick}
-            onAddGlobal={handleAddGlobalClick}
-            onDelete={handleDeleteComment}
-            onResolveToggle={handleResolveToggle}
-            onReply={handleReplyComment}
-            onEdit={handleEditComment}
-            onEditReply={handleEditReply}
-            onDeleteReply={handleDeleteReply}
-            onJump={handleJumpToComment}
-            onSelect={handleSelectComment}
-            onDeselect={() => setRailSelectedId(null)}
-            selectedId={railSelectedId}
-            unresolvedIds={unresolvedIds}
-            agentReplying={agentBusy && agentActivity.sentByUs}
-            agentNewReplies={agentActivity.newReplies}
-            agentSentIds={agentActivity.sentIds}
-          />
-        </Box>
+          canAddComment={canAddComment}
+          onAddComment={handleAddCommentClick}
+          onAddGlobal={handleAddGlobalClick}
+          onDelete={handleDeleteComment}
+          onResolveToggle={handleResolveToggle}
+          onReply={handleReplyComment}
+          onEdit={handleEditComment}
+          onEditReply={handleEditReply}
+          onDeleteReply={handleDeleteReply}
+          onJump={handleJumpToComment}
+          onSelect={handleSelectCommentCard}
+          selectedId={railSelectedId}
+          unresolvedIds={unresolvedIds}
+          agentReplying={agentBusy && agentActivity.sentByUs}
+          agentNewReplies={agentActivity.newReplies}
+          agentSentIds={agentActivity.sentIds}
+        />
+      </Box>
 
       {menuOpen && menuAnchor && (
         <Popper

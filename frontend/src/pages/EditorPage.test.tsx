@@ -151,14 +151,18 @@ describe("EditorPage comment pane open/close (#389)", () => {
     // opening README.md may still be in the DOM, so "the first tooltip" can
     // be that one.
     await user.hover(close);
-    expect(await screen.findByRole("tooltip", { name: "コメントを閉じる" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("tooltip", { name: "コメントを閉じる" })
+    ).toBeInTheDocument();
     await user.unhover(close);
 
     await user.click(close);
     const open = screen.getByTestId("comment-pane-open");
     expect(open).toHaveAttribute("aria-label", "コメントを開く");
     await user.hover(open);
-    expect(await screen.findByRole("tooltip", { name: "コメントを開く" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("tooltip", { name: "コメントを開く" })
+    ).toBeInTheDocument();
   });
 });
 
@@ -1998,6 +2002,7 @@ describe("EditorPage comment highlight & rail selection (#304)", () => {
 
   it("an unsent reply draft survives closing and reopening the pane (#389)", async () => {
     const { user } = await openWithComment(openComment);
+    await user.click(await screen.findByTestId("comment-item"));
     await user.click(screen.getByTestId("comment-reply-toggle"));
     await user.type(await screen.findByTestId("comment-reply-input"), "書きかけ");
 
@@ -2181,6 +2186,7 @@ describe("EditorPage jump to comment (#167)", () => {
     // paints no decoration), so it appears one rAF after the editor is
     // installed rather than on the first render — wait for it.
     await user.click(await screen.findByTestId("comment-item"));
+    await user.click(await screen.findByTestId("comment-reader-jump"));
 
     await waitFor(() => expect(scrollSpy).toHaveBeenCalled());
     // Assert *which* element was scrolled to: the live anchor position, not
@@ -2196,6 +2202,46 @@ describe("EditorPage jump to comment (#167)", () => {
     );
     // The resolved comment's persistent highlight is still not resurrected.
     expect(ed.view.dom.querySelectorAll(".comment-mark")).toHaveLength(0);
+  });
+
+  it("#411: clicking a list row shows the comment in the reader and does not scroll the body", async () => {
+    const comment: CommentJSON = {
+      id: "c-020",
+      scope: "inline",
+      body: "ここ直して",
+      status: "open",
+      anchor: { heading_path: ["## 実績"], snippet: "SLA遵守率 98%", occurrence: 0 },
+      context: { heading_path: ["実績"], line_range: [74, 74] },
+      orphan: false,
+    };
+    const user = await openReadmeWithComments([comment]);
+    const ed = installFakeEditor("<h2>実績</h2><p>SLA遵守率 98%</p>");
+    await waitFor(() =>
+      expect(ed.view.dom.querySelectorAll('[data-comment-id="c-020"]')).toHaveLength(1)
+    );
+    const scrollSpy = vi.mocked(Element.prototype.scrollIntoView);
+    scrollSpy.mockClear();
+
+    await user.click(await screen.findByTestId("comment-item"));
+    await waitFor(() =>
+      expect(screen.getByTestId("comment-reader")).toHaveAttribute(
+        "data-comment-id",
+        "c-020"
+      )
+    );
+    expect(screen.getByTestId("comment-reader")).toHaveTextContent("ここ直して");
+    // Let any (wrongly) scheduled jump run before asserting there was none.
+    await act(async () => {
+      await new Promise((r) => requestAnimationFrame(r));
+      await new Promise((r) => requestAnimationFrame(r));
+    });
+    const onBody = (scrollSpy.mock.instances as HTMLElement[]).filter(
+      (el) =>
+        ed.view.dom.contains(el) ||
+        el.classList.contains("comment-mark") ||
+        !el.closest('[data-testid="comment-list"]')
+    );
+    expect(onBody).toHaveLength(0);
   });
 
   it("A2: jumps to an open comment's decoration and flashes it (regression)", async () => {
@@ -2230,6 +2276,7 @@ describe("EditorPage jump to comment (#167)", () => {
 
     const scrollSpy = vi.mocked(Element.prototype.scrollIntoView);
     await user.click(screen.getByTestId("comment-item"));
+    await user.click(await screen.findByTestId("comment-reader-jump"));
 
     await waitFor(() => expect(scrollSpy).toHaveBeenCalled());
     expect(editorScrollTarget(scrollSpy)).toBe(decorated);
@@ -2296,6 +2343,7 @@ describe("EditorPage jump to comment (#167)", () => {
     // paints no decoration), so it appears one rAF after the editor is
     // installed rather than on the first render — wait for it.
     await user.click(await screen.findByTestId("comment-item"));
+    await user.click(await screen.findByTestId("comment-reader-jump"));
 
     await waitFor(() => expect(scrollSpy).toHaveBeenCalled());
     const scrolledEl = editorScrollTarget(scrollSpy) as HTMLElement;
@@ -2335,6 +2383,7 @@ describe("EditorPage jump to comment (#167)", () => {
     // paints no decoration), so it appears one rAF after the editor is
     // installed rather than on the first render — wait for it.
     await user.click(await screen.findByTestId("comment-item"));
+    await user.click(await screen.findByTestId("comment-reader-jump"));
 
     await waitFor(() => expect(scrollSpy).toHaveBeenCalled());
     expect((editorScrollTarget(scrollSpy) as HTMLElement).textContent).toContain("first");
@@ -2429,7 +2478,9 @@ describe("EditorPage jump to comment (#167)", () => {
         const ed = installFakeEditor(
           "<p>mock content</p><table><tbody><tr><td>手段</td><td>インターコム</td></tr></tbody></table>"
         );
-        expect(await screen.findByTestId("orphan-comment-badge")).toHaveTextContent(/^1$/);
+        expect(await screen.findByTestId("orphan-comment-badge")).toHaveTextContent(
+          /^1$/
+        );
 
         // Hold the refetch open so the window stays observable.
         let release: () => void = () => {};
@@ -2528,6 +2579,10 @@ describe("EditorPage jump to comment (#167)", () => {
               "true"
             ),
           DEEPLINK_JUMP_WAIT
+        );
+        expect(screen.getByTestId("comment-reader")).toHaveAttribute(
+          "data-comment-id",
+          "c-001"
         );
       } finally {
         useUIStore.setState({ isCommentPaneOpen: true });
