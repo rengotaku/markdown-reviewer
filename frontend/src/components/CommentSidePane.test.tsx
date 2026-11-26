@@ -418,6 +418,20 @@ describe("CommentSidePane", () => {
         expect(selectedRow()?.dataset.commentId).toBe("u1");
       });
 
+      it("stays closed when only another comment's verdict changes after the reader closed it (#413)", async () => {
+        const user = userEvent.setup();
+        const comments = [comment("u1"), comment("u2")];
+        const { rerender } = render(paneWith(comments, null));
+        rerender(paneWith(comments, "u1"));
+        rerender(paneWith(comments, "u1", new Set(["u1"])));
+        expect(screen.getByTestId("global-comments-dialog")).toBeInTheDocument();
+        await user.keyboard("{Escape}");
+        await waitFor(() => expect(screen.queryByTestId("global-comments-dialog")).toBeNull());
+
+        rerender(paneWith(comments, "u1", new Set(["u1", "u2"])));
+        expect(screen.queryByTestId("global-comments-dialog")).toBeNull();
+      });
+
       it("opens the orphan tab for an orphan comment", () => {
         const comments = [pinned("g1"), comment("o1", { orphan: true, context: null })];
         const { rerender } = render(paneWith(comments, null));

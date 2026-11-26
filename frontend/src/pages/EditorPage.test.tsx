@@ -2041,6 +2041,16 @@ describe("EditorPage comment highlight & rail selection (#304)", () => {
   });
 });
 
+/** The element the editor body was scrolled to. Selecting a comment also
+ *  scrolls its card into view in the pane's list, which comes first. */
+function editorScrollTarget(spy: { mock: { instances: unknown[] } }): HTMLElement {
+  const el = (spy.mock.instances as HTMLElement[]).find(
+    (e) => !e.closest('[data-testid="comment-list"]')
+  );
+  if (!el) throw new Error("the editor body was not scrolled");
+  return el;
+}
+
 describe("EditorPage jump to comment (#167)", () => {
   let fakeEditor: Editor | null = null;
 
@@ -2176,7 +2186,7 @@ describe("EditorPage jump to comment (#167)", () => {
     // Assert *which* element was scrolled to: the live anchor position, not
     // some unrelated node — resolveAnchorInDoc + domAtPos must have landed on
     // the paragraph carrying the anchor's snippet.
-    const scrolledEl = scrollSpy.mock.instances[0] as HTMLElement;
+    const scrolledEl = editorScrollTarget(scrollSpy) as HTMLElement;
     expect(scrolledEl.textContent).toContain("SLA遵守率 98%");
 
     // A transient flash decoration takes the place of the (absent) persistent
@@ -2222,7 +2232,7 @@ describe("EditorPage jump to comment (#167)", () => {
     await user.click(screen.getByTestId("comment-item"));
 
     await waitFor(() => expect(scrollSpy).toHaveBeenCalled());
-    expect(scrollSpy.mock.instances[0]).toBe(decorated);
+    expect(editorScrollTarget(scrollSpy)).toBe(decorated);
     expect(decorated.classList.contains("is-flash")).toBe(true);
     // The existing decoration-based flash is used — no transient flash decoration.
     expect(ed.view.dom.querySelectorAll(".comment-flash")).toHaveLength(0);
@@ -2288,7 +2298,7 @@ describe("EditorPage jump to comment (#167)", () => {
     await user.click(await screen.findByTestId("comment-item"));
 
     await waitFor(() => expect(scrollSpy).toHaveBeenCalled());
-    const scrolledEl = scrollSpy.mock.instances[0] as HTMLElement;
+    const scrolledEl = editorScrollTarget(scrollSpy) as HTMLElement;
     // "first" precedes "second" in document order, so its anchor has the
     // smaller `from` and must be the one scrolled to.
     expect(scrolledEl.textContent).toContain("first");
@@ -2327,7 +2337,7 @@ describe("EditorPage jump to comment (#167)", () => {
     await user.click(await screen.findByTestId("comment-item"));
 
     await waitFor(() => expect(scrollSpy).toHaveBeenCalled());
-    expect((scrollSpy.mock.instances[0] as HTMLElement).textContent).toContain("first");
+    expect((editorScrollTarget(scrollSpy) as HTMLElement).textContent).toContain("first");
     await waitFor(() =>
       expect(ed.view.dom.querySelectorAll(".comment-flash.is-flash")).toHaveLength(2)
     );
@@ -2486,7 +2496,7 @@ describe("EditorPage jump to comment (#167)", () => {
       await waitFor(() => {
         expect(scrollSpy).toHaveBeenCalled();
       }, DEEPLINK_JUMP_WAIT);
-      const scrolledEl = scrollSpy.mock.instances[0] as HTMLElement;
+      const scrolledEl = editorScrollTarget(scrollSpy) as HTMLElement;
       expect(scrolledEl.textContent).toContain("hello world");
     });
 
@@ -2520,6 +2530,42 @@ describe("EditorPage jump to comment (#167)", () => {
           DEEPLINK_JUMP_WAIT
         );
       } finally {
+        useUIStore.setState({ isCommentPaneOpen: true });
+      }
+    });
+
+    it("ペインを閉じて保存していても、ジャンプはペインが開いた後に行われる (#413)", async () => {
+      const comment: CommentJSON = {
+        id: "c-001",
+        scope: "inline",
+        body: "対象のコメント",
+        status: "open",
+        anchor: { heading_path: ["## Title"], snippet: "hello world", occurrence: 0 },
+        context: { heading_path: ["Title"], line_range: [2, 2] },
+        orphan: false,
+      };
+      await useComments([comment])();
+      useUIStore.setState({ isCommentPaneOpen: false });
+      // Pane display at each scroll: it changes the body's width, so the
+      // scroll position must be computed once the pane is already open.
+      const paneDisplayAtScroll: string[] = [];
+      const scrollSpy = vi.mocked(Element.prototype.scrollIntoView);
+      scrollSpy.mockImplementation(() => {
+        const pane = screen.queryByTestId("comment-pane");
+        paneDisplayAtScroll.push(pane ? getComputedStyle(pane).display : "absent");
+      });
+
+      try {
+        renderPage(`/${DEFAULT_ROOT}/README.md?comment_id=c-001`);
+        installFakeEditor("<h2>Title</h2><p>hello world</p>");
+
+        await waitFor(
+          () => expect(paneDisplayAtScroll.length).toBeGreaterThan(0),
+          DEEPLINK_JUMP_WAIT
+        );
+        expect(paneDisplayAtScroll[0]).toBe("flex");
+      } finally {
+        scrollSpy.mockImplementation(() => {});
         useUIStore.setState({ isCommentPaneOpen: true });
       }
     });
@@ -2609,7 +2655,7 @@ describe("EditorPage jump to comment (#167)", () => {
       await waitFor(() => {
         expect(scrollSpy).toHaveBeenCalled();
       }, DEEPLINK_JUMP_WAIT);
-      const scrolledEl = scrollSpy.mock.instances[0] as HTMLElement;
+      const scrolledEl = editorScrollTarget(scrollSpy) as HTMLElement;
       expect(scrolledEl.textContent).toContain("hello world");
     });
   });

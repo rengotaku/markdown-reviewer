@@ -2206,8 +2206,21 @@ export function EditorPage() {
     // card even when the pane was closed.
     setCommentPaneOpen(true);
     setRailSelectedId(id);
-    handleJumpToComment(id);
+    // The jump runs after the commit that opens the pane: opening it changes
+    // the body's width, and the scroll position is computed against that.
+    setPendingJump({ id, path: activePath });
   };
+  const [pendingJump, setPendingJump] = useState<{
+    id: string;
+    path: string | undefined;
+  } | null>(null);
+  useEffect(() => {
+    if (!pendingJump) return;
+    setPendingJump(null);
+    if (pendingJump.path !== activePath || !editor || editor.isDestroyed) return;
+    handleJumpToComment(pendingJump.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingJump]);
 
   // Deeplink: `?comment_id=<id>` jumps to that comment once the file and comments land.
   useEffect(() => {

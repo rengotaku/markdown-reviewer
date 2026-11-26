@@ -592,18 +592,23 @@ export function CommentSidePane({
   // comment is live is only known once the caller has measured it or found
   // it unresolvable (`unresolvedIds` lands a frame after the selection). Derived during render so it opens on
   // the same commit that settles it.
-  // The caller's verdict can land after the selection, so a new verdict is
-  // judged against the selection again.
+  // The caller's verdict can land after the selection, so the selected
+  // comment's own verdict turning true is judged again. Other comments'
+  // verdicts are not tracked: they must not reopen a dialog the reader closed.
+  const selectedUnresolved = selectedId ? unresolvedIds.has(selectedId) : false;
   const [selectionSettled, setSelectionSettled] = useState({
     id: selectedId,
-    unresolved: unresolvedIds,
+    unresolved: selectedUnresolved,
   });
-  if (selectedId !== selectionSettled.id || unresolvedIds !== selectionSettled.unresolved) {
+  if (
+    selectedId !== selectionSettled.id ||
+    selectedUnresolved !== selectionSettled.unresolved
+  ) {
     const target = selectedId ? comments.find((c) => c.id === selectedId) : undefined;
     const noLiveAnchor =
       !!target && (target.scope === "global" || hasNoLiveAnchor(target));
     if (!selectedId || noLiveAnchor || target) {
-      setSelectionSettled({ id: selectedId, unresolved: unresolvedIds });
+      setSelectionSettled({ id: selectedId, unresolved: selectedUnresolved });
     }
     if (target && noLiveAnchor) {
       if (filter !== "all" && target.status !== filter) setFilter("all");
