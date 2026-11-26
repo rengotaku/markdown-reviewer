@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, screen, waitFor, fireEvent, act, within } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Routes, Route, useLocation } from "react-router-dom";
@@ -2009,41 +2009,6 @@ describe("EditorPage comment highlight & rail selection (#304)", () => {
     expect(screen.getByTestId("comment-reply-input")).toHaveValue("書きかけ");
   });
 
-  it("cards are placed against the pane's real top after reopening (#389)", async () => {
-    const { user, ed } = await openWithComment(openComment);
-    const PANE_TOP = 74;
-    const rect = (top: number, height: number) =>
-      ({
-        top,
-        bottom: top + height,
-        left: 0,
-        right: 0,
-        width: 0,
-        height,
-        x: 0,
-        y: top,
-        toJSON() {},
-      }) as DOMRect;
-    // A display:none box measures as all zeros, as in a real browser.
-    const pane = screen.getByTestId("comment-pane");
-    screen.getByTestId("comment-rail-aligned").getBoundingClientRect = () =>
-      pane.hidden ? rect(0, 0) : rect(PANE_TOP, 600);
-    const mark = ed.view.dom.querySelector(".comment-mark") as HTMLElement;
-    mark.getBoundingClientRect = () => rect(200, 20);
-
-    await user.click(screen.getByTestId("comment-pane-close"));
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 100));
-    });
-    await user.click(screen.getByTestId("comment-pane-open"));
-
-    await waitFor(() =>
-      expect(
-        window.getComputedStyle(screen.getByTestId("comment-rail-card") as HTMLElement).top
-      ).toBe(`${200 - PANE_TOP}px`)
-    );
-  });
-
   it("moves focus to the open icon on close and back to the close icon on open (#389)", async () => {
     const user = await (async () => {
       const u = userEvent.setup();
@@ -2072,164 +2037,6 @@ describe("EditorPage comment highlight & rail selection (#304)", () => {
       expect(el).toHaveAttribute("tabindex", "0");
       fireEvent.keyDown(el, { key: "Enter" });
       expect(screen.getByTestId("comment-item")).toHaveAttribute("data-selected", "true");
-    });
-  });
-
-  it("scrolling the nearest scrollable ancestor recomputes the card's rail position", async () => {
-    const { ed } = await openWithComment(openComment);
-
-    expect(screen.getByTestId("comment-rail-aligned")).toBeInTheDocument();
-    // In the real DOM `editor.view.dom.parentElement` is a plain wrapper div
-    // (`overflow: visible`) — the actual scroll container is further up the
-    // tree (see EditorPage's findScrollableAncestor). Reproduce that shape:
-    // tiptap's Editor (constructed without an `element` option, as here)
-    // mounts into its own throwaway wrapper div that is never attached to
-    // `document`, so wrap that wrapper in a container that *does* look
-    // scrollable (`overflow-y: auto` + scrollHeight > clientHeight) and
-    // assert the listener ends up on that ancestor, not the immediate parent.
-    const wrapper = ed.view.dom.parentElement as HTMLElement;
-    const scrollContainer = document.createElement("div");
-    scrollContainer.style.overflowY = "auto";
-    Object.defineProperty(scrollContainer, "scrollHeight", {
-      value: 2000,
-      configurable: true,
-    });
-    Object.defineProperty(scrollContainer, "clientHeight", {
-      value: 800,
-      configurable: true,
-    });
-    scrollContainer.appendChild(wrapper);
-    // The scroll-listener effect only (re)runs on [editor, centered] —
-    // reparenting after mount doesn't retrigger it on its own, so toggle
-    // `centered` off/on to force it to re-discover the ancestor now that the
-    // DOM shape above matches production.
-    act(() => {
-      useEditorPrefs.setState({ centered: false });
-    });
-    act(() => {
-      useEditorPrefs.setState({ centered: true });
-    });
-    await waitFor(() =>
-      expect(screen.getByTestId("comment-rail-aligned")).toBeInTheDocument()
-    );
-
-    const mark = ed.view.dom.querySelector(".comment-mark") as HTMLElement;
-    // recomputeAnchorTops re-reads this on every call; start at 0 (already
-    // inside the zero-height jsdom pane, so the card is `visible`), then move
-    // it below the pane once the ancestor scrolls.
-    let markTop = 0;
-    mark.getBoundingClientRect = () =>
-      ({
-        top: markTop,
-        bottom: markTop + 20,
-        left: 0,
-        right: 0,
-        width: 0,
-        height: 20,
-        x: 0,
-        y: markTop,
-        toJSON() {},
-      }) as DOMRect;
-
-    // Scrolling `wrapper` itself (the non-scrollable immediate parent) must
-    // not trigger a recompute — proves the listener isn't attached there.
-    markTop = 500;
-    fireEvent.scroll(wrapper);
-    const staleCardWrapper = screen.getByTestId("comment-rail-card") as HTMLElement;
-    expect(window.getComputedStyle(staleCardWrapper).top).toBe("0px");
-
-    // Scrolling the real scroll container recomputes and re-lays out the
-    // card at its new (much lower) anchor top (single-comment case is always
-    // shrink-to-fit and stays `visible`, never dropped to `below` — see
-    // commentRailLayout.ts's "lone leading card" handling — so the top the
-    // AlignedCard wrapper was placed at is what proves the recompute ran).
-    fireEvent.scroll(scrollContainer);
-    await waitFor(() => {
-      const cardWrapper = screen.getByTestId("comment-rail-card") as HTMLElement;
-      expect(window.getComputedStyle(cardWrapper).top).toBe("500px");
-    });
-  });
-
-  // #306 case 3: root cause was `scheduleAnchorRecalc`'s rAF coalescing —
-  // a burst of triggers (comments arriving, the editor mounting) collapses
-  // onto a single scheduled frame, but that frame's callback used to close
-  // over whichever render happened to win the race to schedule it. When
-  // that was an early render (editor still null, or comments still `[]`),
-  // the one frame that actually ran read stale values, found nothing, and —
-  // on a file nobody scrolls or edits — nothing else ever asked for another
-  // recompute. This reproduces exactly that: the decoration is missing on
-  // the very first measurement pass and only appears once the document is
-  // reloaded and resynced afterwards (a real `resyncCommentHighlights`
-  // transaction, the same one production runs after the typing-pause
-  // debounce), which must still land the card without any further
-  // scroll/resize/edit prompting it.
-  it("3. a decoration that appears after the initial pass still lands its card on the rail", async () => {
-    const user = userEvent.setup();
-    const { http, HttpResponse } = await import("msw");
-    const { server } = await import("@/test/mocks/server");
-    server.use(
-      http.get("http://localhost:8080/api/stat/*", () =>
-        HttpResponse.json({
-          path: "README.md",
-          root: "mock-root",
-          modified: "2026-05-20T00:00:00Z",
-          created: "2026-05-19T00:00:00Z",
-          state: "review",
-          hasOpenComments: true,
-        })
-      ),
-      http.get("http://localhost:8080/api/comments/*", () =>
-        HttpResponse.json({
-          file: "README.md",
-          root: "mock-root",
-          summary: { total: 1, by_scope: {}, by_status: {} },
-          comments: [openComment],
-        })
-      )
-    );
-    renderPage();
-    await waitFor(() =>
-      expect(screen.getByTestId("sidebar-file-README.md")).toBeInTheDocument()
-    );
-    await user.click(screen.getByTestId("sidebar-file-README.md"));
-    // Wait for the fetch, not the row — #306 now holds this anchored,
-    // unresolved comment out of the rail until it has a real measurement, so
-    // waiting for `comment-context-*` here (no editor installed yet) would
-    // never resolve.
-    await waitFor(() =>
-      expect(allStatusOption()).toHaveAccessibleName(`すべて（1 件）を表示`)
-    );
-    // Content with none of the anchor's text at all — buildDeco resolves no
-    // range for it, so no `.comment-mark` decoration is created. Distinct
-    // from "not yet decorated": the current document genuinely has nothing
-    // to highlight, matching the excluded-until-measured state case 1/2
-    // cover, not a fresh recompute trigger by itself.
-    const ed = installEditor("<p>まったく別の文章です</p>");
-    await act(async () => {
-      await new Promise((r) => requestAnimationFrame(r));
-      await new Promise((r) => requestAnimationFrame(r));
-    });
-    expect(ed.view.dom.querySelectorAll(".comment-mark")).toHaveLength(0);
-    expect(
-      within(screen.getByTestId("comment-rail-aligned")).queryAllByTestId("comment-item")
-    ).toHaveLength(0);
-
-    // The document changes to include the anchor's text (e.g. the real load
-    // finally lands), then a resync rebuilds decorations against it — the
-    // same two-step production takes (setContent, then the debounced
-    // resyncCommentHighlights once typing settles; see TiptapEditor's
-    // resyncDecorations). Both are genuine ProseMirror transactions.
-    await act(async () => {
-      ed.commands.setContent("<h2>実績</h2><p>SLA遵守率 98%</p>");
-      ed.commands.resyncCommentHighlights();
-    });
-    await waitFor(() =>
-      expect(ed.view.dom.querySelectorAll(".comment-mark")).toHaveLength(1)
-    );
-
-    await waitFor(() => {
-      const rail = screen.getByTestId("comment-rail-aligned");
-      expect(within(rail).getAllByTestId("comment-item")).toHaveLength(1);
     });
   });
 });
@@ -2400,7 +2207,7 @@ describe("EditorPage jump to comment (#167)", () => {
     const decorated = ed.view.dom.querySelector<HTMLElement>(
       '[data-comment-id="c-020"]'
     )!;
-    // #306: the rail only draws this row once EditorPage's anchorTops state
+    // #306: the rail only draws this row once EditorPage's anchor measurement
     // actually reflects the decoration above (an async rAF measurement, not
     // synchronous with it appearing) — wait for that too before clicking.
     // #312 moved the comment-context row behind selection, so the card
@@ -2439,7 +2246,7 @@ describe("EditorPage jump to comment (#167)", () => {
     // the current document paints no decoration — same as any other
     // not-yet-measured anchor from the rail's point of view — so it no
     // longer lands a `comment-context-*` row to click at all (case 1/2:
-    // never fed a real anchorTops entry, it stays excluded rather than
+    // never measured, it stays excluded rather than
     // drawn at a wrong position). That is exactly the same "no anchor
     // resolves" state ケース 5 already drives through the comment_id deep
     // link instead of a rail click, so this reaches the same guard in
@@ -2656,9 +2463,8 @@ describe("EditorPage jump to comment (#167)", () => {
   });
 
   describe("comment_id deeplink (STEP 3)", () => {
-    // #339: a selection's jump waits for the rail to lay out what the
-    // selection produced, a few frames after the comments land — on a slow
-    // CI runner that alone can use up waitFor's 1s default.
+    // The jump runs a few frames after the comments land — on a slow CI
+    // runner that alone can use up waitFor's 1s default.
     const DEEPLINK_JUMP_WAIT = { timeout: 3000 };
 
     it("ケース 3: comment_id 付きで開く → ジャンプする", async () => {

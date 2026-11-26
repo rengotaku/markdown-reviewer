@@ -43,7 +43,6 @@ import {
   FrontmatterButton,
   NameTooltip,
 } from "@/components";
-import type { DocBox, RailReveal } from "@/components/CommentSidePane";
 import { useOpenFiles } from "@/hooks/useOpenFiles";
 import { useRecentOpened } from "@/hooks/useRecentOpened";
 import { useReadFile, useWriteFile } from "@/hooks/useFileContent";
@@ -153,53 +152,17 @@ function buildTargetSnippet(raw: string): string {
   return `${cleaned.slice(0, TARGET_SNIPPET_LENGTH)}…`;
 }
 
-/** Shallow key/value equality for the anchorTops map (#298): avoids a state
- *  update — and the render + effect cascade it triggers — when a recompute
- *  produced the same positions as last time. */
-function shallowEqualRecord(
-  a: Record<string, number>,
-  b: Record<string, number>
-): boolean {
-  const aKeys = Object.keys(a);
-  const bKeys = Object.keys(b);
-  if (aKeys.length !== bKeys.length) return false;
-  return aKeys.every((k) => a[k] === b[k]);
-}
-
 /** How many candidate blocks docHoldsActiveFile will test before giving up
  *  (#328). One match is enough to identify the document, and the first few
  *  blocks of any real file include at least one plain-text one. */
 const DOC_IDENTITY_SAMPLE = 20;
 
-/** Same purpose as shallowEqualRecord, for the unresolved-anchor id set
+/** Shallow equality for the unresolved-anchor id set
  *  (#328): a recompute that reached the same verdict must not re-render. */
 function sameIdSet(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
   if (a.size !== b.size) return false;
   for (const id of a) if (!b.has(id)) return false;
   return true;
-}
-
-// Walks up from `el` to find the nearest ancestor that actually scrolls
-// (`overflow-y: auto|scroll` and content taller than its box). The DOM
-// structure between the ProseMirror root and its real scroll container
-// isn't fixed — TiptapEditor wraps it in one or more plain divs before the
-// `overflow: auto` Box that does the scrolling (and centered-layout toggles
-// swap which wrapper that is) — so the caller can't assume a fixed ancestor
-// depth like "parentElement".
-function findScrollableAncestor(el: HTMLElement | null): HTMLElement | null {
-  let node = el?.parentElement ?? null;
-  while (node) {
-    const style = window.getComputedStyle(node);
-    const overflowY = style.overflowY;
-    if (
-      (overflowY === "auto" || overflowY === "scroll") &&
-      node.scrollHeight > node.clientHeight
-    ) {
-      return node;
-    }
-    node = node.parentElement;
-  }
-  return null;
 }
 
 export function EditorPage() {
@@ -360,8 +323,6 @@ export function EditorPage() {
   const registerSelfWrite = useChangedPaths((s) => s.registerSelfWrite);
   const editor = useEditorInstance((s) => s.editor);
   const centered = useEditorPrefs((s) => s.centered);
-  const commentRailMode = useEditorPrefs((s) => s.commentRailMode);
-  const setCommentRailMode = useEditorPrefs((s) => s.setCommentRailMode);
   const toggleCentered = useEditorPrefs((s) => s.toggleCentered);
   const { author } = useCommentAuthor();
   const queryClient = useQueryClient();
@@ -471,8 +432,6 @@ export function EditorPage() {
   // Pending clear for the shared comment-flash decoration (#167), so a second
   // jump within the flash window does not get cut short by the first timer.
   const flashTimerRef = useRef<number | null>(null);
-  // Set by the aligned rail while it is shown (#339); see scrollHighlightIntoView.
-  const railRevealRef = useRef<RailReveal | null>(null);
   // #389: set by the pane's own close/open icons so focus follows to the icon
   // that replaces the one just pressed (which disappears or is hidden).
   const paneFocusRef = useRef<string | null>(null);
@@ -1554,21 +1513,6 @@ export function EditorPage() {
     }
   };
 
-  // Viewport top (px) of each anchored comment's live position, keyed by
-  // comment id — what the rail's paragraph-aligned layout positions cards
-  // against (#298). Comments with no live anchor (global/orphan) never get an
-  // entry and stay in the pane's pinned section.
-  const [anchorTops, setAnchorTops] = useState<Record<string, number>>({});
-  // The editor's document root (viewport top/bottom) and the body's scroll
-  // position, measured alongside anchorTops so the rail can keep its first
-  // card clear of the pane's top and tell how far it reaches past the end
-  // (#338).
-  const [docBox, setDocBox] = useState<DocBox | null>(null);
-  // How many px the aligned rail reaches past that end — the height of
-  // TiptapEditor's bottom spacer, so the body scrolls far enough for the last
-  // card to come into view (#338).
-  const [railOverhang, setRailOverhang] = useState(0);
-  const railOverhangs = railOverhang > 0;
   // Ids of anchored comments whose anchor does not resolve in the live
   // document, so the pane can show them as 位置不明 instead of dropping them
   // (#328). Empty while the document isn't ready to be judged against — see
@@ -1624,7 +1568,6 @@ export function EditorPage() {
   const recomputeAnchorTops = () => {
     if (!editor || editor.isDestroyed) return;
     const root = editor.view.dom;
-    const next: Record<string, number> = {};
     const unresolved = new Set<string>();
     let blocks: AnchorBlock[] | null = null;
     // Judged once per recompute, and only when some anchor fails to resolve.
@@ -1634,10 +1577,7 @@ export function EditorPage() {
       const el = root.querySelector<HTMLElement>(
         `[data-comment-id="${CSS.escape(c.id)}"]`
       );
-      if (el) {
-        next[c.id] = el.getBoundingClientRect().top;
-        continue;
-      }
+      if (el) continue;
       // No decoration to measure. Either the comment is resolved — those
       // paint none by design (#96/#97) — or its anchor found nothing to
       // decorate. Both are answered by resolving the anchor against the
@@ -1646,8 +1586,7 @@ export function EditorPage() {
       // comments all carry decorations never pays for it.
       blocks ??= extractAnchorBlocks(editor.state.doc);
       const m = measureAnchor(c, blocks);
-      if (m.kind === "measured") next[c.id] = m.top;
-      else if (m.kind === "unresolvable") {
+      if (m.kind === "unresolvable") {
         docIsActiveFile ??= docHoldsActiveFile(blocks);
         // #396: when the document can't be judged against (e.g. the window
         // while comments are being refetched, where commentsLoadedForPath is
@@ -1658,26 +1597,6 @@ export function EditorPage() {
         if (docIsActiveFile || unresolvedIds.has(c.id)) unresolved.add(c.id);
       }
     }
-    // Skip the state update (and the render + downstream effects it would
-    // trigger) when nothing actually moved — a `transaction` fires on every
-    // keystroke/selection change, most of which don't shift any decoration.
-    setAnchorTops((prev) => (shallowEqualRecord(prev, next) ? prev : next));
-    // The root, not the spacer below it: the spacer is what absorbs the
-    // overhang, so measuring it would feed back into its own height.
-    const rootRect = root.getBoundingClientRect();
-    const box: DocBox = {
-      top: rootRect.top,
-      bottom: rootRect.bottom,
-      scrollTop: findScrollableAncestor(root)?.scrollTop ?? 0,
-    };
-    setDocBox((prev) =>
-      prev &&
-      prev.top === box.top &&
-      prev.bottom === box.bottom &&
-      prev.scrollTop === box.scrollTop
-        ? prev
-        : box
-    );
     setUnresolvedVerdict((prev) =>
       prev.key === fileKey && sameIdSet(prev.ids, unresolved)
         ? prev
@@ -1733,30 +1652,6 @@ export function EditorPage() {
       editor.off("transaction", onUpdate);
     };
   }, [editor]);
-  useEffect(() => {
-    if (!editor || editor.isDestroyed) return;
-    const onScrollOrResize = () => scheduleAnchorRecalcRef.current();
-    // The nearest scrollable ancestor of the ProseMirror DOM node is
-    // TiptapEditor's actual scroll container (`overflow-y: auto`) — but it
-    // isn't a fixed number of hops up (plain non-scrolling wrapper divs sit
-    // in between, and centered-layout toggles swap which wrapper ends up
-    // scrolling), so it's found by walking up rather than assumed to be
-    // `parentElement`. Listening there instead of capturing every `scroll`
-    // in the document keeps this from re-running on unrelated scrolling
-    // elsewhere in the app (menus, listboxes, ...).
-    //
-    // #338: re-run when the rail starts or stops reaching past the
-    // document's end. A document too short to scroll has no scroll container
-    // to find, and it is TiptapEditor's bottom spacer, sized from that
-    // overhang, that first makes it scroll — after this effect already ran.
-    const scrollEl = findScrollableAncestor(editor.view.dom);
-    scrollEl?.addEventListener("scroll", onScrollOrResize);
-    window.addEventListener("resize", onScrollOrResize);
-    return () => {
-      scrollEl?.removeEventListener("scroll", onScrollOrResize);
-      window.removeEventListener("resize", onScrollOrResize);
-    };
-  }, [editor, centered, railOverhangs]);
   useEffect(() => {
     return () => {
       if (anchorRafRef.current !== null) cancelAnimationFrame(anchorRafRef.current);
@@ -2229,39 +2124,12 @@ export function EditorPage() {
   //    (CommentHighlight.flashCommentRanges) instead.
   //  - orphan (no anchor resolves): do nothing, as before — canJump already
   //    keeps the label from being clickable in this case.
-  // Brings a comment's highlight into view. Centred by default; opened from
-  // its card (`revealCard`), the body scrolls by however much the aligned rail
-  // says keeps that card in the pane (#339) — on a crowded line the card is
-  // stacked below the others, and centring the highlight pushed it past the
-  // pane's bottom. The amount comes from the rail's own anchor measurement,
-  // not from `el`, whose top need not be the anchor's line (a resolved
-  // comment's `el` is the whole paragraph).
-  const scrollHighlightIntoView = (el: HTMLElement, id: string, revealCard: boolean) => {
-    const delta = revealCard ? (railRevealRef.current?.(id) ?? null) : null;
-    const scroller = delta === null ? null : findScrollableAncestor(el);
-    if (delta === null || !scroller) {
-      el.scrollIntoView({ behavior: "smooth", block: "center" });
-      return;
-    }
-    scroller.scrollBy({ top: delta, behavior: "smooth" });
+  // Brings a comment's highlight into view, centred in the body.
+  const scrollHighlightIntoView = (el: HTMLElement) => {
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
   };
 
-  // #378: the rail lifts a card being written in back into the pane by
-  // scrolling the body — instantly, since it follows the typing — and is told
-  // how far the body actually went.
-  const scrollBodyBy = useCallback(
-    (dy: number): number => {
-      if (!editor || editor.isDestroyed) return 0;
-      const scroller = findScrollableAncestor(editor.view.dom);
-      if (!scroller) return 0;
-      const before = scroller.scrollTop;
-      scroller.scrollBy({ top: dy, behavior: "instant" });
-      return scroller.scrollTop - before;
-    },
-    [editor]
-  );
-
-  const handleJumpToComment = (id: string, { revealCard = false } = {}) => {
+  const handleJumpToComment = (id: string) => {
     if (!editor || editor.isDestroyed) return;
     const comment = comments.find((c) => c.id === id);
     if (!comment) return;
@@ -2294,7 +2162,7 @@ export function EditorPage() {
       `[data-comment-id="${CSS.escape(id)}"]`
     );
     if (decorated.length > 0) {
-      scrollHighlightIntoView(decorated[0], id, revealCard);
+      scrollHighlightIntoView(decorated[0]);
       // #310: `scrollIntoView`'s vertical centering doesn't reliably pull a
       // highlight out from a wide table's own horizontal scroll region
       // (#152) — bring it inside that container's visible width too.
@@ -2314,7 +2182,7 @@ export function EditorPage() {
     const target =
       node.nodeType === Node.TEXT_NODE ? node.parentElement : (node as HTMLElement);
     if (target) {
-      scrollHighlightIntoView(target, id, revealCard);
+      scrollHighlightIntoView(target);
       scrollTableIntoView(target);
     }
     editor.commands.flashCommentRanges(ranges);
@@ -2338,54 +2206,8 @@ export function EditorPage() {
     // card even when the pane was closed.
     setCommentPaneOpen(true);
     setRailSelectedId(id);
-    setPendingReveal({ id, path: activePath, frames: 0 });
+    handleJumpToComment(id);
   };
-
-  // #339: the jump for a selection waits for the rail to lay out what the
-  // selection produced — in icon mode the previously selected card folds back
-  // into an icon and this one opens, moving it — so that the scroll keeps the
-  // card that is actually shown in the pane. Bounded, and dropped if the file
-  // changes meanwhile. The list mode has no rail placement to wait for.
-  const [pendingReveal, setPendingReveal] = useState<{
-    id: string;
-    path: string | undefined;
-    frames: number;
-  } | null>(null);
-  useEffect(() => {
-    if (!pendingReveal) return;
-    if (pendingReveal.path !== activePath || !editor || editor.isDestroyed) {
-      setPendingReveal(null);
-      return;
-    }
-    const { id, frames } = pendingReveal;
-    const target = comments.find((c) => c.id === id);
-    const waitsForRail =
-      commentRailMode !== "list" &&
-      !!target &&
-      target.scope !== "global" &&
-      !target.orphan;
-    // No aligned rail mounted (it registers itself on mount, before this
-    // runs), or one that cannot place the card at all, means there is nothing
-    // to wait for.
-    const reveal = railRevealRef.current;
-    const answer = reveal === null ? null : reveal(id);
-    // Otherwise two frames at least: one for the selection's render, one for
-    // the card measurements it triggers to feed back into the layout.
-    if (
-      waitsForRail &&
-      answer !== null &&
-      (frames < 2 || answer === undefined) &&
-      frames < 30
-    ) {
-      const raf = requestAnimationFrame(() =>
-        setPendingReveal((p) => (p && p.id === id ? { ...p, frames: p.frames + 1 } : p))
-      );
-      return () => cancelAnimationFrame(raf);
-    }
-    setPendingReveal(null);
-    handleJumpToComment(id, { revealCard: true });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingReveal, activePath, editor, comments, commentRailMode]);
 
   // Deeplink: `?comment_id=<id>` jumps to that comment once the file and comments land.
   useEffect(() => {
@@ -3624,14 +3446,7 @@ export function EditorPage() {
           </MenuItem>
         </Menu>
 
-        <Box
-          sx={{
-            flex: 1,
-            minHeight: 0,
-            // #338: read by TiptapEditor's bottom spacer.
-            "--rail-overhang": `${railOverhang}px`,
-          }}
-        >
+        <Box sx={{ flex: 1, minHeight: 0 }}>
           {activeFile && diffMode ? (
             <DiffView
               oldText={diffBaseText}
@@ -3679,13 +3494,11 @@ export function EditorPage() {
           }}
         >
           <CommentSidePane
-            railRevealRef={railRevealRef}
             root={activeFileRoot}
             filePath={activePath}
             comments={comments}
             reviewActive={reviewActive}
             onRefresh={refreshComments}
-            paneOpen={isCommentPaneOpen}
             onClose={() => {
               paneFocusRef.current = "comment-pane-open";
               setCommentPaneOpen(false);
@@ -3703,13 +3516,7 @@ export function EditorPage() {
             onSelect={handleSelectComment}
             onDeselect={() => setRailSelectedId(null)}
             selectedId={railSelectedId}
-            anchorTops={anchorTops}
-            docBox={docBox}
-            onRailOverhangChange={setRailOverhang}
-            onRailScrollBodyBy={scrollBodyBy}
             unresolvedIds={unresolvedIds}
-            railMode={commentRailMode}
-            onRailModeChange={setCommentRailMode}
             agentReplying={agentBusy && agentActivity.sentByUs}
             agentNewReplies={agentActivity.newReplies}
             agentSentIds={agentActivity.sentIds}

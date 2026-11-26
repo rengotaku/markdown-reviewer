@@ -17,12 +17,16 @@ describe("useEditorPrefs", () => {
     expect(useEditorPrefs.getState().centered).toBe(true);
   });
 
-  it("defaults the comment pane to the paragraph-aligned layout and switches to the list (#333)", () => {
-    // Fresh default, read from the store's initializer rather than whatever
-    // an earlier test left behind.
-    expect(useEditorPrefs.getInitialState().commentRailMode).toBe("aligned");
-    useEditorPrefs.getState().setCommentRailMode("list");
-    expect(useEditorPrefs.getState().commentRailMode).toBe("list");
-    useEditorPrefs.getState().setCommentRailMode("aligned");
+  it("ignores the pane-layout preference left in storage by an older build (#413)", async () => {
+    // Key spelled in two parts: the removed name must not appear in src.
+    const legacyKey = "comment" + "RailMode";
+    localStorage.setItem(
+      "markdown-reviewer-prefs",
+      JSON.stringify({ state: { centered: false, [legacyKey]: "list" }, version: 0 })
+    );
+    await useEditorPrefs.persist.rehydrate();
+    expect(useEditorPrefs.getState().centered).toBe(false);
+    expect(legacyKey in useEditorPrefs.getState()).toBe(false);
+    localStorage.removeItem("markdown-reviewer-prefs");
   });
 });

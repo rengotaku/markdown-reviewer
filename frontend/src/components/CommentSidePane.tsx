@@ -32,15 +32,12 @@ import ReplyIcon from "@mui/icons-material/Reply";
 import OpenInFullIcon from "@mui/icons-material/OpenInFull";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import LinkIcon from "@mui/icons-material/Link";
-import ViewAgendaIcon from "@mui/icons-material/ViewAgenda";
 import MenuOpenIcon from "@mui/icons-material/MenuOpen";
-import ViewListIcon from "@mui/icons-material/ViewList";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import type { SxProps, Theme } from "@mui/material/styles";
 import type { SystemStyleObject } from "@mui/system";
 import type { CommentJSON, CommentReply } from "@/api";
-import type { CommentRailMode } from "@/hooks/useEditorPrefs";
 import { BAR_HEIGHT } from "@/theme/dimensions";
 import { renderCommentMarkdown } from "@/utils/commentMarkdown";
 import { buildCommentDeepLink } from "@/utils/deeplink";
@@ -51,25 +48,11 @@ import { isAiAuthored } from "@/utils/commentPresentation";
 import { awaitsAiReply } from "@/utils/agentActivity";
 import { CommentAuthor } from "./CommentAuthor";
 import { CommentId } from "./CommentId";
-import {
-  isPlacedInPane,
-  layoutCommentRail,
-  liftIntoPane,
-  RAIL_CARD_MAX_HEIGHT,
-  RAIL_GAP,
-  revealAnchorTop,
-  type RailItem,
-} from "@/utils/commentRailLayout";
 import { GlobalCommentBadges, type GlobalBadgeKind } from "./GlobalCommentBadges";
 import { StatusFilterToggle, type StatusFilter } from "./StatusFilterToggle";
 import { GlobalCommentsDialog } from "./GlobalCommentsDialog";
 import { AgentActivityContext, type AgentCardActivity } from "./agentActivityContext";
 import { pulseSx } from "./pulseSx";
-
-/** Placeholder height for a card whose real height hasn't been measured yet
- *  (first paint, before its ResizeObserver fires) — enough to avoid every
- *  card starting stacked at the same spot before layout settles. */
-const RAIL_DEFAULT_CARD_HEIGHT = 96;
 
 /** AI-authored comments/replies are read-only to the human reviewer: they can
  *  reply, resolve, and jump to them, but not edit the body or delete them. */
@@ -96,17 +79,6 @@ const FIELD_SX = {
 function keepFieldInView(e: FormEvent<HTMLDivElement>) {
   const el = e.target as HTMLElement;
   requestAnimationFrame(() => el.scrollIntoView?.({ block: "nearest" }));
-}
-/** #378: frames a card being written in keeps trying to lift into the pane
- *  while the body's bottom spacer catches up with its height. */
-const LIFT_MAX_FRAMES = 10;
-/** #378: a card never grows taller than the pane it sits in, so a pane
- *  shorter than RAIL_CARD_MAX_HEIGHT (a low window, a zoomed page) can still
- *  show its whole frame once lifted, the form reached by scrolling inside it.
- *  0 (pane not measured yet) leaves the layout's height alone. */
-function cardMaxHeight(layoutHeight: number, paneHeight: number): number {
-  if (paneHeight <= 0) return layoutHeight;
-  return Math.min(layoutHeight, Math.max(0, paneHeight - 2 * RAIL_GAP));
 }
 /** #378: the reply/edit form's buttons. In a card they are pinned to the
  *  bottom of whatever scrolls the card, so a body and thread taller than the
@@ -411,9 +383,6 @@ interface Props {
   onRefresh: () => void;
   /** Renders the close icon at the right end of the title row when given (#389). */
   onClose?: () => void;
-  /** False while the pane is hidden (display: none, #389). The aligned rail
-   *  cannot measure a hidden box, so it waits for this to turn true. */
-  paneOpen?: boolean;
   /** Whether the current editor selection can take an anchored comment. */
   canAddComment: boolean;
   /** Both receive the trigger button's rect: the composer opens beside it
@@ -437,40 +406,12 @@ interface Props {
   onDeselect?: () => void;
   /** The comment whose thread is currently open, if it is one of these. */
   selectedId?: string | null;
-  /** Viewport top (px) of each anchored comment's first decoration, keyed by
-   *  comment id — what the paragraph-aligned rail layout positions cards
-   *  against (#298). The caller (EditorPage) owns the editor DOM this is
-   *  measured from. A comment missing an entry here is treated as having no
-   *  live anchor for layout purposes. */
-  anchorTops?: Readonly<Record<string, number>>;
-  /** The editor's document root, measured in the same pass as `anchorTops`
-   *  (#338): its viewport `top` / `bottom` and the body's `scrollTop`. The
-   *  aligned rail keeps its first card below where the document starts at
-   *  rest, and compares its own bottom edge against `bottom` to tell how much
-   *  further the body must scroll for the last card to come into view. */
-  docBox?: DocBox | null;
-  /** Reports how many px the aligned rail reaches past the end of the
-   *  document (0 when it doesn't, or when the rail isn't shown), so the
-   *  caller can extend the body's scroll range by that much (#338). */
-  onRailOverhangChange?: (px: number) => void;
-  /** Scrolls the document body down by `dy` px, so a rail card being written
-   *  in can be lifted back into the pane (#378). Returns how far it actually
-   *  went — less than `dy` at the end of the body. */
-  onRailScrollBodyBy?: (dy: number) => number;
   /** Ids of anchored comments whose anchor the caller could not resolve in
    *  the live document (#328). The server's own `orphan` flag is computed
    *  from the raw markdown lines, so it can say "anchored" for a comment the
    *  editor cannot place; these join the orphan bucket here rather than
    *  falling out of the pane entirely. */
   unresolvedIds?: ReadonlySet<string>;
-  /** "aligned" (default): cards level with their paragraphs. "list": every
-   *  anchored card in document order in one scrollable column (#333). */
-  railMode?: CommentRailMode;
-  /** Renders the mode switch when given; without it the pane stays aligned. */
-  onRailModeChange?: (mode: CommentRailMode) => void;
-  /** Filled in by the aligned rail with a {@link RailReveal} for the caller's
-   *  jump to use (#339); null while no aligned rail is shown. */
-  railRevealRef?: MutableRefObject<RailReveal | null>;
   /** The AI is working on these comments after a send from this editor
    *  (#360): open cards show that a reply is on its way. */
   agentReplying?: boolean;
@@ -482,19 +423,6 @@ interface Props {
 
 const NO_NEW_REPLIES: ReadonlyMap<string, number> = new Map();
 
-/** How many px the body must scroll (positive = down) for a comment's card to
- *  land inside the aligned rail (#339). `undefined` while the rail is still
- *  laying out (worth waiting for); null when it cannot place that card at all
- *  (not worth waiting for — e.g. a pane with no height). */
-export type RailReveal = (id: string) => number | null | undefined;
-
-/** See the `docBox` prop. */
-export interface DocBox {
-  top: number;
-  bottom: number;
-  scrollTop: number;
-}
-
 /** Stable default for the optional `unresolvedIds` prop: a fresh `new Set()`
  *  in the parameter list would be a new identity every render and defeat the
  *  memos below. */
@@ -502,7 +430,7 @@ const EMPTY_IDS: ReadonlySet<string> = new Set();
 
 /** A card's half-written reply/edit and whether each form is open (#334).
  *  Held by CommentSidePane per comment, not in CommentCard's own state: a card
- *  unmounts whenever the status filter hides it, or the rail mode is switched — and its useState went with it,
+ *  unmounts whenever the status filter hides it, — and its useState went with it,
  *  dropping what was typed without a word. */
 interface CardDraft {
   replyOpen: boolean;
@@ -554,7 +482,6 @@ export function CommentSidePane({
   reviewActive,
   onRefresh,
   onClose,
-  paneOpen = true,
   canAddComment,
   onAddComment,
   onAddGlobal,
@@ -568,14 +495,7 @@ export function CommentSidePane({
   onSelect,
   onDeselect,
   selectedId,
-  anchorTops = {},
-  docBox = null,
-  onRailOverhangChange,
-  onRailScrollBodyBy,
   unresolvedIds = EMPTY_IDS,
-  railMode = "aligned",
-  onRailModeChange,
-  railRevealRef,
   agentReplying = false,
   agentNewReplies = NO_NEW_REPLIES,
   agentSentIds = null,
@@ -615,11 +535,6 @@ export function CommentSidePane({
     [comments]
   );
   const resolvedCount = comments.length - openCount;
-  // #390: one button toggles; it shows (and is named after) the mode it
-  // switches to.
-  const nextRailMode: CommentRailMode = railMode === "list" ? "aligned" : "list";
-  const nextRailLabel =
-    nextRailMode === "list" ? "一覧（文書順に全件）に切り替え" : "段落の横に並べる";
   const visible = useMemo(
     () => (filter === "all" ? comments : comments.filter((c) => c.status === filter)),
     [comments, filter]
@@ -643,8 +558,8 @@ export function CommentSidePane({
   );
   // #333: in document order. The API returns comments in the order they were
   // added (reviewstore appends), so a comment added later near the top would
-  // otherwise follow one added earlier near the bottom — wrong for the list,
-  // and for the aligned rail's stacking order too. `context.line_range` is
+  // otherwise follow one added earlier near the bottom — wrong for the list.
+  // `context.line_range` is
   // the server's resolved position (covering every anchor of a multi-block
   // comment); a comment without one sorts last. Array.sort is stable, so
   // comments on the same line keep their creation order.
@@ -675,16 +590,20 @@ export function CommentSidePane({
   // its tab, with the row marked. A resolved one is hidden by the default
   // "open" filter; widen it so the row is there to mark. Whether an anchored
   // comment is live is only known once the caller has measured it or found
-  // it unresolvable (`unresolvedIds` lands a frame after the selection), so a
-  // selection stays pending until then. Derived during render so it opens on
+  // it unresolvable (`unresolvedIds` lands a frame after the selection). Derived during render so it opens on
   // the same commit that settles it.
-  const [selectionSettled, setSelectionSettled] = useState(selectedId);
-  if (selectedId !== selectionSettled) {
+  // The caller's verdict can land after the selection, so a new verdict is
+  // judged against the selection again.
+  const [selectionSettled, setSelectionSettled] = useState({
+    id: selectedId,
+    unresolved: unresolvedIds,
+  });
+  if (selectedId !== selectionSettled.id || unresolvedIds !== selectionSettled.unresolved) {
     const target = selectedId ? comments.find((c) => c.id === selectedId) : undefined;
     const noLiveAnchor =
       !!target && (target.scope === "global" || hasNoLiveAnchor(target));
-    if (!selectedId || noLiveAnchor || (target && Object.hasOwn(anchorTops, target.id))) {
-      setSelectionSettled(selectedId);
+    if (!selectedId || noLiveAnchor || target) {
+      setSelectionSettled({ id: selectedId, unresolved: unresolvedIds });
     }
     if (target && noLiveAnchor) {
       if (filter !== "all" && target.status !== filter) setFilter("all");
@@ -770,27 +689,6 @@ export function CommentSidePane({
             <RefreshIcon fontSize="small" />
           </IconButton>
         </Tooltip>
-        {/* #333: in the title row, not the filter row below — that one is
-            already measured full (#196: filter ~225px + two add buttons in a
-            295px row). */}
-        {onRailModeChange && (
-          <Tooltip title={nextRailLabel}>
-            <IconButton
-              size="small"
-              onClick={() => onRailModeChange(nextRailMode)}
-              aria-label={nextRailLabel}
-              data-testid="comment-rail-mode-toggle"
-              data-mode={railMode === "list" ? "list" : "aligned"}
-              sx={{ flexShrink: 0 }}
-            >
-              {nextRailMode === "list" ? (
-                <ViewListIcon fontSize="small" />
-              ) : (
-                <ViewAgendaIcon fontSize="small" />
-              )}
-            </IconButton>
-          </Tooltip>
-        )}
         {onClose && (
           <Tooltip title="コメントを閉じる">
             <IconButton
@@ -899,31 +797,9 @@ export function CommentSidePane({
               本文にひもづくコメントはありません。全体・位置不明のコメントは上部のバッジから確認できます。
             </Typography>
           </Box>
-        ) : railMode === "list" ? (
+        ) : (
           <CommentList
             comments={anchored}
-            selectedId={selectedId ?? null}
-            onSelect={onSelect}
-            onDeselect={onDeselect}
-            onCopyLink={handleCopyLink}
-            canCopyLink={canCopyLink}
-            onDelete={handleDelete}
-            onResolveToggle={onResolveToggle}
-            onReply={onReply}
-            onEdit={onEdit}
-            onEditReply={onEditReply}
-            onDeleteReply={onDeleteReply}
-            onOpenDetail={setDetailId}
-          />
-        ) : (
-          <AlignedCommentRail
-            comments={anchored}
-            anchorTops={anchorTops}
-            docBox={docBox}
-            onOverhangChange={onRailOverhangChange}
-            revealRef={railRevealRef}
-            visible={paneOpen}
-            onScrollBodyBy={onRailScrollBodyBy}
             selectedId={selectedId ?? null}
             onSelect={onSelect}
             onDeselect={onDeselect}
@@ -1581,7 +1457,7 @@ interface CommentListProps extends Omit<CardProps, "comment" | "selected"> {
 /** #333: every anchored card in document order, scrolling inside the pane —
  *  nothing is pushed to an "上に / 下に N 件" count, so a dense document can
  *  be read in one pass. Selecting a highlight in the editor scrolls its card
- *  into view here, the way the aligned rail brings it level. */
+ *  into view here. */
 function CommentList({ comments, selectedId, ...cardProps }: CommentListProps) {
   const listRef = useRef<HTMLDivElement | null>(null);
 
@@ -1607,390 +1483,6 @@ function CommentList({ comments, selectedId, ...cardProps }: CommentListProps) {
           {...cardProps}
         />
       ))}
-    </Box>
-  );
-}
-
-interface AlignedRailProps {
-  /** Anchored comments (no global/orphan), in document order. */
-  comments: ReadonlyArray<CommentJSON>;
-  anchorTops: Readonly<Record<string, number>>;
-  docBox: DocBox | null;
-  onOverhangChange?: (px: number) => void;
-  selectedId: string | null;
-  onSelect: (id: string) => void;
-  onDeselect?: () => void;
-  onCopyLink: (id: string) => void;
-  canCopyLink?: boolean;
-  onDelete: (id: string) => void;
-  onResolveToggle: (id: string, next: "open" | "resolved") => void;
-  onReply: (id: string, body: string) => void;
-  onEdit: (id: string, body: string) => void;
-  onEditReply: (id: string, index: number, body: string) => void;
-  onDeleteReply: (id: string, index: number) => void;
-  onOpenDetail: (id: string) => void;
-  revealRef?: MutableRefObject<RailReveal | null>;
-  /** See Props.paneOpen (#389). */
-  visible?: boolean;
-  /** #378: scrolls the document body down by `dy` px, which moves the rail
-   *  with it, and returns how far it actually went. */
-  onScrollBodyBy?: (dy: number) => number;
-}
-
-/** Lays anchored cards out down the rail, level with the paragraph each is
- *  attached to (#298). The arithmetic lives in commentRailLayout.ts (pure,
- *  unit-tested); this component only measures the DOM and feeds it in. */
-function AlignedCommentRail({
-  comments,
-  anchorTops,
-  docBox,
-  onOverhangChange,
-  selectedId,
-  onSelect,
-  onDeselect,
-  onCopyLink,
-  canCopyLink = true,
-  onDelete,
-  onResolveToggle,
-  onReply,
-  onEdit,
-  onEditReply,
-  onDeleteReply,
-  onOpenDetail,
-  revealRef,
-  visible = true,
-  onScrollBodyBy,
-}: AlignedRailProps) {
-  const railRef = useRef<HTMLDivElement | null>(null);
-  const [paneBox, setPaneBox] = useState({ top: 0, height: 0, measured: false });
-  const [cardHeights, setCardHeights] = useState<Record<string, number>>({});
-  const rafRef = useRef<number | null>(null);
-  const liftRafRef = useRef<number | null>(null);
-
-  // #389: true from hiding until the first measurement after showing again.
-  const paneStaleRef = useRef(false);
-  const visibleRef = useRef(visible);
-
-  const scheduleMeasurePane = useCallback(() => {
-    if (rafRef.current !== null) return;
-    rafRef.current = requestAnimationFrame(() => {
-      rafRef.current = null;
-      // #389: a display:none box measures as top 0 / height 0; committing
-      // that would place every card at the wrong offset after reopening.
-      if (!visibleRef.current) return;
-      const rect = railRef.current?.getBoundingClientRect();
-      if (!rect) return;
-      paneStaleRef.current = false;
-      setPaneBox((prev) =>
-        prev.measured && prev.top === rect.top && prev.height === rect.height
-          ? prev
-          : { top: rect.top, height: rect.height, measured: true }
-      );
-    });
-  }, []);
-
-  // Comments changing (add/delete/filter) and anchorTops changing (scroll,
-  // resize, doc edits — all measured by the caller) both mean the pane's own
-  // box may have shifted too (e.g. the pinned section above it grew).
-  useEffect(() => {
-    scheduleMeasurePane();
-  }, [comments.length, anchorTops, scheduleMeasurePane]);
-
-  // #389: hidden -> the stored box is stale (the body reflows while the pane
-  // is away), so mark it unmeasured and let a reveal wait; shown -> measure.
-  useEffect(() => {
-    visibleRef.current = visible;
-    if (!visible) {
-      paneStaleRef.current = true;
-      return;
-    }
-    scheduleMeasurePane();
-  }, [visible, scheduleMeasurePane]);
-
-  // #378: new anchor measurements place the cards where the body's scroll
-  // put them, so lifts applied before them are reflected in the DOM again.
-  const unreflectedLiftRef = useRef(0);
-  useEffect(() => {
-    unreflectedLiftRef.current = 0;
-  }, [anchorTops]);
-
-  useEffect(() => {
-    window.addEventListener("resize", scheduleMeasurePane);
-    return () => window.removeEventListener("resize", scheduleMeasurePane);
-  }, [scheduleMeasurePane]);
-
-  useEffect(
-    () => () => {
-      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
-      if (liftRafRef.current !== null) cancelAnimationFrame(liftRafRef.current);
-    },
-    []
-  );
-
-  // #378: a card being written in grows with its field. #339 placed it in the
-  // pane when it was selected, but a reply form opened afterwards pushes its
-  // bottom — and the buttons — below the pane, and near the document's end
-  // nothing scrolls it back. While a field inside the selected card has
-  // focus, every growth lifts the card back into the pane by scrolling the
-  // body, by an amount measured once from the DOM after the grown height has
-  // been laid out. The card itself only moves after the rail re-measures the
-  // scrolled anchors, so its rect can't be re-read to see how far it went;
-  // the body reports what it actually scrolled instead. The bottom spacer
-  // (#338) that makes room for the scroll follows the card's height a render
-  // later, so whatever the end of the body cut short is retried on the next
-  // frames.
-  const selectedIdRef = useRef(selectedId);
-  const scrollBodyRef = useRef(onScrollBodyBy);
-  useEffect(() => {
-    selectedIdRef.current = selectedId;
-    scrollBodyRef.current = onScrollBodyBy;
-  }, [selectedId, onScrollBodyBy]);
-  const scheduleLift = useCallback((id: string) => {
-    if (liftRafRef.current !== null) cancelAnimationFrame(liftRafRef.current);
-    let remaining: number | null = null;
-    let frames = 0;
-    const step = () => {
-      liftRafRef.current = null;
-      const rail = railRef.current;
-      const scrollBody = scrollBodyRef.current;
-      if (!rail || !scrollBody) return;
-      if (remaining === null) {
-        const card = rail.querySelector<HTMLElement>(
-          `[data-testid="comment-rail-card"][data-comment-id="${CSS.escape(id)}"]`
-        );
-        const active = document.activeElement;
-        if (!card || !(active instanceof HTMLTextAreaElement) || !card.contains(active)) {
-          return;
-        }
-        // The shell's height is clamped to the last measured one until the
-        // rail re-renders, so the grown height is read from its content.
-        const pane = rail.getBoundingClientRect();
-        const top = card.getBoundingClientRect().top - pane.top;
-        const border = card.offsetHeight - card.clientHeight;
-        const height =
-          cardMaxHeight(Math.min(card.scrollHeight, RAIL_CARD_MAX_HEIGHT), pane.height) +
-          border;
-        // A lift already applied moves the card only once the rail re-measures
-        // the anchors; until then the card's rect is that much too low.
-        const stale = unreflectedLiftRef.current;
-        remaining = liftIntoPane(top - stale, top - stale + height, pane.height);
-      }
-      if (remaining <= 0) return;
-      const moved = scrollBody(remaining);
-      unreflectedLiftRef.current += moved;
-      remaining -= moved;
-      if (remaining > 0.5 && ++frames < LIFT_MAX_FRAMES) {
-        liftRafRef.current = requestAnimationFrame(step);
-      }
-    };
-    liftRafRef.current = requestAnimationFrame(step);
-  }, []);
-
-  const handleHeightChange = useCallback(
-    (id: string, height: number) => {
-      setCardHeights((prev) => (prev[id] === height ? prev : { ...prev, [id]: height }));
-      if (id === selectedIdRef.current) scheduleLift(id);
-    },
-    [scheduleLift]
-  );
-
-  const items: RailItem[] = useMemo(
-    () =>
-      comments.map((c, i) => ({
-        id: c.id,
-        // `comments` here is already the anchored subset (no global/orphan).
-        // #326: a resolved comment paints no persistent decoration by design
-        // (CommentHighlight's buildDeco skips `status === "resolved"`), and
-        // the caller used to measure decorations only — so resolved cards
-        // never got an entry and the old `?? 0` fallback stacked them all at
-        // the rail's top. The caller now measures a resolved comment from its
-        // anchors instead (EditorPage's anchorViewportTop), so a missing
-        // entry means the same thing it means for an open comment: not
-        // measured yet. Both take the `null` path below.
-        //
-        // A missing lookup only means the caller
-        // hasn't measured this frame's decoration yet (editor not mounted,
-        // decoration not rendered on this render pass, or the comment list
-        // just changed and a fresh measurement hasn't landed). #306: falling
-        // back to 0 there used to plant the card at the rail's very top — in
-        // front of whatever paragraph the reader is actually looking at —
-        // and it stayed there because nothing else re-triggered a
-        // measurement. `null` reads as "no live anchor" to
-        // layoutCommentRail, which leaves the card unplaced rather than
-        // misplacing it; it reappears once the caller's measurement produces
-        // a real entry.
-        anchorTop: Object.hasOwn(anchorTops, c.id) ? anchorTops[c.id] : null,
-        height: cardHeights[c.id] ?? RAIL_DEFAULT_CARD_HEIGHT,
-        order: i,
-      })),
-    [comments, anchorTops, cardHeights]
-  );
-
-  // #338: cards move with the body, so nothing pins the first one to the
-  // pane's top edge any more. Where the rail starts lower than the document
-  // does (the global-comment badge row above it), a card for the document's
-  // first lines would sit partly above the pane even at scrollTop 0, its
-  // header cut off for good. Start the stack no higher than the document's
-  // top plus that difference, measured at rest so it scrolls with the body.
-  const minTop =
-    docBox === null
-      ? undefined
-      : docBox.top +
-        Math.max(0, paneBox.top - (docBox.top + docBox.scrollTop)) -
-        paneBox.top;
-  const layout = useMemo(
-    () => layoutCommentRail(items, { paneTop: paneBox.top, minTop }),
-    [items, paneBox.top, minTop]
-  );
-
-  // #338: how far the rail reaches past the document's end. Both edges come
-  // from the same measurement pass (anchorTops and docBox move together on
-  // scroll), so the difference holds still while the body scrolls and only
-  // changes when a card or the document changes height.
-  const overhang =
-    layout.bottom === null || docBox === null
-      ? 0
-      : Math.max(0, Math.ceil(paneBox.top + layout.bottom + RAIL_GAP - docBox.bottom));
-  useEffect(() => {
-    onOverhangChange?.(overhang);
-  }, [overhang, onOverhangChange]);
-
-  // #339: hand the caller the current layout's answer to "where must this
-  // card's highlight go for the card to stay in view".
-  useEffect(() => {
-    if (!revealRef) return;
-    revealRef.current = (id) => {
-      if (!paneBox.measured || !visible || paneStaleRef.current) return undefined;
-      if (paneBox.height <= 0) return null;
-      const placed = layout.placed.find((p) => p.id === id);
-      // Not measured or placed yet: the next layout pass may still bring it.
-      if (!placed || !Object.hasOwn(anchorTops, id)) return undefined;
-      const anchorRel = anchorTops[id] - paneBox.top;
-      return anchorRel - revealAnchorTop(placed, anchorRel, paneBox.height);
-    };
-    return () => {
-      revealRef.current = null;
-    };
-  }, [revealRef, layout, anchorTops, paneBox, visible]);
-  useEffect(() => () => onOverhangChange?.(0), [onOverhangChange]);
-
-  const byId = useMemo(() => new Map(comments.map((c) => [c.id, c])), [comments]);
-
-  return (
-    <Box
-      ref={railRef}
-      sx={{ position: "relative", flex: 1, minHeight: 0, overflow: "hidden" }}
-      // #378: the browser scrolls this box to bring a focused field's caret
-      // into view, though it clips rather than scrolls — that slid every card
-      // off its paragraph. Cards are placed for a scrollTop of 0, so it stays
-      // there; a card is brought into view by scrolling the body instead.
-      onScroll={(e) => {
-        e.currentTarget.scrollTop = 0;
-      }}
-      // #378: the reply form opens at its two-row minimum, so the first lines
-      // typed don't grow the card — lift it as soon as its field takes focus.
-      onFocus={(e) => {
-        const id = selectedIdRef.current;
-        if (id && e.target instanceof HTMLTextAreaElement) scheduleLift(id);
-      }}
-      data-testid="comment-rail-aligned"
-    >
-      {layout.placed.map((placed) => {
-        // Until the pane has measured its own box (height 0) there is no
-        // visible range to test against; the pane clips anything outside it.
-        const hidden = paneBox.height > 0 && !isPlacedInPane(placed, paneBox.height);
-        const c = byId.get(placed.id);
-        if (!c) return null;
-        return (
-          <AlignedCard
-            key={c.id}
-            comment={c}
-            top={placed.top}
-            maxHeight={cardMaxHeight(placed.maxHeight, paneBox.height)}
-            hidden={hidden}
-            selected={c.id === selectedId}
-            onSelect={onSelect}
-            onDeselect={onDeselect}
-            onCopyLink={onCopyLink}
-            canCopyLink={canCopyLink}
-            onDelete={onDelete}
-            onResolveToggle={onResolveToggle}
-            onReply={onReply}
-            onEdit={onEdit}
-            onEditReply={onEditReply}
-            onDeleteReply={onDeleteReply}
-            onOpenDetail={onOpenDetail}
-            onHeightChange={handleHeightChange}
-          />
-        );
-      })}
-    </Box>
-  );
-}
-
-interface AlignedCardProps extends CardProps {
-  top: number;
-  maxHeight: number;
-  /** Outside the pane's visible range (#338): still mounted and measured,
-   *  but invisible and out of the tab order. */
-  hidden?: boolean;
-  onHeightChange: (id: string, height: number) => void;
-}
-
-/** One card, absolutely positioned at the top the layout gave it. Its own
- *  height feeds back into the layout via ResizeObserver — a reply/edit form
- *  opening inside it, or a body's "続きを表示" toggle, changes the height the
- *  next card has to stack below. */
-function AlignedCard({
-  comment,
-  top,
-  maxHeight,
-  hidden = false,
-  onHeightChange,
-  ...cardProps
-}: AlignedCardProps) {
-  const contentRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    const el = contentRef.current;
-    if (!el || typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver((entries) => {
-      const h = entries[0]?.contentRect.height;
-      if (h) onHeightChange(comment.id, h);
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [comment.id, onHeightChange]);
-
-  return (
-    <Box
-      data-testid="comment-rail-card"
-      data-comment-id={comment.id}
-      sx={{
-        position: "absolute",
-        left: 8,
-        right: 8,
-        top,
-        maxHeight,
-        visibility: hidden ? "hidden" : undefined,
-        overflow: maxHeight > 0 ? "auto" : "hidden",
-        // A card floating in whitespace needs its own edge, and the list's
-        // bottom rule (CommentCard's row separator) reads as a stray line
-        // once rows are no longer stacked against each other.
-        border: "1px solid",
-        borderColor: "divider",
-        borderRadius: 1,
-        bgcolor: "background.paper",
-        "& [data-testid=comment-item]": { borderBottom: "none" },
-      }}
-    >
-      {/* The observed element is the content, never the shell: the shell's
-          own height is what `maxHeight` clamps, so observing it would feed
-          the clamp back into the measurement and collapse the card to its
-          border (measured: it converged to 2px). */}
-      <Box ref={contentRef}>
-        <CommentCard comment={comment} {...cardProps} />
-      </Box>
     </Box>
   );
 }
