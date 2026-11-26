@@ -418,6 +418,11 @@ interface Props {
   onSelect: (id: string) => void;
   /** The comment whose thread is currently open, if it is one of these. */
   selectedId?: string | null;
+  /** Bumped each time the caller selects a comment from outside the list (a
+   *  highlight, a shared link, a new reply, the summary): the list then brings
+   *  the selected row into view. Not bumped by a click on a row, which is
+   *  already visible. Changing it with the same `selectedId` counts too. */
+  revealSelectedSeq?: number;
   /** Ids of anchored comments whose anchor the caller could not resolve in
    *  the live document (#328). The server's own `orphan` flag is computed
    *  from the raw markdown lines, so it can say "anchored" for a comment the
@@ -506,6 +511,7 @@ export function CommentSidePane({
   onJump,
   onSelect,
   selectedId,
+  revealSelectedSeq = 0,
   unresolvedIds = EMPTY_IDS,
   agentReplying = false,
   agentNewReplies = NO_NEW_REPLIES,
@@ -843,6 +849,7 @@ export function CommentSidePane({
                 <CommentList
                   comments={anchored}
                   selectedId={selectedId ?? null}
+                  revealSeq={revealSelectedSeq}
                   onSelect={onSelect}
                 />
               )}
@@ -1446,22 +1453,28 @@ function firstLine(body: string): string {
 interface CommentListProps {
   comments: ReadonlyArray<CommentJSON>;
   selectedId: string | null;
+  /** See `revealSelectedSeq` on the pane. */
+  revealSeq: number;
   onSelect: (id: string) => void;
 }
 
 /** #333: every anchored comment in document order as one-line rows, scrolling
  *  inside its own box. Selecting a highlight in the editor scrolls its row
  *  into view here. */
-function CommentList({ comments, selectedId, onSelect }: CommentListProps) {
+function CommentList({ comments, selectedId, revealSeq, onSelect }: CommentListProps) {
   const listRef = useRef<HTMLDivElement | null>(null);
 
+  // Only an outside selection (revealSeq) scrolls: a row the reader clicked is
+  // in view already. A row hidden by the status filter does not exist here, so
+  // nothing scrolls. `block: "nearest"` moves this list only.
   useEffect(() => {
-    if (!selectedId) return;
+    if (!selectedId || revealSeq === 0) return;
     const row = Array.from(
       listRef.current?.querySelectorAll<HTMLElement>('[data-testid="comment-item"]') ?? []
     ).find((el) => el.dataset.commentId === selectedId);
     row?.scrollIntoView?.({ block: "nearest" });
-  }, [selectedId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [revealSeq]);
 
   return (
     <Box

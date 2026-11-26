@@ -1073,19 +1073,59 @@ describe("CommentSidePane list (#333)", () => {
     expect(h.onSelect).toHaveBeenCalledWith("c2");
   });
 
-  it("scrolls the selected card into view when the selection changes", () => {
+  it("scrolls the selected row into view only when the caller asks (revealSelectedSeq), every time it asks", () => {
     const scrollIntoView = vi.fn();
     HTMLElement.prototype.scrollIntoView = scrollIntoView;
     onTestFinished(() => {
       // jsdom has no scrollIntoView of its own; don't leave the stub behind.
       delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
     });
-    renderPane({
+    const common = {
+      root: "works",
+      filePath: "doc.md",
       comments: [comment("c1"), comment("c2")],
-      selectedId: "c2",
-    });
+      reviewActive: true,
+      canAddComment: true,
+      onRefresh: vi.fn(),
+      onAddComment: vi.fn(),
+      onAddGlobal: vi.fn(),
+      onDelete: vi.fn(),
+      onResolveToggle: vi.fn(),
+      onReply: vi.fn(),
+      onEdit: vi.fn(),
+      onEditReply: vi.fn(),
+      onDeleteReply: vi.fn(),
+      onJump: vi.fn(),
+      onSelect: vi.fn(),
+    };
+    const { rerender } = render(<CommentSidePane {...common} selectedId="c1" />);
+    // Mounting with a selection, and a selection that changes by itself (a
+    // click on a row), leave the list where it is.
+    rerender(<CommentSidePane {...common} selectedId="c2" />);
+    expect(scrollIntoView).not.toHaveBeenCalled();
+
+    rerender(<CommentSidePane {...common} selectedId="c2" revealSelectedSeq={1} />);
     expect(scrollIntoView).toHaveBeenCalledTimes(1);
     expect(scrollIntoView.mock.contexts[0]).toHaveAttribute("data-comment-id", "c2");
+    expect(scrollIntoView).toHaveBeenLastCalledWith({ block: "nearest" });
+
+    // Same comment asked for again.
+    rerender(<CommentSidePane {...common} selectedId="c2" revealSelectedSeq={2} />);
+    expect(scrollIntoView).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not scroll when the selected comment has no row (hidden by the status filter)", () => {
+    const scrollIntoView = vi.fn();
+    HTMLElement.prototype.scrollIntoView = scrollIntoView;
+    onTestFinished(() => {
+      delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
+    });
+    renderPane({
+      comments: [comment("c1"), comment("r1", { status: "resolved" })],
+      selectedId: "r1",
+      revealSelectedSeq: 1,
+    });
+    expect(scrollIntoView).not.toHaveBeenCalled();
   });
 });
 
