@@ -418,11 +418,12 @@ interface Props {
   onSelect: (id: string) => void;
   /** The comment whose thread is currently open, if it is one of these. */
   selectedId?: string | null;
-  /** Bumped each time the caller selects a comment from outside the list (a
-   *  highlight, a shared link, a new reply, the summary): the list then brings
-   *  the selected row into view. Not bumped by a click on a row, which is
-   *  already visible. Changing it with the same `selectedId` counts too. */
-  revealSelectedSeq?: number;
+  /** Set when the caller selects a comment from outside the list (a
+   *  highlight, a shared link, a new reply, the summary): the list brings that
+   *  comment's row into view. `seq` is new for every request, so asking for the
+   *  same comment again counts; the caller clears it when the reader picks a
+   *  row directly (which is already visible) or the file changes. */
+  revealRequest?: { id: string; seq: number } | null;
   /** Ids of anchored comments whose anchor the caller could not resolve in
    *  the live document (#328). The server's own `orphan` flag is computed
    *  from the raw markdown lines, so it can say "anchored" for a comment the
@@ -511,7 +512,7 @@ export function CommentSidePane({
   onJump,
   onSelect,
   selectedId,
-  revealSelectedSeq = 0,
+  revealRequest = null,
   unresolvedIds = EMPTY_IDS,
   agentReplying = false,
   agentNewReplies = NO_NEW_REPLIES,
@@ -547,6 +548,15 @@ export function CommentSidePane({
   const [listHeightWanted, setListHeightWanted] = useState(LIST_DEFAULT_HEIGHT);
   const [bodyHeight, setBodyHeight] = useState(0);
   const bodyRef = useRef<HTMLDivElement | null>(null);
+  // The last reveal request the list acted on. Kept here, not in the list: the
+  // list unmounts and remounts (an empty filter), and a request it already
+  // handled must not run again against whatever is selected by then.
+  const handledRevealSeqRef = useRef(0);
+  const claimReveal = useCallback((seq: number) => {
+    if (handledRevealSeqRef.current >= seq) return false;
+    handledRevealSeqRef.current = seq;
+    return true;
+  }, []);
   useEffect(() => {
     const el = bodyRef.current;
     if (!el || typeof ResizeObserver === "undefined") return;
@@ -849,7 +859,8 @@ export function CommentSidePane({
                 <CommentList
                   comments={anchored}
                   selectedId={selectedId ?? null}
-                  revealSeq={revealSelectedSeq}
+                  revealRequest={revealRequest}
+                  claimReveal={claimReveal}
                   onSelect={onSelect}
                 />
               )}
@@ -1453,28 +1464,44 @@ function firstLine(body: string): string {
 interface CommentListProps {
   comments: ReadonlyArray<CommentJSON>;
   selectedId: string | null;
-  /** See `revealSelectedSeq` on the pane. */
-  revealSeq: number;
+  /** See `revealRequest` on the pane. */
+  revealRequest: { id: string; seq: number } | null;
+  /** True the first time a request is claimed, false for one already handled. */
+  claimReveal: (seq: number) => boolean;
   onSelect: (id: string) => void;
 }
 
 /** #333: every anchored comment in document order as one-line rows, scrolling
  *  inside its own box. Selecting a highlight in the editor scrolls its row
  *  into view here. */
-function CommentList({ comments, selectedId, revealSeq, onSelect }: CommentListProps) {
+function CommentList({
+  comments,
+  selectedId,
+  revealRequest,
+  claimReveal,
+  onSelect,
+}: CommentListProps) {
   const listRef = useRef<HTMLDivElement | null>(null);
 
-  // Only an outside selection (revealSeq) scrolls: a row the reader clicked is
-  // in view already. A row hidden by the status filter does not exist here, so
-  // nothing scrolls. `block: "nearest"` moves this list only.
+  // Only an outside selection (a reveal request for the selected comment, not
+  // yet handled) scrolls: a row the reader clicked is in view already. A row
+  // hidden by the status filter does not exist here, so nothing scrolls. The
+  // list's own scrollTop is set from the two rects instead of calling
+  // scrollIntoView, which would also scroll ancestors (the pane's clipped
+  // outer frame, and with it the document).
   useEffect(() => {
-    if (!selectedId || revealSeq === 0) return;
+    const list = listRef.current;
+    if (!list || !revealRequest || revealRequest.id !== selectedId) return;
+    if (!claimReveal(revealRequest.seq)) return;
     const row = Array.from(
-      listRef.current?.querySelectorAll<HTMLElement>('[data-testid="comment-item"]') ?? []
+      list.querySelectorAll<HTMLElement>('[data-testid="comment-item"]')
     ).find((el) => el.dataset.commentId === selectedId);
-    row?.scrollIntoView?.({ block: "nearest" });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [revealSeq]);
+    if (!row) return;
+    const rowBox = row.getBoundingClientRect();
+    const listBox = list.getBoundingClientRect();
+    if (rowBox.top < listBox.top) list.scrollTop -= listBox.top - rowBox.top;
+    else if (rowBox.bottom > listBox.bottom) list.scrollTop += rowBox.bottom - listBox.bottom;
+  }, [revealRequest, selectedId, claimReveal]);
 
   return (
     <Box

@@ -1489,7 +1489,12 @@ export function EditorPage() {
   const [railSelectedId, setRailSelectedId] = useState<string | null>(null);
   // Bumped on a selection that comes from outside the pane's list, so the list
   // brings the selected row into view even when the id did not change.
-  const [revealSelectedSeq, setRevealSelectedSeq] = useState(0);
+  const [revealRequest, setRevealRequest] = useState<{ id: string; seq: number } | null>(
+    null
+  );
+  const revealSeqRef = useRef(0);
+  const requestReveal = (id: string) =>
+    setRevealRequest({ id, seq: ++revealSeqRef.current });
 
   // Where a comment's first live anchor sits, measured from the document
   // rather than from a rendered decoration.
@@ -1783,7 +1788,7 @@ export function EditorPage() {
       // #389: the pane may be closed; open it so the card exists to select.
       setCommentPaneOpen(true);
       setRailSelectedId(commentId);
-      setRevealSelectedSeq((n) => n + 1);
+      requestReveal(commentId);
     };
 
     const onClick = (e: Event) => {
@@ -1924,6 +1929,7 @@ export function EditorPage() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     closeComposer();
     setRailSelectedId(null);
+    setRevealRequest(null);
   }, [activePath]);
 
   // Review state is deliberately *not* a trigger. Adding the first comment to
@@ -2209,7 +2215,7 @@ export function EditorPage() {
     // card even when the pane was closed.
     setCommentPaneOpen(true);
     setRailSelectedId(id);
-    setRevealSelectedSeq((n) => n + 1);
+    requestReveal(id);
     // The jump runs after the commit that opens the pane: opening it changes
     // the body's width, and the scroll position is computed against that.
     setPendingJump({ id, path: activePath });
@@ -2218,6 +2224,7 @@ export function EditorPage() {
   // document stays where it is (#409). The jump is the reader's own button.
   const handleSelectCommentCard = (id: string) => {
     setRailSelectedId(id);
+    setRevealRequest(null);
     setPendingJump(null);
   };
   const [pendingJump, setPendingJump] = useState<{
@@ -3538,7 +3545,7 @@ export function EditorPage() {
           onJump={handleJumpToComment}
           onSelect={handleSelectCommentCard}
           selectedId={railSelectedId}
-          revealSelectedSeq={revealSelectedSeq}
+          revealRequest={revealRequest}
           unresolvedIds={unresolvedIds}
           agentReplying={agentBusy && agentActivity.sentByUs}
           agentNewReplies={agentActivity.newReplies}
