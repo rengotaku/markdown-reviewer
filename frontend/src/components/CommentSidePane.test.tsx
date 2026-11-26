@@ -1073,19 +1073,171 @@ describe("CommentSidePane list (#333)", () => {
     expect(h.onSelect).toHaveBeenCalledWith("c2");
   });
 
-  it("scrolls the selected card into view when the selection changes", () => {
+  // jsdom lays nothing out: the list box is 0-300 and each row's box is set per
+  // test, so what the list does about it is read off its scrollTop.
+  function stubBoxes(rows: Record<string, { top: number; bottom: number }>) {
+    const box = (top: number, bottom: number) =>
+      ({
+        top,
+        bottom,
+        left: 0,
+        right: 300,
+        width: 300,
+        height: bottom - top,
+        x: 0,
+        y: top,
+        toJSON() {},
+      }) as DOMRect;
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
+      this: HTMLElement
+    ) {
+      if (this.dataset.testid === "comment-list") return box(0, 300);
+      const row = this.dataset.commentId ? rows[this.dataset.commentId] : undefined;
+      return row ? box(row.top, row.bottom) : box(0, 0);
+    });
+  }
+
+  const revealProps = {
+    root: "works",
+    filePath: "doc.md",
+    comments: [comment("c1"), comment("c2")],
+    reviewActive: true,
+    canAddComment: true,
+    onRefresh: vi.fn(),
+    onAddComment: vi.fn(),
+    onAddGlobal: vi.fn(),
+    onDelete: vi.fn(),
+    onResolveToggle: vi.fn(),
+    onReply: vi.fn(),
+    onEdit: vi.fn(),
+    onEditReply: vi.fn(),
+    onDeleteReply: vi.fn(),
+    onJump: vi.fn(),
+    onSelect: vi.fn(),
+  };
+
+  function stubScrollIntoView() {
     const scrollIntoView = vi.fn();
     HTMLElement.prototype.scrollIntoView = scrollIntoView;
     onTestFinished(() => {
       // jsdom has no scrollIntoView of its own; don't leave the stub behind.
       delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
     });
+    return scrollIntoView;
+  }
+
+  it("(a) a row below the list's visible range scrolls the list down by the overhang", () => {
+    const scrollIntoView = stubScrollIntoView();
+    stubBoxes({ c2: { top: 280, bottom: 340 } });
+    const { rerender } = render(<CommentSidePane {...revealProps} selectedId="c2" />);
+    const list = screen.getByTestId("comment-list");
+    expect(list.scrollTop).toBe(0);
+    rerender(
+      <CommentSidePane
+        {...revealProps}
+        selectedId="c2"
+        revealRequest={{ id: "c2", seq: 1 }}
+      />
+    );
+    expect(list.scrollTop).toBe(40);
+    // (d) Never scrollIntoView: it would move the ancestors as well.
+    expect(scrollIntoView).not.toHaveBeenCalled();
+  });
+
+  it("(b) a row above the list's visible range scrolls the list up by the overhang", () => {
+    stubScrollIntoView();
+    stubBoxes({ c2: { top: -50, bottom: 10 } });
+    const { rerender } = render(<CommentSidePane {...revealProps} selectedId="c2" />);
+    const list = screen.getByTestId("comment-list");
+    list.scrollTop = 200;
+    rerender(
+      <CommentSidePane
+        {...revealProps}
+        selectedId="c2"
+        revealRequest={{ id: "c2", seq: 1 }}
+      />
+    );
+    expect(list.scrollTop).toBe(150);
+  });
+
+  it("(c) a row already visible leaves the list where it is; asking again for the same comment is handled too", () => {
+    stubScrollIntoView();
+    stubBoxes({ c2: { top: 100, bottom: 160 } });
+    const { rerender } = render(<CommentSidePane {...revealProps} selectedId="c2" />);
+    const list = screen.getByTestId("comment-list");
+    list.scrollTop = 20;
+    rerender(
+      <CommentSidePane
+        {...revealProps}
+        selectedId="c2"
+        revealRequest={{ id: "c2", seq: 1 }}
+      />
+    );
+    expect(list.scrollTop).toBe(20);
+
+    // The row has moved out of view; the same comment is asked for again.
+    stubBoxes({ c2: { top: 320, bottom: 380 } });
+    rerender(
+      <CommentSidePane
+        {...revealProps}
+        selectedId="c2"
+        revealRequest={{ id: "c2", seq: 2 }}
+      />
+    );
+    expect(list.scrollTop).toBe(100);
+  });
+
+  it("a selection change with no request (a click on a row) leaves the list alone", () => {
+    stubScrollIntoView();
+    stubBoxes({ c2: { top: 320, bottom: 380 } });
+    const { rerender } = render(<CommentSidePane {...revealProps} selectedId="c1" />);
+    rerender(<CommentSidePane {...revealProps} selectedId="c2" />);
+    expect(screen.getByTestId("comment-list").scrollTop).toBe(0);
+  });
+
+  it("ignores a request for a comment that is not the selected one", () => {
+    stubScrollIntoView();
+    stubBoxes({ c1: { top: 320, bottom: 380 }, c2: { top: 320, bottom: 380 } });
+    render(
+      <CommentSidePane
+        {...revealProps}
+        selectedId="c2"
+        revealRequest={{ id: "c1", seq: 1 }}
+      />
+    );
+    expect(screen.getByTestId("comment-list").scrollTop).toBe(0);
+  });
+
+  it("does not act on a request again when the list is rebuilt (an empty filter and back)", async () => {
+    const user = userEvent.setup();
+    stubScrollIntoView();
+    stubBoxes({ c1: { top: 320, bottom: 380 }, c2: { top: 320, bottom: 380 } });
+    const { rerender } = render(<CommentSidePane {...revealProps} selectedId="c1" />);
+    rerender(
+      <CommentSidePane
+        {...revealProps}
+        selectedId="c1"
+        revealRequest={{ id: "c1", seq: 1 }}
+      />
+    );
+    expect(screen.getByTestId("comment-list").scrollTop).toBe(80);
+
+    // The list is rebuilt after the request was handled: it must not run again.
+    await chooseStatus(user, "resolved");
+    expect(screen.queryByTestId("comment-list")).toBeNull();
+    await chooseStatus(user, "open");
+    expect(screen.getByTestId("comment-list").scrollTop).toBe(0);
+  });
+
+  it("does not scroll when the selected comment has no row (hidden by the status filter)", () => {
+    stubScrollIntoView();
+    stubBoxes({ r1: { top: 320, bottom: 380 } });
     renderPane({
-      comments: [comment("c1"), comment("c2")],
-      selectedId: "c2",
+      comments: [comment("c1"), comment("r1", { status: "resolved" })],
+      selectedId: "r1",
+      revealRequest: { id: "r1", seq: 1 },
     });
-    expect(scrollIntoView).toHaveBeenCalledTimes(1);
-    expect(scrollIntoView.mock.contexts[0]).toHaveAttribute("data-comment-id", "c2");
+    expect(screen.getByTestId("comment-list").scrollTop).toBe(0);
   });
 });
 

@@ -1978,6 +1978,120 @@ describe("EditorPage comment highlight & rail selection (#304)", () => {
     );
   });
 
+  // #412: the highlight opens the reader without moving the body, and the
+  // list brings the selected row into view.
+  const scrolledElements = () =>
+    vi.mocked(Element.prototype.scrollIntoView).mock.instances as unknown as HTMLElement[];
+  const inList = (el: HTMLElement) => !!el.closest('[data-testid="comment-list"]');
+
+  it("#412: clicking the highlight shows the comment in the reader and scrolls nothing in the body", async () => {
+    const { ed } = await openWithComment(openComment);
+    const el = ed.view.dom.querySelector(".comment-mark") as HTMLElement;
+    vi.mocked(Element.prototype.scrollIntoView).mockClear();
+
+    fireEvent.click(el, { clientX: 10, clientY: 10 });
+
+    await waitFor(() =>
+      expect(screen.getByTestId("comment-reader")).toHaveAttribute(
+        "data-comment-id",
+        "c-300"
+      )
+    );
+    await act(async () => {
+      await new Promise((r) => requestAnimationFrame(r));
+      await new Promise((r) => requestAnimationFrame(r));
+    });
+    const onBody = scrolledElements().filter(
+      (n) =>
+        ed.view.dom.contains(n) || n.classList.contains("comment-mark") || !inList(n)
+    );
+    expect(onBody).toHaveLength(0);
+  });
+
+  // jsdom lays nothing out: the list box is 0-300, the row sits below it.
+  function stubListBoxes() {
+    const box = (top: number, bottom: number) =>
+      ({ top, bottom, left: 0, right: 300, width: 300, height: bottom - top, x: 0, y: top, toJSON() {} }) as DOMRect;
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+      function (this: HTMLElement) {
+        if (this.dataset.testid === "comment-list") return box(0, 300);
+        if (this.dataset.testid === "comment-item") return box(320, 380);
+        return box(0, 0);
+      }
+    );
+  }
+
+  it("#412: clicking the highlight scrolls the list (not the page) so the row shows, every time", async () => {
+    const { ed } = await openWithComment(openComment);
+    const el = ed.view.dom.querySelector(".comment-mark") as HTMLElement;
+    stubListBoxes();
+    const spy = vi.mocked(Element.prototype.scrollIntoView);
+    spy.mockClear();
+    const list = screen.getByTestId("comment-list");
+
+    fireEvent.click(el, { clientX: 10, clientY: 10 });
+    await waitFor(() => expect(list.scrollTop).toBe(80));
+
+    // Same highlight again: the id is unchanged, the row is revealed again.
+    list.scrollTop = 0;
+    fireEvent.click(el, { clientX: 10, clientY: 10 });
+    await waitFor(() => expect(list.scrollTop).toBe(80));
+    // scrollIntoView would also move the ancestors, body and left pane included.
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("#412: a request handled earlier does not run again when the list is rebuilt", async () => {
+    const { user, ed } = await openWithComment(openComment);
+    const el = ed.view.dom.querySelector(".comment-mark") as HTMLElement;
+    stubListBoxes();
+    fireEvent.click(el, { clientX: 10, clientY: 10 });
+    await waitFor(() => expect(screen.getByTestId("comment-list").scrollTop).toBe(80));
+
+    // The reader picks the row directly, then the list is rebuilt by an empty
+    // filter and back: the old request must not scroll the new list.
+    await user.click(screen.getByTestId("comment-item"));
+    await user.click(screen.getByTestId("comment-filter-resolved"));
+    expect(screen.queryByTestId("comment-list")).toBeNull();
+    await user.click(screen.getByTestId("comment-filter-open"));
+    expect(screen.getByTestId("comment-list").scrollTop).toBe(0);
+  });
+
+  it("#412: clicking a list row directly does not scroll the list", async () => {
+    const { user } = await openWithComment(openComment);
+    vi.mocked(Element.prototype.scrollIntoView).mockClear();
+
+    await user.click(await screen.findByTestId("comment-item"));
+    await waitFor(() =>
+      expect(screen.getByTestId("comment-reader")).toHaveAttribute(
+        "data-comment-id",
+        "c-300"
+      )
+    );
+    expect(scrolledElements()).toHaveLength(0);
+  });
+
+  it("#412: a highlight whose row the status filter hides still opens the reader, without scrolling the list", async () => {
+    const { user, ed } = await openWithComment(openComment);
+    await user.click(screen.getByTestId("comment-filter-resolved"));
+    expect(screen.queryByTestId("comment-item")).toBeNull();
+    const el = ed.view.dom.querySelector(".comment-mark") as HTMLElement;
+    vi.mocked(Element.prototype.scrollIntoView).mockClear();
+
+    fireEvent.click(el, { clientX: 10, clientY: 10 });
+
+    await waitFor(() =>
+      expect(screen.getByTestId("comment-reader")).toHaveAttribute(
+        "data-comment-id",
+        "c-300"
+      )
+    );
+    expect(scrolledElements()).toHaveLength(0);
+    expect(screen.getByTestId("comment-filter-resolved")).toHaveAttribute(
+      "aria-pressed",
+      "true"
+    );
+  });
+
   it("4. the open icon's badge counts unresolved comments and is absent at 0 (#389)", async () => {
     const { user } = await openWithComment(openComment);
     await user.click(screen.getByTestId("comment-pane-close"));
