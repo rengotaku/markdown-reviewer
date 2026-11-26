@@ -1,32 +1,8 @@
-import { describe, it, expect, vi, beforeEach, afterEach, onTestFinished } from "vitest";
-import { render, screen, within, waitFor, act, fireEvent, cleanup } from "@testing-library/react";
+import { describe, it, expect, vi, afterEach, onTestFinished } from "vitest";
+import { render, screen, within, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { CommentDetailDialog, CommentSidePane } from "./CommentSidePane";
 import type { CommentJSON } from "@/api";
-
-// #304 removed the plain list layout: every anchored comment now renders
-// through the paragraph-aligned rail (commentRailLayout.ts), which measures
-// the pane's own box via getBoundingClientRect. jsdom never lays anything
-// out, so that always reads 0×0 — without this stub only a single card would
-// ever be `visible` (see the layout's own "isFirstVisible" shrink-to-fit
-// branch), silently dropping every fixture after the first regardless of
-// what the test is actually about. A generously tall pane keeps this file's
-// many action tests (reply/edit/resolve/detail) about those actions, not
-// about rail placement arithmetic (which commentRailLayout.test.ts already
-// covers on its own).
-beforeEach(() => {
-  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
-    top: 0,
-    left: 0,
-    right: 300,
-    bottom: 4000,
-    width: 300,
-    height: 4000,
-    x: 0,
-    y: 0,
-    toJSON() {},
-  } as DOMRect);
-});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -65,19 +41,6 @@ function renderPane(props: Partial<React.ComponentProps<typeof CommentSidePane>>
     onJump: vi.fn(),
     onSelect: vi.fn(),
   };
-  // #306: an anchored comment absent from `anchorTops` is now excluded from
-  // the rail (no more 0-fallback) — most tests in this file exercise a
-  // CommentCard's actions (reply/edit/resolve/detail) and don't care where in
-  // the rail it lands, so give every anchored fixture a synthetic
-  // measurement here unless the test supplies its own `anchorTops` (the rail
-  // (#298)/(#306) describe blocks below always do, to control layout
-  // directly).
-  const comments = props.comments ?? [];
-  const defaultAnchorTops = Object.fromEntries(
-    comments
-      .filter((c) => c.scope !== "global" && !c.orphan)
-      .map((c, i) => [c.id, i * 10])
-  );
   render(
     <CommentSidePane
       root="works"
@@ -86,7 +49,6 @@ function renderPane(props: Partial<React.ComponentProps<typeof CommentSidePane>>
       reviewActive
       canAddComment
       {...handlers}
-      anchorTops={defaultAnchorTops}
       {...props}
     />
   );
@@ -122,14 +84,8 @@ async function chooseStatus(
 describe("CommentSidePane", () => {
   it("shows each comment's id so a person can match it to what the AI reported (#286)", async () => {
     renderPane({ comments: [comment("c-001"), comment("c-002")] });
-    // The rail measures its own box via rAF (commentRailLayout.ts) before it
-    // can place a second card — the very first render still has last frame's
-    // (here: none) measurement.
-    const rows = await waitFor(() => {
-      const items = screen.getAllByTestId("comment-item");
-      expect(items).toHaveLength(2);
-      return items;
-    });
+    const rows = screen.getAllByTestId("comment-item");
+    expect(rows).toHaveLength(2);
     expect(within(rows[0]).getByTestId("comment-id")).toHaveTextContent("c-001");
     expect(within(rows[1]).getByTestId("comment-id")).toHaveTextContent("c-002");
   });
@@ -329,7 +285,6 @@ describe("CommentSidePane", () => {
     it("counts a caller-unresolvable comment as 位置不明 even though the server says it is anchored", async () => {
       const user = userEvent.setup();
       renderPane({
-        anchorTops: { c1: 10 },
         unresolvedIds: new Set(["u1"]),
         comments: [
           comment("c1"),
@@ -338,7 +293,7 @@ describe("CommentSidePane", () => {
       });
       expect(screen.getByTestId("orphan-comment-badge")).toHaveTextContent(/^1$/);
       // and it stays out of the rail — it has no position to be placed at
-      const rail = screen.getByTestId("comment-rail-aligned");
+      const rail = screen.getByTestId("comment-list");
       expect(within(rail).getAllByTestId("comment-item")).toHaveLength(1);
       expect(within(rail).getByTestId("comment-id")).toHaveTextContent("c1");
       // the thread is reachable from the badge, so the comment is readable
@@ -349,7 +304,6 @@ describe("CommentSidePane", () => {
     it("adds up: rail + 全体 + 位置不明 covers every comment the header counts", async () => {
       const user = userEvent.setup();
       renderPane({
-        anchorTops: { c1: 10 },
         unresolvedIds: new Set(["u1"]),
         comments: [
           comment("c1"),
@@ -360,7 +314,7 @@ describe("CommentSidePane", () => {
       });
       await chooseStatus(user, "all");
       expect(screen.getByTestId("comment-filter-all")).toHaveTextContent(/^4$/);
-      const rail = screen.getByTestId("comment-rail-aligned");
+      const rail = screen.getByTestId("comment-list");
       expect(within(rail).getAllByTestId("comment-item")).toHaveLength(1);
       expect(screen.getByTestId("global-comment-badge")).toHaveTextContent(/^1$/);
       // o1 (server orphan) + u1 (caller could not resolve it)
@@ -462,6 +416,20 @@ describe("CommentSidePane", () => {
         expect(screen.queryByTestId("global-comments-dialog")).toBeNull();
         rerender(paneWith(comments, "u1", new Set(["u1"])));
         expect(selectedRow()?.dataset.commentId).toBe("u1");
+      });
+
+      it("stays closed when only another comment's verdict changes after the reader closed it (#413)", async () => {
+        const user = userEvent.setup();
+        const comments = [comment("u1"), comment("u2")];
+        const { rerender } = render(paneWith(comments, null));
+        rerender(paneWith(comments, "u1"));
+        rerender(paneWith(comments, "u1", new Set(["u1"])));
+        expect(screen.getByTestId("global-comments-dialog")).toBeInTheDocument();
+        await user.keyboard("{Escape}");
+        await waitFor(() => expect(screen.queryByTestId("global-comments-dialog")).toBeNull());
+
+        rerender(paneWith(comments, "u1", new Set(["u1", "u2"])));
+        expect(screen.queryByTestId("global-comments-dialog")).toBeNull();
       });
 
       it("opens the orphan tab for an orphan comment", () => {
@@ -812,13 +780,9 @@ describe("CommentSidePane", () => {
   });
 });
 
-// #298: the pane's paragraph-aligned rail layout — the only layout the pane
-// renders since #304 removed the plain list mode (and the toggle between the
-// two).
-describe("CommentSidePane rail (#298)", () => {
-  it("12. keeps global/orphan comments out of the rail entirely — they render at the top of the document body, not in this pane (#309)", () => {
+describe("CommentSidePane list (#298)", () => {
+  it("12. keeps global/orphan comments out of the list entirely — they render at the top of the document body, not in this pane (#309)", () => {
     renderPane({
-      anchorTops: { c1: 10 },
       comments: [
         comment("c1"),
         pinned("g1"),
@@ -826,200 +790,25 @@ describe("CommentSidePane rail (#298)", () => {
       ],
     });
     expect(screen.queryByTestId("comment-pinned-section")).toBeNull();
-    const rail = screen.getByTestId("comment-rail-aligned");
-    expect(within(rail).getAllByTestId("comment-item")).toHaveLength(1);
-    expect(within(rail).getByTestId("comment-id")).toHaveTextContent("c1");
+    const list = screen.getByTestId("comment-list");
+    expect(within(list).getAllByTestId("comment-item")).toHaveLength(1);
+    expect(within(list).getByTestId("comment-id")).toHaveTextContent("c1");
   });
 
-  it("puts the rail back at scrollTop 0 when the browser scrolls it to show a caret (#378)", () => {
-    renderPane({ anchorTops: { c1: 10 }, comments: [comment("c1")] });
-    const rail = screen.getByTestId("comment-rail-aligned");
-    rail.scrollTop = 40;
-    fireEvent.scroll(rail);
-    expect(rail.scrollTop).toBe(0);
-  });
-
-  it("renders anchored comments inside the aligned rail container", () => {
-    renderPane({
-      anchorTops: { c1: 10, c2: 20 },
-      comments: [comment("c1"), comment("c2")],
-    });
-    expect(screen.getByTestId("comment-rail-aligned")).toBeInTheDocument();
-  });
-
-  it("a card past the pane's bottom stays mounted but hidden, with no 上に / 下に N 件 count (#338)", async () => {
-    // The pane stub is 4000px tall from top 0, so c2's anchor at 100_000 sits
-    // far below it. It used to be dropped behind 下に 1 件; now every card is
-    // placed and the body is scrolled to reach it.
-    renderPane({
-      anchorTops: { c1: 0, c2: 100_000 },
-      comments: [comment("c1"), comment("c2")],
-    });
-    const rail = screen.getByTestId("comment-rail-aligned");
-    await waitFor(() => {
-      const cards = within(rail).getAllByTestId("comment-rail-card");
-      expect(cards.map((c) => c.dataset.commentId)).toEqual(["c1", "c2"]);
-      expect(cards[0]).toBeVisible();
-      expect(cards[1]).not.toBeVisible();
-    });
-    expect(screen.queryByTestId("comment-rail-below")).toBeNull();
-    expect(screen.queryByTestId("comment-rail-above")).toBeNull();
-  });
-
-  it("reports how far the rail reaches past the document's end, and 0 once nothing overhangs (#338)", async () => {
-    const onRailOverhangChange = vi.fn();
-    const props = {
-      anchorTops: { c1: 400 },
-      comments: [comment("c1")],
-      onRailOverhangChange,
-    };
-    const { rerender } = render(
-      <CommentSidePane
-        root="works"
-        filePath="doc.md"
-        reviewActive
-        canAddComment
-        onRefresh={vi.fn()}
-        onAddComment={vi.fn()}
-        onAddGlobal={vi.fn()}
-        onDelete={vi.fn()}
-        onResolveToggle={vi.fn()}
-        onReply={vi.fn()}
-        onEdit={vi.fn()}
-        onEditReply={vi.fn()}
-        onDeleteReply={vi.fn()}
-        onJump={vi.fn()}
-        onSelect={vi.fn()}
-        docBox={{ top: 0, bottom: 420, scrollTop: 0 }}
-        {...props}
-      />
-    );
-    // The card starts at the document's last line (400) and runs past its end
-    // (420) by its own height (no ResizeObserver in jsdom, so the 96px
-    // placeholder) plus the gap: 400 + 96 + 8 - 420 = 84.
-    await waitFor(() => expect(onRailOverhangChange).toHaveBeenLastCalledWith(84));
-    rerender(
-      <CommentSidePane
-        root="works"
-        filePath="doc.md"
-        reviewActive
-        canAddComment
-        onRefresh={vi.fn()}
-        onAddComment={vi.fn()}
-        onAddGlobal={vi.fn()}
-        onDelete={vi.fn()}
-        onResolveToggle={vi.fn()}
-        onReply={vi.fn()}
-        onEdit={vi.fn()}
-        onEditReply={vi.fn()}
-        onDeleteReply={vi.fn()}
-        onJump={vi.fn()}
-        onSelect={vi.fn()}
-        docBox={{ top: 0, bottom: 2000, scrollTop: 0 }}
-        {...props}
-      />
-    );
-    await waitFor(() => expect(onRailOverhangChange).toHaveBeenLastCalledWith(0));
+  it("renders anchored comments inside the list container", () => {
+    renderPane({ comments: [comment("c1"), comment("c2")] });
+    expect(screen.getByTestId("comment-list")).toBeInTheDocument();
   });
 });
 
-describe("CommentSidePane rail anchor measurement (#306)", () => {
-  // #306 case 1: an anchored comment with no entry in `anchorTops` yet (the
-  // caller hasn't measured its decoration's DOM position this render pass)
-  // must not fall back to viewport top 0 — that used to plant its card at
-  // the rail's very top, in front of whichever paragraph the reader is
-  // actually looking at, and it stayed there because nothing re-triggers a
-  // measurement on its own. Case 1 requires it simply stays out of the rail
-  // until a real measurement lands.
-  it("1. an anchored comment missing from anchorTops is not drawn in the rail (no 0-fallback)", async () => {
-    renderPane({
-      // c1 has a real measurement; c2 does not (key entirely absent, not
-      // just falsy) — the exact shape recomputeAnchorTops produces before
-      // its first successful pass over c2's decoration.
-      anchorTops: { c1: 10 },
-      comments: [comment("c1"), comment("c2")],
-    });
-    // The rail's own box is measured asynchronously (rAF, in
-    // AlignedCommentRail's scheduleMeasurePane) against this file's 4000px
-    // getBoundingClientRect stub. Flushing that rAF here rules out a false
-    // pass: at the pre-measurement paneHeight===0, a second card overflows
-    // the (zero-height) pane and is dropped to `belowCount` regardless of
-    // whether the 0-fallback bug is fixed — that path would pass this
-    // assertion even with the bug present. A 4000px pane comfortably fits
-    // both c1 and a wrongly-defaulted c2, so this only stays green once c2
-    // is genuinely excluded for having no anchorTops entry.
-    await act(async () => {
-      await new Promise((resolve) => requestAnimationFrame(resolve));
-      await new Promise((resolve) => requestAnimationFrame(resolve));
-    });
-    const rail = screen.getByTestId("comment-rail-aligned");
-    const items = within(rail).getAllByTestId("comment-item");
-    expect(items).toHaveLength(1);
-    expect(within(rail).getByTestId("comment-id")).toHaveTextContent("c1");
-  });
-
-  // #326: a resolved comment used to be the one exception to case 1 — it kept
-  // a `?? 0` fallback, on the reasoning that it paints no decoration and so
-  // could never be measured. The caller now measures resolved comments from
-  // their anchors instead, so the exception is gone and a missing entry means
-  // the same "not measured yet" it means for an open comment. Without the
-  // fix, every resolved card lands at viewport top 0 — stacked on each other
-  // at the rail's head, detached from the paragraphs they point at.
-  it("3. a resolved comment missing from anchorTops is not drawn at the rail's top either (#326)", async () => {
+describe("CommentSidePane resolved comments in the list (#326)", () => {
+  it("a resolved comment is listed under the resolved filter", async () => {
     const user = userEvent.setup();
-    renderPane({
-      anchorTops: { c1: 10 },
-      comments: [comment("c1"), comment("r1", { status: "resolved" })],
-    });
-    // The pane defaults to 未解決 (#253); r1 is only reachable via すべて.
-    await chooseStatus(user, "all");
-    await act(async () => {
-      await new Promise((resolve) => requestAnimationFrame(resolve));
-      await new Promise((resolve) => requestAnimationFrame(resolve));
-    });
-    const rail = screen.getByTestId("comment-rail-aligned");
-    expect(within(rail).getAllByTestId("comment-item")).toHaveLength(1);
-    expect(within(rail).getByTestId("comment-id")).toHaveTextContent("c1");
-  });
-
-  // #326 positive control: once the caller *does* measure a resolved comment,
-  // its card sits at that measurement like any other — the removal above is
-  // not "resolved comments never render".
-  it("4. a resolved comment with a measurement is drawn in the rail (#326)", async () => {
-    const user = userEvent.setup();
-    renderPane({
-      anchorTops: { r1: 10 },
-      comments: [comment("r1", { status: "resolved" })],
-    });
+    renderPane({ comments: [comment("r1", { status: "resolved" })] });
     await chooseStatus(user, "resolved");
-    await act(async () => {
-      await new Promise((resolve) => requestAnimationFrame(resolve));
-      await new Promise((resolve) => requestAnimationFrame(resolve));
-    });
-    const rail = screen.getByTestId("comment-rail-aligned");
-    expect(within(rail).getAllByTestId("comment-item")).toHaveLength(1);
-    expect(within(rail).getByTestId("comment-id")).toHaveTextContent("r1");
-  });
-
-  // #306 case 2: this must not be confused with case 1. A comment with no
-  // anchor at all (global scope, or orphaned) is a different, permanent
-  // state — it never renders in this pane at all (#309: moved to the top of
-  // the document body), regardless of anchorTops.
-  it("2. a comment with no anchor (global/orphan) never renders in this pane, regardless of anchorTops", () => {
-    renderPane({
-      // Neither g1 nor o1 ever gets an anchorTops entry — there's no
-      // decoration to measure — while c1 does.
-      anchorTops: { c1: 10 },
-      comments: [
-        comment("c1"),
-        pinned("g1"),
-        comment("o1", { orphan: true, context: null }),
-      ],
-    });
-    const rail = screen.getByTestId("comment-rail-aligned");
-    expect(within(rail).getAllByTestId("comment-item")).toHaveLength(1);
-    expect(within(rail).getByTestId("comment-id")).toHaveTextContent("c1");
-    expect(screen.queryByTestId("comment-pinned-section")).toBeNull();
+    const list = screen.getByTestId("comment-list");
+    expect(within(list).getAllByTestId("comment-item")).toHaveLength(1);
+    expect(within(list).getByTestId("comment-id")).toHaveTextContent("r1");
   });
 });
 
@@ -1195,7 +984,6 @@ describe("CommentSidePane rail card selection (#308)", () => {
         onJump={vi.fn()}
         onSelect={vi.fn()}
         selectedId="c1"
-        anchorTops={{ c1: 0, c2: 10 }}
       />
     );
     const [first] = await waitFor(() => {
@@ -1224,7 +1012,6 @@ describe("CommentSidePane rail card selection (#308)", () => {
         onJump={vi.fn()}
         onSelect={vi.fn()}
         selectedId="c2"
-        anchorTops={{ c1: 0, c2: 10 }}
       />
     );
     const [firstAfter, secondAfter] = await waitFor(() => {
@@ -1316,45 +1103,10 @@ describe("CommentSidePane rail card compact height (#312)", () => {
   });
 });
 
-describe("CommentSidePane list mode (#333)", () => {
-  it("renders no mode switch when the caller doesn't track a mode, and stays aligned", () => {
-    renderPane({ comments: [comment("c1")] });
-    expect(screen.queryByTestId("comment-rail-mode")).toBeNull();
-    expect(screen.getByTestId("comment-rail-aligned")).toBeInTheDocument();
-    expect(screen.queryByTestId("comment-list")).toBeNull();
-  });
-
-  it("has one toggle that names and switches to the other mode; there is no icons mode (#390)", async () => {
-    const user = userEvent.setup();
-    const onRailModeChange = vi.fn();
-    const props = { comments: [comment("c1")], onRailModeChange };
-    renderPane({ ...props, railMode: "aligned" });
-    expect(screen.getAllByTestId("comment-rail-mode-toggle")).toHaveLength(1);
-    expect(screen.queryByTestId("comment-rail-mode-icons")).toBeNull();
-    expect(screen.getByTestId("comment-rail-mode-toggle")).toHaveAccessibleName(
-      /一覧/
-    );
-    await user.click(screen.getByTestId("comment-rail-mode-toggle"));
-    expect(onRailModeChange).toHaveBeenLastCalledWith("list");
-    cleanup();
-
-    renderPane({ ...props, railMode: "list" });
-    expect(screen.getByTestId("comment-rail-mode-toggle")).toHaveAccessibleName(
-      "段落の横に並べる"
-    );
-    await user.click(screen.getByTestId("comment-rail-mode-toggle"));
-    expect(onRailModeChange).toHaveBeenLastCalledWith("aligned");
-  });
-
-  it("lists every anchored card in document order, even ones the aligned rail could not fit or place", () => {
-    // Anchors far apart / unmeasured: the aligned rail would push most of
-    // these to 上に / 下に N 件 (or drop c3, which has no measurement at all).
-    // The list shows all of them, with no overflow counts.
+describe("CommentSidePane list (#333)", () => {
+  it("lists every anchored card in document order", () => {
     renderPane({
       comments: [comment("c1"), comment("c2"), comment("c3"), pinned("g1")],
-      anchorTops: { c1: 0, c2: 100_000 },
-      railMode: "list",
-      onRailModeChange: vi.fn(),
     });
     const list = screen.getByTestId("comment-list");
     expect(
@@ -1362,9 +1114,6 @@ describe("CommentSidePane list mode (#333)", () => {
         .getAllByTestId("comment-id")
         .map((el) => el.textContent)
     ).toEqual(["c1", "c2", "c3"]);
-    expect(screen.queryByTestId("comment-rail-aligned")).toBeNull();
-    expect(screen.queryByTestId("comment-rail-below")).toBeNull();
-    expect(screen.queryByTestId("comment-rail-above")).toBeNull();
   });
 
   it("orders the list by position in the document, not by when each comment was added", () => {
@@ -1377,8 +1126,6 @@ describe("CommentSidePane list mode (#333)", () => {
         comment("c-early", { context: { heading_path: ["## Sec"], line_range: [2, 5] } }),
         comment("c-mid", { context: { heading_path: ["## Sec"], line_range: [20, 20] } }),
       ],
-      railMode: "list",
-      onRailModeChange: vi.fn(),
     });
     const list = screen.getByTestId("comment-list");
     expect(
@@ -1392,8 +1139,6 @@ describe("CommentSidePane list mode (#333)", () => {
     const user = userEvent.setup();
     const h = renderPane({
       comments: [comment("c1"), comment("c2")],
-      railMode: "list",
-      onRailModeChange: vi.fn(),
     });
     const items = within(screen.getByTestId("comment-list")).getAllByTestId(
       "comment-item"
@@ -1411,8 +1156,6 @@ describe("CommentSidePane list mode (#333)", () => {
     });
     renderPane({
       comments: [comment("c1"), comment("c2")],
-      railMode: "list",
-      onRailModeChange: vi.fn(),
       selectedId: "c2",
     });
     expect(scrollIntoView).toHaveBeenCalledTimes(1);
@@ -1437,7 +1180,6 @@ describe("CommentSidePane drafts survive the card unmounting (#334)", () => {
     onDeleteReply: vi.fn(),
     onJump: vi.fn(),
     onSelect: vi.fn(),
-    onRailModeChange: vi.fn(),
   });
 
   /** #364: every card has a reply button now, so aim at the selected one. */
@@ -1454,74 +1196,40 @@ describe("CommentSidePane drafts survive the card unmounting (#334)", () => {
     await user.type(screen.getByTestId("comment-reply-input"), text);
   }
 
-  it("keeps a half-written reply when switching between the aligned rail and the list", async () => {
+  it("keeps a half-written reply when the status filter hides the card and brings it back", async () => {
     const user = userEvent.setup();
     const props = { ...baseProps(), comments: [comment("c1")], selectedId: "c1" };
-    const { rerender } = render(
-      <CommentSidePane {...props} anchorTops={{ c1: 10 }} railMode="aligned" />
-    );
+    render(<CommentSidePane {...props} />);
     await startReply(user, "書きかけ");
 
-    rerender(<CommentSidePane {...props} anchorTops={{ c1: 10 }} railMode="list" />);
-    expect(screen.getByTestId("comment-list")).toBeInTheDocument();
-    expect(screen.getByTestId("comment-reply-input")).toHaveValue("書きかけ");
-
-    rerender(<CommentSidePane {...props} anchorTops={{ c1: 10 }} railMode="aligned" />);
-    expect(screen.getByTestId("comment-rail-aligned")).toBeInTheDocument();
+    await chooseStatus(user, "resolved");
+    expect(screen.queryByTestId("comment-reply-input")).toBeNull();
+    await chooseStatus(user, "open");
     expect(screen.getByTestId("comment-reply-input")).toHaveValue("書きかけ");
   });
 
-  it("keeps a half-written edit when switching between the aligned rail and the list", async () => {
+  it("keeps a half-written edit when the status filter hides the card and brings it back", async () => {
     const user = userEvent.setup();
     const props = { ...baseProps(), comments: [comment("c1")], selectedId: "c1" };
-    const { rerender } = render(
-      <CommentSidePane {...props} anchorTops={{ c1: 10 }} railMode="aligned" />
-    );
+    render(<CommentSidePane {...props} />);
     await user.click(screen.getByTestId("comment-edit"));
     await user.type(screen.getByTestId("comment-edit-input"), " 追記");
 
-    rerender(<CommentSidePane {...props} anchorTops={{ c1: 10 }} railMode="list" />);
+    await chooseStatus(user, "resolved");
+    await chooseStatus(user, "open");
     expect(screen.getByTestId("comment-edit-input")).toHaveValue("body of c1 追記");
-  });
-
-  it("keeps a half-written reply while scrolling moves the card out of the pane and back (#338)", async () => {
-    const user = userEvent.setup();
-    const props = {
-      ...baseProps(),
-      comments: [comment("c0"), comment("c1")],
-      selectedId: "c1",
-      railMode: "aligned" as const,
-    };
-    const { rerender } = render(
-      <CommentSidePane {...props} anchorTops={{ c0: 0, c1: 200 }} />
-    );
-    await waitFor(() => expect(selectedCard()).toBeInTheDocument());
-    await startReply(user, "スクロール前");
-
-    // Scrolled: c1's paragraph is now far below the pane. The card leaves the
-    // visible range but stays mounted, form and all.
-    rerender(<CommentSidePane {...props} anchorTops={{ c0: 0, c1: 100_000 }} />);
-    await waitFor(() =>
-      expect(screen.getByTestId("comment-reply-input")).not.toBeVisible()
-    );
-    expect(screen.queryByTestId("comment-rail-below")).toBeNull();
-
-    rerender(<CommentSidePane {...props} anchorTops={{ c0: 0, c1: 200 }} />);
-    await waitFor(() => expect(screen.getByTestId("comment-reply-input")).toBeVisible());
-    expect(screen.getByTestId("comment-reply-input")).toHaveValue("スクロール前");
   });
 
   it("clears the draft once the reply is sent", async () => {
     const user = userEvent.setup();
     const props = { ...baseProps(), comments: [comment("c1")], selectedId: "c1" };
-    const { rerender } = render(
-      <CommentSidePane {...props} anchorTops={{ c1: 10 }} railMode="aligned" />
-    );
+    render(<CommentSidePane {...props} />);
     await startReply(user, "送信する");
     await user.click(screen.getByTestId("comment-reply-submit"));
     expect(props.onReply).toHaveBeenCalledWith("c1", "送信する");
 
-    rerender(<CommentSidePane {...props} anchorTops={{ c1: 10 }} railMode="list" />);
+    await chooseStatus(user, "resolved");
+    await chooseStatus(user, "open");
     expect(screen.queryByTestId("comment-reply-input")).toBeNull();
     await user.click(screen.getByTestId("comment-reply-toggle"));
     expect(screen.getByTestId("comment-reply-input")).toHaveValue("");
@@ -1531,7 +1239,7 @@ describe("CommentSidePane drafts survive the card unmounting (#334)", () => {
     // reviewstore numbers a new comment max+1, so deleting the highest id and
     // adding again hands the same id to a different comment.
     const user = userEvent.setup();
-    const props = { ...baseProps(), selectedId: "c1", anchorTops: { c1: 10 } };
+    const props = { ...baseProps(), selectedId: "c1" };
     const { rerender } = render(
       <CommentSidePane {...props} comments={[comment("c1")]} />
     );
@@ -1553,7 +1261,7 @@ describe("CommentSidePane drafts survive the card unmounting (#334)", () => {
 
   it("drops the draft as soon as the comment is deleted from this pane", async () => {
     const user = userEvent.setup();
-    const props = { ...baseProps(), selectedId: "c1", anchorTops: { c1: 10 } };
+    const props = { ...baseProps(), selectedId: "c1" };
     const { rerender } = render(
       <CommentSidePane {...props} comments={[comment("c1")]} />
     );
@@ -1571,37 +1279,12 @@ describe("CommentSidePane drafts survive the card unmounting (#334)", () => {
     expect(screen.queryByTestId("comment-reply-input")).toBeNull();
   });
 
-  it("a restored form does not take focus away from where the reader is typing", async () => {
-    const user = userEvent.setup();
-    const props = { ...baseProps(), comments: [comment("c1")], selectedId: "c1" };
-    const { rerender } = render(
-      <>
-        <input data-testid="outside" />
-        <CommentSidePane {...props} anchorTops={{ c1: 10 }} railMode="aligned" />
-      </>
-    );
-    await startReply(user, "書きかけ");
-    expect(screen.getByTestId("comment-reply-input")).toHaveFocus();
-    await user.click(screen.getByTestId("outside"));
-
-    rerender(
-      <>
-        <input data-testid="outside" />
-        <CommentSidePane {...props} anchorTops={{ c1: 10 }} railMode="list" />
-      </>
-    );
-    expect(screen.getByTestId("comment-reply-input")).toHaveValue("書きかけ");
-    expect(screen.getByTestId("outside")).toHaveFocus();
-  });
-
   it("does not carry a draft over to a same-id comment in another file", async () => {
     const user = userEvent.setup();
     const props = {
       ...baseProps(),
       comments: [comment("c1")],
       selectedId: "c1",
-      anchorTops: { c1: 10 },
-      railMode: "aligned" as const,
     };
     const { rerender } = render(<CommentSidePane {...props} />);
     await startReply(user, "doc.md 向け");

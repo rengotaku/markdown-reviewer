@@ -443,13 +443,6 @@ export function TiptapEditor() {
         <BlockCopyButton editor={editor} containerRef={containerRef} />
       )}
       <EditorContent editor={editor} />
-      {/* #338: room below the document for comment cards the rail stacks past
-          its end. EditorPage sets the height (0 when nothing overhangs). */}
-      <Box
-        aria-hidden
-        data-testid="editor-rail-overhang-spacer"
-        sx={{ height: "var(--rail-overhang, 0px)" }}
-      />
       <LinkPreviewCard
         open={previewOpen}
         anchorEl={previewAnchorEl}
