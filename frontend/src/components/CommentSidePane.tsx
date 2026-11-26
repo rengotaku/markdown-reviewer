@@ -8,7 +8,6 @@ import {
   useRef,
   useState,
   type FormEvent,
-  type MutableRefObject,
 } from "react";
 import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
@@ -63,6 +62,20 @@ const LIST_DEFAULT_HEIGHT = 200;
 const LIST_MIN_HEIGHT = 72;
 const READER_MIN_HEIGHT = 120;
 const SPLITTER_HEIGHT = 6;
+
+/** The tallest the list can be in a pane body `bodyHeight` high while the
+ *  splitter and the reader's minimum still fit (Infinity until measured). */
+function maxListHeight(bodyHeight: number): number {
+  if (bodyHeight <= 0) return Infinity;
+  return Math.max(0, bodyHeight - SPLITTER_HEIGHT - READER_MIN_HEIGHT);
+}
+
+/** `height` held between LIST_MIN_HEIGHT and `max`. A pane too short for both
+ *  minimums gives up the list's: the splitter and reader stay in view. */
+function clampListHeight(height: number, max: number): number {
+  if (max < LIST_MIN_HEIGHT) return max;
+  return Math.max(LIST_MIN_HEIGHT, Math.min(height, max));
+}
 
 /** #355: reply/edit fields in the pane scroll inside themselves past this
  *  many rows, so a pasted log can't push their submit buttons out of view. */
@@ -522,8 +535,23 @@ export function CommentSidePane({
   // answer, and a finished review is mostly resolved rows.
   const [filter, setFilter] = useState<StatusFilter>("open");
   // #411: the list's height; the reader takes the rest. Not persisted.
-  const [listHeight, setListHeight] = useState(LIST_DEFAULT_HEIGHT);
+  // The height the reader asked for by dragging, and the pane body's measured
+  // height: the list is drawn at the asked height, held to what leaves the
+  // splitter and the reader room, and returns to it when the pane grows again.
+  const [listHeightWanted, setListHeightWanted] = useState(LIST_DEFAULT_HEIGHT);
+  const [bodyHeight, setBodyHeight] = useState(0);
   const bodyRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver((entries) =>
+      setBodyHeight(entries[0]?.contentRect.height ?? el.clientHeight)
+    );
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const listMax = maxListHeight(bodyHeight);
+  const listHeight = clampListHeight(listHeightWanted, listMax);
   const readerComment = useMemo(
     () => (selectedId ? (comments.find((c) => c.id === selectedId) ?? null) : null),
     [comments, selectedId]
@@ -785,43 +813,44 @@ export function CommentSidePane({
               コメントはまだありません。テキストを選択してこの上のコメント追加ボタン（吹き出しのアイコン）を押すと追加できます。
             </Typography>
           </Box>
-        ) : visible.length === 0 ? (
-          <Box sx={{ p: 2 }}>
-            <Typography variant="body2" color="text.secondary">
-              {filter === "open"
-                ? "未解決のコメントはありません。"
-                : "解決済みのコメントはありません。"}
-            </Typography>
-          </Box>
-        ) : anchored.length === 0 ? (
-          // #316: every visible comment is global/orphan (no live anchor) —
-          // those surface only via the badge row above, not a card here.
-          <Box sx={{ p: 2 }}>
-            <Typography variant="body2" color="text.secondary">
-              本文にひもづくコメントはありません。全体・位置不明のコメントは上部のバッジから確認できます。
-            </Typography>
-          </Box>
         ) : (
           <>
             <Box
               sx={{
                 height: listHeight,
-                minHeight: LIST_MIN_HEIGHT,
                 flexShrink: 0,
                 display: "flex",
                 flexDirection: "column",
               }}
             >
-              <CommentList
-                comments={anchored}
-                selectedId={selectedId ?? null}
-                onSelect={onSelect}
-              />
+              {visible.length === 0 ? (
+                <Box sx={{ p: 2 }}>
+                  <Typography variant="body2" color="text.secondary">
+                    {filter === "open"
+                      ? "未解決のコメントはありません。"
+                      : "解決済みのコメントはありません。"}
+                  </Typography>
+                </Box>
+              ) : anchored.length === 0 ? (
+                // #316: every visible comment is global/orphan (no live
+                // anchor) — those surface only via the badge row above.
+                <Box sx={{ p: 2 }}>
+                  <Typography variant="body2" color="text.secondary">
+                    本文にひもづくコメントはありません。全体・位置不明のコメントは上部のバッジから確認できます。
+                  </Typography>
+                </Box>
+              ) : (
+                <CommentList
+                  comments={anchored}
+                  selectedId={selectedId ?? null}
+                  onSelect={onSelect}
+                />
+              )}
             </Box>
             <PaneSplitter
-              containerRef={bodyRef}
               height={listHeight}
-              onChange={setListHeight}
+              maxHeight={listMax}
+              onChange={setListHeightWanted}
             />
             <CommentReader
               comment={readerComment}
@@ -1213,11 +1242,18 @@ function CommentReader({
   jumpDisabled,
   ...cardProps
 }: Omit<CommentReaderProps, "comment"> & { comment: CommentJSON | null }) {
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  // The scroll box is reused across comments: a different one starts from its
+  // top, while a refetch of the same one keeps the reader's place.
+  const commentId = c?.id;
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = 0;
+  }, [commentId]);
   if (!c) {
     return (
       <Box
         data-testid="comment-reader"
-        sx={{ flex: 1, minHeight: READER_MIN_HEIGHT, overflow: "auto", p: 2 }}
+        sx={{ flex: 1, minHeight: 0, overflow: "auto", p: 2 }}
       >
         <Typography
           variant="body2"
@@ -1237,7 +1273,7 @@ function CommentReader({
       data-comment-id={c.id}
       sx={{
         flex: 1,
-        minHeight: READER_MIN_HEIGHT,
+        minHeight: 0,
         display: "flex",
         flexDirection: "column",
       }}
@@ -1290,6 +1326,7 @@ function CommentReader({
         </Button>
       </Box>
       <Box
+        ref={scrollRef}
         data-testid="comment-reader-scroll"
         sx={{ flex: 1, minHeight: 0, overflow: "auto", px: 1.5, py: 1 }}
       >
@@ -1447,22 +1484,15 @@ function CommentList({ comments, selectedId, onSelect }: CommentListProps) {
 /** Draggable divider between the list (above) and the reader (below). The
  *  list's height is clamped so neither half collapses. */
 function PaneSplitter({
-  containerRef,
   height,
+  maxHeight,
   onChange,
 }: {
-  containerRef: MutableRefObject<HTMLDivElement | null>;
   height: number;
+  maxHeight: number;
   onChange: (height: number) => void;
 }) {
   const drag = useRef<{ startY: number; startHeight: number } | null>(null);
-  const clamp = (value: number) => {
-    const total = containerRef.current?.clientHeight ?? 0;
-    // Unmeasured (0) leaves the upper bound open; a box too short for both
-    // minimums keeps the list's.
-    const max = total > 0 ? total - SPLITTER_HEIGHT - READER_MIN_HEIGHT : Infinity;
-    return Math.max(LIST_MIN_HEIGHT, Math.min(value, max));
-  };
   return (
     <Box
       role="separator"
@@ -1476,7 +1506,12 @@ function PaneSplitter({
       }}
       onPointerMove={(e) => {
         if (!drag.current) return;
-        onChange(clamp(drag.current.startHeight + e.clientY - drag.current.startY));
+        onChange(
+          clampListHeight(
+            drag.current.startHeight + e.clientY - drag.current.startY,
+            maxHeight
+          )
+        );
       }}
       onPointerUp={() => {
         drag.current = null;

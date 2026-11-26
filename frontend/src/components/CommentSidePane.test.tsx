@@ -873,6 +873,95 @@ describe("CommentSidePane reader (#411)", () => {
   });
 });
 
+describe("CommentSidePane reader stays when the list is empty (#411)", () => {
+  it("(a) a resolved-only file opened on a resolved comment shows it despite the empty 未解決 list", () => {
+    renderPane({
+      comments: [comment("r1", { status: "resolved", body: "解決済みの本文" })],
+      selectedId: "r1",
+    });
+    expect(screen.queryByTestId("comment-item")).toBeNull();
+    expect(screen.getByText("未解決のコメントはありません。")).toBeInTheDocument();
+    expect(screen.getByTestId("comment-reader")).toHaveAttribute("data-comment-id", "r1");
+    expect(screen.getByTestId("comment-body")).toHaveTextContent("解決済みの本文");
+    expect(screen.getByTestId("comment-pane-splitter")).toBeInTheDocument();
+  });
+
+  it("(b) resolving the last open comment keeps it in the reader", () => {
+    const common = {
+      root: "works",
+      filePath: "doc.md",
+      reviewActive: true,
+      canAddComment: true,
+      onRefresh: vi.fn(),
+      onAddComment: vi.fn(),
+      onAddGlobal: vi.fn(),
+      onDelete: vi.fn(),
+      onResolveToggle: vi.fn(),
+      onReply: vi.fn(),
+      onEdit: vi.fn(),
+      onEditReply: vi.fn(),
+      onDeleteReply: vi.fn(),
+      onJump: vi.fn(),
+      onSelect: vi.fn(),
+      selectedId: "c1",
+    };
+    const { rerender } = render(
+      <CommentSidePane {...common} comments={[comment("c1")]} />
+    );
+    expect(screen.getAllByTestId("comment-item")).toHaveLength(1);
+    rerender(
+      <CommentSidePane {...common} comments={[comment("c1", { status: "resolved" })]} />
+    );
+    expect(screen.queryByTestId("comment-item")).toBeNull();
+    expect(screen.getByTestId("comment-reader")).toHaveAttribute("data-comment-id", "c1");
+  });
+});
+
+describe("CommentSidePane reader scroll (#411)", () => {
+  const common = {
+    root: "works",
+    filePath: "doc.md",
+    reviewActive: true,
+    canAddComment: true,
+    onRefresh: vi.fn(),
+    onAddComment: vi.fn(),
+    onAddGlobal: vi.fn(),
+    onDelete: vi.fn(),
+    onResolveToggle: vi.fn(),
+    onReply: vi.fn(),
+    onEdit: vi.fn(),
+    onEditReply: vi.fn(),
+    onDeleteReply: vi.fn(),
+    onJump: vi.fn(),
+    onSelect: vi.fn(),
+  };
+
+  it("returns to the top when another comment is selected", () => {
+    const comments = [comment("c1"), comment("c2")];
+    const { rerender } = render(
+      <CommentSidePane {...common} comments={comments} selectedId="c1" />
+    );
+    screen.getByTestId("comment-reader-scroll").scrollTop = 300;
+    rerender(<CommentSidePane {...common} comments={comments} selectedId="c2" />);
+    expect(screen.getByTestId("comment-reader-scroll").scrollTop).toBe(0);
+  });
+
+  it("keeps the reading position when the same comment is refetched", () => {
+    const { rerender } = render(
+      <CommentSidePane {...common} comments={[comment("c1")]} selectedId="c1" />
+    );
+    screen.getByTestId("comment-reader-scroll").scrollTop = 300;
+    rerender(
+      <CommentSidePane
+        {...common}
+        comments={[comment("c1", { body: "更新された本文" })]}
+        selectedId="c1"
+      />
+    );
+    expect(screen.getByTestId("comment-reader-scroll").scrollTop).toBe(300);
+  });
+});
+
 describe("CommentSidePane splitter (#411)", () => {
   it("is a horizontal separator that resizes the list by dragging, within a minimum", () => {
     renderPane({ comments: [comment("c1")], selectedId: null });
@@ -892,6 +981,51 @@ describe("CommentSidePane splitter (#411)", () => {
     fireEvent.pointerMove(splitter, { clientY: -5000, pointerId: 1 });
     fireEvent.pointerUp(splitter, { clientY: -5000, pointerId: 1 });
     expect(parseInt(getComputedStyle(listBox).height, 10)).toBeGreaterThan(0);
+  });
+
+  it("holds the list inside the pane when the pane shrinks, and restores the dragged height when it grows", () => {
+    let notify: ((height: number) => void) | null = null;
+    const original = globalThis.ResizeObserver;
+    class CapturingResizeObserver {
+      constructor(cb: ResizeObserverCallback) {
+        notify = (height) =>
+          cb(
+            [{ contentRect: { height } } as ResizeObserverEntry],
+            this as unknown as ResizeObserver
+          );
+      }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    globalThis.ResizeObserver =
+      CapturingResizeObserver as unknown as typeof ResizeObserver;
+    onTestFinished(() => {
+      globalThis.ResizeObserver = original;
+    });
+    renderPane({ comments: [comment("c1")], selectedId: null });
+    const splitter = screen.getByTestId("comment-pane-splitter");
+    const listBox = screen.getByTestId("comment-list").parentElement as HTMLElement;
+    const listPx = () => parseInt(getComputedStyle(listBox).height, 10);
+
+    // Dragged tall in a roomy pane.
+    act(() => notify!(1000));
+    fireEvent.pointerDown(splitter, { clientY: 0, pointerId: 1 });
+    fireEvent.pointerMove(splitter, { clientY: 500, pointerId: 1 });
+    fireEvent.pointerUp(splitter, { clientY: 500, pointerId: 1 });
+    expect(listPx()).toBeGreaterThan(400);
+
+    // The pane shrinks: splitter and the reader's minimum (120) stay inside.
+    act(() => notify!(300));
+    expect(listPx()).toBeLessThanOrEqual(300 - 6 - 120);
+
+    // A pane too short for both minimums: the list gives way entirely.
+    act(() => notify!(100));
+    expect(listPx()).toBeLessThanOrEqual(Math.max(0, 100 - 6 - 120));
+
+    // Roomy again: back to the dragged height.
+    act(() => notify!(1000));
+    expect(listPx()).toBeGreaterThan(400);
   });
 });
 
@@ -984,14 +1118,14 @@ describe("CommentSidePane drafts survive the reader switching comments (#334)", 
     await user.type(screen.getByTestId("comment-reply-input"), text);
   }
 
-  it("keeps a half-written reply when the status filter hides the card and brings it back", async () => {
+  it("keeps a half-written reply in the reader while the status filter changes", async () => {
     const user = userEvent.setup();
     const props = { ...baseProps(), comments: [comment("c1")], selectedId: "c1" };
     render(<CommentSidePane {...props} />);
     await startReply(user, "書きかけ");
 
     await chooseStatus(user, "resolved");
-    expect(screen.queryByTestId("comment-reply-input")).toBeNull();
+    expect(screen.getByTestId("comment-reply-input")).toHaveValue("書きかけ");
     await chooseStatus(user, "open");
     expect(screen.getByTestId("comment-reply-input")).toHaveValue("書きかけ");
   });
